@@ -4,12 +4,12 @@ This file is the canonical implementation tracker. The architecture and full acc
 
 ## Current state
 
-- **Stage:** P1-01–P1-05 complete; experimental metadata inventory verified on native macOS/Linux and Docker. The rest of Phase 1 remains open.
+- **Stage:** P1-01–P1-05, P1-06a and P1-08a complete; experimental metadata inventory verified on native macOS/Linux and Docker. The rest of Phase 1 remains open.
 - **App / brand:** Rydd / Saga. Repository: `bjornarhagen/saga-rydd`; executable: `rydd`.
 - **Confirmed:** Go, local SQLite, TOML configuration, macOS/Linux, low resource usage, developer clutter plus duplicates, opt-in automatic cleanup in v1.
 - **Development:** Docker first; do not require host Go or additional host development tooling.
 - **Implemented app behavior:** initialization, saved/live status, worker controls and opt-in experimental metadata scanning; private TOML/SQLite state, exclusive writer lock, bounded batches, atomic inventory/job commits and directory reconciliation watermarks. Durable dispatch cadence/daily batch reservations, WAL backpressure and versioned JSON commands are implemented. Fine-grained CPU/I/O/power enforcement, service installation, findings and cleanup remain unavailable.
-- **Active task:** P1-06a and P1-08a implementation passed Docker checks/race/four-target builds and native macOS smoke; native CI verification pending. Fine-grained resource controls remain P1-06b.
+- **Active task:** none. Next: P1-06b fine-grained resource controls; see handoff.
 - **Blockers:** none currently. Scanner resource targets and native service behavior remain unvalidated; the database experiment is not a scanner benchmark.
 
 ## How to use this tracker
@@ -36,11 +36,11 @@ This file is the canonical implementation tracker. The architecture and full acc
 - [x] P1-04 — Implement one-worker lock, private control channel, pause/resume and saved scheduler jobs. Verified with process-kill recovery, native macOS/Linux CI, Docker controls and four-target builds; see worker evidence below.
 - [x] P1-05 — Implement streaming inventory, volume identity, symlink/mount boundaries, permission errors and reconciliation. Verified on bounded fixtures, process-kill recovery and native CI including a real Linux bind mount. Stale descendant lifecycle/fair revisits remain P1-07; large-scale resource and physical/provider tests remain open gates.
 - [ ] P1-06 — Implement independent metadata/read/CPU budgets, persistent daily limits, sleep/backoff and power-state fallbacks.
-  - [ ] P1-06a — Persist scan dispatch cadence/daily batch cap; gate discovery on WAL checkpoint progress.
+  - [x] P1-06a — Persist scan dispatch cadence/daily batch cap; gate discovery on WAL checkpoint progress.
   - [ ] P1-06b — Meter metadata/content/CPU, enforce daily resource consumption and add low-priority/power/sleep controls.
 - [ ] P1-07 — Implement adaptive revisits, fair scheduling, large-directory continuation and stale/missing-entry handling.
 - [ ] P1-08 — Implement paginated saved reports, coverage/freshness, diagnostics and bounded logs/state growth.
-  - [ ] P1-08a — Versioned JSON controls/status, stable machine errors and capability discovery for AI and scripts.
+  - [x] P1-08a — Versioned JSON controls/status, stable machine errors and capability discovery for AI and scripts.
 - [ ] P1-09 — Implement launchd/systemd user service installation, status, stop and uninstall; document other supervisors.
 - [ ] P1-GATE — Verify restart/sleep recovery, disconnected volumes, permissions, concurrent reports and bounded memory on wide/deep million-entry fixtures. No deletion capability in this phase.
 
@@ -124,9 +124,9 @@ This file is the canonical implementation tracker. The architecture and full acc
 
 **Last updated:** 2026-09-15.
 
-**Completed this session:** implemented P1-06a durable dispatch cadence/daily batch reservations (schema v4), WAL checkpoint backpressure, and P1-08a versioned JSON controls/status/errors/capability discovery. Docker formatting/vet/tests/race and four-target builds passed; native macOS worker/scanner smoke passed. Tests cover worker daily cap across restart with responsive controls, UTC rollover/backward clocks, pinned WAL readers, and JSON success/error contracts. Native CI verification remains pending, so the new subitems are not checked yet.
+**Completed this session:** implemented P1-06a durable dispatch cadence/daily batch reservations (schema v4), WAL checkpoint backpressure, and P1-08a versioned JSON controls/status/errors/capability discovery. Docker formatting/vet/tests/race and four-target builds passed; native macOS worker/scanner smoke passed. Tests cover worker daily cap across restart with responsive controls, UTC rollover/backward clocks, pinned WAL readers, and JSON success/error contracts. [CI run 34989487603](https://github.com/bjornarhagen/saga-rydd/actions/runs/34989487603) passed for implementation commit `f2890e7`: native Linux (1m3s), native macOS (1m6s), and Docker checks/four-target builds/native binary smoke. P1-06a and P1-08a are complete; parent tasks and Phase 1 gates remain open. The local test installation was updated and its schema migrated with saved fixture inventory preserved; the worker remains stopped.
 
-**Next action:** verify native CI for this change, then continue P1-06b metadata/content/CPU metering, daily resource-consumption budgets and low-priority/power/sleep controls. Count component opens/stat/enumeration and database work, not only discovered entries. Preserve cancellation/restart semantics and validate fixtures before unattended personal-root scanning. P1-07 covers fair/adaptive revisits, huge-directory continuation, stale descendant filtering and reviewed root rebinding. See [CLI contract](docs/cli.md) and [inventory design](docs/inventory.md).
+**Next action:** continue P1-06b metadata/content/CPU metering, daily resource-consumption budgets and low-priority/power/sleep controls. Count component opens/stat/enumeration and database work, not only discovered entries. Preserve cancellation/restart semantics and validate fixtures before unattended personal-root scanning. P1-07 covers fair/adaptive revisits, huge-directory continuation, stale descendant filtering and reviewed root rebinding. See [CLI contract](docs/cli.md) and [inventory design](docs/inventory.md).
 
 **Remaining decisions:** first automation-eligible cache category; supported minimum OS/libc versions; tuned resource/scan-root defaults; license. Go and naming are settled.
 
