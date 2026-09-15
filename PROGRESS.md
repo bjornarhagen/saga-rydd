@@ -4,12 +4,12 @@ This file is the canonical implementation tracker. The architecture and full acc
 
 ## Current state
 
-- **Stage:** configuration and state foundation complete (P1-01–P1-03); the rest of Phase 1 remains open.
+- **Stage:** configuration/state foundation complete (P1-01–P1-03); worker foundation (P1-04) implemented and locally validated, awaiting native CI. The rest of Phase 1 remains open.
 - **App / brand:** Rydd / Saga. Repository: `bjornarhagen/saga-rydd`; executable: `rydd`.
 - **Confirmed:** Go, local SQLite, TOML configuration, macOS/Linux, low resource usage, developer clutter plus duplicates, opt-in automatic cleanup in v1.
 - **Development:** Docker first; do not require host Go or additional host development tooling.
-- **Implemented app behavior:** `init`, `config check`, `state init`, `status`/JSON; private TOML and SQLite state. No scanner, background service or cleanup capability.
-- **Active task:** none. Next queued task: P1-04 (one-worker lifecycle and persistent scheduler jobs).
+- **Implemented app behavior:** `init`, `config check`, `state init`, saved/live `status`/JSON, foreground `daemon`, durable `pause`/`resume`, and `stop`; private TOML/SQLite state, exclusive writer lock and saved queue. No scanner, service installation or cleanup capability.
+- **Active task:** P1-04: native CI verification and final handoff for the worker foundation.
 - **Blockers:** none currently. Scanner resource targets and native service behavior remain unvalidated; the database experiment is not a scanner benchmark.
 
 ## How to use this tracker
@@ -99,14 +99,23 @@ This file is the canonical implementation tracker. The architecture and full acc
 - [CI run 34974105231](https://github.com/bjornarhagen/saga-rydd/actions/runs/34974105231) passed for implementation commit `491d932`: native macOS (2m59s), native Linux (2m5s), and Docker/four-target builds (2m47s). Native jobs ran application tests/race checks plus both SQLite candidates' correctness checks and 100,000-row comparisons.
 - All development containers exited. No host Go/tooling or background service was installed. A small ignored native test fixture and reusable development caches remain.
 
+### Worker foundation
+
+- Schema v2 migration tests preserve v1 root IDs, saved job cursors and settings; readers require explicit migration rather than changing state.
+- Lock tests reject a second writer, symlinks and hardlinks and retain the lock inode across close/reopen. Worker tests cover durable pause, queue due/filter/idempotency rules, stale lease fencing, disabled/unknown jobs, chunk pacing, cancellation, panic/error backoff and bounded invalid control requests.
+- `TestProcessKillRecoveryAndSIGTERM` kills a separate worker with an active lease, restarts through its stale socket, verifies the saved cursor and recovery count, and checks SIGTERM plus persistent pause across process restarts.
+- `./scripts/dev check`, `./scripts/dev race` and `./scripts/dev build-all` passed. `scripts/worker-smoke` passed with the Docker-built native macOS arm64 binary and the Linux container binary. No host Go installation was used.
+- Separate Docker command containers successfully paused, queried, resumed and stopped a fixture worker through the shared runtime volume. All fixture workers exited; no service was installed.
+- Native macOS/Linux CI verification is pending for this implementation; do not check off P1-04 until it passes.
+
 ## Handoff
 
 **Last updated:** 2026-09-15.
 
-**Completed this session:** P1-01–P1-03: SQLite driver experiment/decision, strict configuration, private SQLite state/migrations, initialization/status CLI, transaction/crash/permission tests, native CI and cross-build verification. All bootstrap items B01–B06 are complete; all full product phase gates remain open.
+**Completed this session:** implemented P1-04's writer lock, private same-user control protocol, durable pause, queue leasing/cursor recovery, scheduler pacing and worker CLI. Docker tests/race checks, four cross-builds and native macOS arm64/Linux-container CLI smoke checks passed. Native CI verification is pending before checking off P1-04. All bootstrap items B01–B06 are complete; all full product phase gates remain open.
 
-**Next action:** implement P1-04: one-worker instance lock, private local control channel, pause/resume, persistent job leasing and crash recovery. Integrate existing `jobs`/`daily_budgets` tables and passive WAL checkpoint/backpressure APIs. Keep configuration/state initialization from writing concurrently with a future worker. Follow with P1-05 inventory and P1-06 budget enforcement.
+**Next action:** verify native CI for P1-04, then implement P1-05 streaming inventory. Read [worker integration notes](docs/worker.md): seed jobs through the owning event loop, return bounded inventory batches, and commit effects/cursor changes in one token-checked transaction. Establish native volume identity, symlink/mount boundaries and resumable permission-error/reconciliation behavior using disposable fixtures. Follow with P1-06 daily budgets, power handling and WAL backpressure; no real-user background scans before resource enforcement.
 
 **Remaining decisions:** first automation-eligible cache category; supported minimum OS/libc versions; tuned resource/scan-root defaults; license. Go and naming are settled.
 
-**Do not infer:** the synthetic database benchmark is not an hourly scanner resource test; config budget values are not enforced yet; physical root identity/aliases/availability are not established by config parsing; no scanner/worker/cleanup commands exist yet. Future action/restore data must never be removed by inventory rebuilds. Existing configuration can initialize/reopen state through `rydd state init` without being overwritten.
+**Do not infer:** the synthetic database benchmark is not an hourly scanner resource test; dispatch cadence does not enforce CPU/I/O/daily/power/WAL budgets; physical root identity/aliases/availability are not established by config parsing. The worker has no production handlers, so it stays idle. No scanning, cleanup or service installation exists. Future action/restore data must never be removed by inventory rebuilds. Stop the worker before `rydd state init`; schema v1 upgrades preserve roots/jobs/settings and never overwrite configuration.

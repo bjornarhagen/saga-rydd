@@ -12,6 +12,7 @@ import (
 
 	"github.com/bjornarhagen/saga-rydd/internal/config"
 	"github.com/bjornarhagen/saga-rydd/internal/state"
+	"github.com/bjornarhagen/saga-rydd/internal/worker"
 )
 
 const help = `Saga — Rydd
@@ -24,11 +25,14 @@ Commands:
   config check                                         Validate configuration
   state init                                           Initialize/migrate state from existing config
   status [--json]                                       Read saved state summary
+  daemon                                               Run the worker in the foreground
+  pause / resume                                       Persistently pause or resume work
+  stop                                                 Request graceful worker shutdown
 
 Options: --help, --version
 
-Only configuration and database foundations are implemented. No scanning,
-background services, duplicate detection or cleanup runs yet.
+The worker and saved queue are implemented, but filesystem scanning, service
+installation, duplicate detection and cleanup are not available yet.
 `
 
 type pathsFlag []string
@@ -49,7 +53,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) int {
 		return 2
 	}
 	if *version {
-		fmt.Fprintln(out, "rydd dev (state foundation)")
+		fmt.Fprintln(out, "rydd dev (worker foundation)")
 		return 0
 	}
 	remaining := flags.Args()
@@ -95,6 +99,34 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) int {
 		}
 	case "status":
 		err = status(ctx, remaining[1:], paths, home, out, errOut)
+	case "daemon":
+		if len(remaining) != 1 {
+			fmt.Fprintln(errOut, "Usage: rydd daemon")
+			return 2
+		}
+		var c config.Config
+		c, err = config.Load(paths.ConfigFile, home)
+		if err == nil {
+			err = worker.Run(ctx, paths.StateDir, c, worker.Options{Ready: func(s worker.Snapshot) {
+				fmt.Fprintf(out, "Worker ready (PID %d, paused: %t). No filesystem scanning is enabled yet.\n", s.PID, s.Paused)
+			}})
+		}
+	case "pause", "resume", "stop":
+		if len(remaining) != 1 {
+			fmt.Fprintln(errOut, "Control commands take no arguments.")
+			return 2
+		}
+		var live worker.Snapshot
+		live, err = worker.Send(ctx, paths.StateDir, remaining[0])
+		if err == nil {
+			if live.Stopping {
+				fmt.Fprintln(out, "Worker is stopping.")
+			} else if live.Paused {
+				fmt.Fprintln(out, "Worker paused; any current chunk is being canceled.")
+			} else {
+				fmt.Fprintln(out, "Worker resumed.")
+			}
+		}
 	default:
 		fmt.Fprintln(errOut, "Unknown command. Run rydd --help.")
 		return 2
@@ -173,6 +205,23 @@ func status(ctx context.Context, args []string, paths config.Paths, home string,
 	if err != nil {
 		return err
 	}
+	paused, err := r.Paused(ctx)
+	if err != nil {
+		return err
+	}
+	type workerStatus struct {
+		State string           `json:"state"`
+		Live  *worker.Snapshot `json:"live,omitempty"`
+		Error string           `json:"error,omitempty"`
+	}
+	connection := workerStatus{State: "not-running"}
+	if live, e := worker.Send(ctx, paths.StateDir, "status"); e == nil {
+		connection.State = "running"
+		connection.Live = &live
+	} else if !errors.Is(e, worker.ErrNotRunning) {
+		connection.State = "unknown"
+		connection.Error = e.Error()
+	}
 	if *asJSON {
 		return json.NewEncoder(out).Encode(struct {
 			Stage           string        `json:"stage"`
@@ -180,9 +229,17 @@ func status(ctx context.Context, args []string, paths config.Paths, home string,
 			StateDir        string        `json:"state_dir"`
 			ConfiguredRoots []string      `json:"configured_roots"`
 			State           state.Summary `json:"state"`
-		}{"state-foundation", paths.ConfigFile, paths.StateDir, c.Roots, summary})
+			Paused          bool          `json:"saved_pause"`
+			Worker          workerStatus  `json:"worker"`
+		}{"worker-foundation", paths.ConfigFile, paths.StateDir, c.Roots, summary, paused, connection})
 	}
-	fmt.Fprintf(out, "Saga — Rydd\nConfig: %q\nState: %q\nSchema: %d (SQLite %s)\nConfigured roots: %d; saved enabled roots: %d\nIndexed entries: %d; pending jobs: %d\nDatabase: %d bytes; WAL: %d bytes\nScanning: not implemented (no background worker).\n", paths.ConfigFile, paths.StateDir, summary.Schema, summary.SQLiteVersion, len(c.Roots), summary.EnabledRoots, summary.Entries, summary.PendingJobs, summary.DatabaseBytes, summary.WALBytes)
+	fmt.Fprintf(out, "Saga — Rydd\nConfig: %q\nState: %q\nSchema: %d (SQLite %s)\nConfigured roots: %d; saved enabled roots: %d\nIndexed entries: %d; pending jobs: %d; running jobs: %d\nDatabase: %d bytes; WAL: %d bytes\nWorker: %s; saved pause: %t\nScanning: not implemented yet.\n", paths.ConfigFile, paths.StateDir, summary.Schema, summary.SQLiteVersion, len(c.Roots), summary.EnabledRoots, summary.Entries, summary.PendingJobs, summary.RunningJobs, summary.DatabaseBytes, summary.WALBytes, connection.State, paused)
+	if connection.Live != nil {
+		fmt.Fprintf(out, "Worker PID: %d; paused: %t; stopping: %t; active job: %d\n", connection.Live.PID, connection.Live.Paused, connection.Live.Stopping, connection.Live.ActiveJob)
+	}
+	if connection.Error != "" {
+		fmt.Fprintf(out, "Worker connection: %q\n", connection.Error)
+	}
 	if summary.NeedsBackpressure {
 		fmt.Fprintln(out, "WAL exceeds the background-write threshold; a future worker must pause writes until checkpoint progress resumes.")
 	}

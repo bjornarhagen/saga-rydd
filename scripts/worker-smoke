@@ -1,0 +1,55 @@
+#!/bin/sh
+# Exercise the built native CLI using only disposable fixture state.
+set -eu
+binary=${1:?Usage: scripts/worker-smoke /path/to/native/rydd}
+mkdir -p .local
+fixture=$(mktemp -d "$PWD/.local/worker-smoke.XXXXXX")
+mkdir "$fixture/root"
+worker_pid=
+cleanup() {
+    if [ -n "$worker_pid" ]; then
+        kill "$worker_pid" 2>/dev/null || true
+        wait "$worker_pid" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+rydd() { "$binary" --data-dir "$fixture/state" "$@"; }
+start() {
+    "$binary" --data-dir "$fixture/state" daemon >"$fixture/worker.log" 2>&1 &
+    worker_pid=$!
+    attempts=0
+    until rydd pause >"$fixture/control.log" 2>&1; do
+        attempts=$((attempts + 1))
+        if [ "$attempts" -ge 100 ] || ! kill -0 "$worker_pid" 2>/dev/null; then
+            cat "$fixture/worker.log" "$fixture/control.log" >&2
+            exit 1
+        fi
+        sleep 0.1
+    done
+}
+rydd init --root "$fixture/root"
+start
+rydd status --json >"$fixture/status.json"
+grep -q '"state":"running"' "$fixture/status.json"
+grep -q '"saved_pause":true' "$fixture/status.json"
+if rydd state init >"$fixture/writer.log" 2>&1; then
+    echo 'state init unexpectedly acquired the live worker lock' >&2
+    exit 1
+fi
+grep -q 'already running' "$fixture/writer.log"
+if rydd daemon >"$fixture/second-worker.log" 2>&1; then
+    echo 'second worker unexpectedly started' >&2
+    exit 1
+fi
+grep -q 'already running' "$fixture/second-worker.log"
+rydd resume
+rydd status --json >"$fixture/status.json"
+grep -q '"saved_pause":false' "$fixture/status.json"
+rydd stop
+wait "$worker_pid"
+worker_pid=
+rydd status --json >"$fixture/status.json"
+grep -q '"state":"not-running"' "$fixture/status.json"
+rydd state init
+printf 'Native worker smoke passed; fixture: %s\n' "$fixture"

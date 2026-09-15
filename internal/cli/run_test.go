@@ -43,7 +43,7 @@ func TestInitValidateStatusAndNoOverwrite(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &report); err != nil {
 		t.Fatal(err)
 	}
-	if report.Stage != "state-foundation" || report.State.EnabledRoots != 1 || report.State.Entries != 0 {
+	if report.Stage != "worker-foundation" || report.State.EnabledRoots != 1 || report.State.Entries != 0 {
 		t.Fatalf("%+v", report)
 	}
 	before, _ := os.ReadFile(filepath.Join(dir, "config.toml"))
@@ -57,7 +57,7 @@ func TestInitValidateStatusAndNoOverwrite(t *testing.T) {
 	if code, _, err := run("state", "init"); code != 0 {
 		t.Fatal(code, err)
 	}
-	if code, _, _ := run("daemon"); code != 2 {
+	if code, _, _ := run("scan"); code != 2 {
 		t.Fatal("unimplemented command accepted")
 	}
 }

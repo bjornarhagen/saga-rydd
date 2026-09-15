@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/bjornarhagen/saga-rydd/internal/localfs"
@@ -19,9 +20,12 @@ const Filename = "state.sqlite3"
 const WALBackpressureBytes int64 = 32 << 20
 
 type Store struct {
-	db       *sql.DB
-	path     string
-	readOnly bool
+	db        *sql.DB
+	path      string
+	readOnly  bool
+	lock      *localfs.Lock
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // OpenWriter creates/migrates only a private Rydd-owned database. FULL durability
@@ -31,6 +35,16 @@ func OpenWriter(ctx context.Context, dir string) (*Store, error) {
 	if err := localfs.EnsurePrivateDir(dir); err != nil {
 		return nil, err
 	}
+	lock, err := localfs.AcquireLock(dir)
+	if err != nil {
+		return nil, err
+	}
+	keepLock := false
+	defer func() {
+		if !keepLock {
+			_ = lock.Close()
+		}
+	}()
 	path := filepath.Join(dir, Filename)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err == nil {
@@ -50,6 +64,8 @@ func OpenWriter(ctx context.Context, dir string) (*Store, error) {
 		s.Close()
 		return nil, err
 	}
+	s.lock = lock
+	keepLock = true
 	return s, nil
 }
 
@@ -75,7 +91,7 @@ func OpenReader(ctx context.Context, dir string) (*Store, error) {
 		s.Close()
 		return nil, fmt.Errorf("state schema %d requires migration; run rydd state init", version)
 	}
-	if err := s.checkLedger(ctx); err != nil {
+	if err := s.checkLedger(ctx, version); err != nil {
 		s.Close()
 		return nil, err
 	}
@@ -152,13 +168,15 @@ func (s *Store) identity(ctx context.Context, allowEmpty bool) (int, error) {
 	return version, nil
 }
 
-func (s *Store) checkLedger(ctx context.Context) error {
-	var name string
-	if err := s.db.QueryRowContext(ctx, "SELECT name FROM schema_migrations WHERE version=?", schemaVersion).Scan(&name); err != nil {
-		return fmt.Errorf("invalid migration ledger: %w", err)
-	}
-	if name != "inventory-foundation" {
-		return errors.New("unexpected migration ledger; database left intact")
+func (s *Store) checkLedger(ctx context.Context, version int) error {
+	for i := 0; i < version; i++ {
+		var name string
+		if err := s.db.QueryRowContext(ctx, "SELECT name FROM schema_migrations WHERE version=?", i+1).Scan(&name); err != nil {
+			return fmt.Errorf("invalid migration ledger: %w", err)
+		}
+		if name != migrations[i].name {
+			return errors.New("unexpected migration ledger; database left intact")
+		}
 	}
 	return nil
 }
@@ -167,6 +185,11 @@ func (s *Store) migrate(ctx context.Context) error {
 	version, err := s.identity(ctx, true)
 	if err != nil {
 		return err
+	}
+	if version > 0 {
+		if err := s.checkLedger(ctx, version); err != nil {
+			return err
+		}
 	}
 	// Validate ownership/version before changing journaling on an existing file.
 	var journal string
@@ -177,20 +200,22 @@ func (s *Store) migrate(ctx context.Context) error {
 		return fmt.Errorf("WAL mode unavailable (%s); local filesystem required", journal)
 	}
 	if version == schemaVersion {
-		return s.checkLedger(ctx)
+		return nil
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, migration1); err != nil {
-		return fmt.Errorf("migration 1: %w", err)
+	for i := version; i < schemaVersion; i++ {
+		if _, err := tx.ExecContext(ctx, migrations[i].sql); err != nil {
+			return fmt.Errorf("migration %d: %w", i+1, err)
+		}
+		if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations VALUES(?,?,?)", i+1, migrations[i].name, time.Now().UnixNano()); err != nil {
+			return err
+		}
 	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations VALUES(1, 'inventory-foundation', ?)", time.Now().UnixNano()); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, "PRAGMA application_id=0x52594444; PRAGMA user_version=1"); err != nil {
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA application_id=0x52594444; PRAGMA user_version=%d", schemaVersion)); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -232,6 +257,7 @@ type Summary struct {
 	EnabledRoots      int64  `json:"enabled_roots"`
 	Entries           int64  `json:"entries"`
 	PendingJobs       int64  `json:"pending_jobs"`
+	RunningJobs       int64  `json:"running_jobs"`
 	DatabaseBytes     int64  `json:"database_bytes"`
 	WALBytes          int64  `json:"wal_bytes"`
 	NeedsBackpressure bool   `json:"needs_backpressure"`
@@ -242,7 +268,7 @@ func (s *Store) Summary(ctx context.Context) (Summary, error) {
 	// One statement supplies a consistent snapshot without retaining a reader lock.
 	err := s.db.QueryRowContext(ctx, `SELECT sqlite_version(),
  (SELECT count(*) FROM roots WHERE enabled=1), (SELECT count(*) FROM entries),
- (SELECT count(*) FROM jobs WHERE status='pending')`).Scan(&result.SQLiteVersion, &result.EnabledRoots, &result.Entries, &result.PendingJobs)
+ (SELECT count(*) FROM jobs WHERE status='pending'), (SELECT count(*) FROM jobs WHERE status='running')`).Scan(&result.SQLiteVersion, &result.EnabledRoots, &result.Entries, &result.PendingJobs, &result.RunningJobs)
 	if err != nil {
 		return result, err
 	}
@@ -274,4 +300,12 @@ func (s *Store) Checkpoint(ctx context.Context) (Checkpoint, error) {
 	return result, err
 }
 
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error {
+	s.closeOnce.Do(func() {
+		s.closeErr = s.db.Close()
+		if s.lock != nil {
+			s.closeErr = errors.Join(s.closeErr, s.lock.Close())
+		}
+	})
+	return s.closeErr
+}

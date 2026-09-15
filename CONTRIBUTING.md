@@ -4,7 +4,7 @@
 
 Use an existing Docker engine with Compose v2+ and `./scripts/dev`. The wrapper builds a pinned Go development image, runs a disposable container as your UID/GID, and retains compiler/module caches in a Docker volume. There are no continuously running development services.
 
-The Go version is pinned in `Dockerfile` and both `go.mod` files. Update them together, including any CI pin that cannot be read from `go.mod`. `GOTOOLCHAIN=local` prevents implicit toolchain downloads. Production direct dependencies are modernc SQLite and the pelletier TOML parser; the isolated SQLite experiment also includes the alternative mattn driver. See [ADR 001](docs/decisions/001-sqlite-driver.md).
+The Go version is pinned in `Dockerfile` and both `go.mod` files. Update them together, including any CI pin that cannot be read from `go.mod`. `GOTOOLCHAIN=local` prevents implicit toolchain downloads. Production direct dependencies are modernc SQLite, the pelletier TOML parser, and `golang.org/x/sys` for native locks and socket peer credentials. The isolated SQLite experiment also includes the alternative mattn driver. See [ADR 001](docs/decisions/001-sqlite-driver.md).
 
 ```sh
 ./scripts/dev check
@@ -12,7 +12,7 @@ The Go version is pinned in `Dockerfile` and both `go.mod` files. Update them to
 ./scripts/dev build-all
 ```
 
-`check` enforces formatting, runs `go vet ./...` and `go test ./...`, and builds the host-container CLI. Tests cover configuration, CLI initialization, migration/identity checks, read-only access, writer contention, WAL snapshots, path bytes and process-crash recovery. Scanner/scheduler/action tests must follow with those implementations. `build-all` uses `CGO_ENABLED=0`, supported by the selected SQLite driver; revisit this deliberately when adding native integrations.
+`check` enforces formatting, runs `go vet ./...` and `go test ./...`, and builds the host-container CLI. Tests cover configuration, CLI initialization, migration/identity checks, read-only access, writer exclusion, WAL snapshots, path bytes, queue leases/cursors, persistent pause, control protocol and real process-kill recovery. Scanner/resource-budget/action tests must follow with those implementations. `build-all` uses `CGO_ENABLED=0`, supported by the selected SQLite driver and native lock/peer adapters.
 
 Run `./scripts/dev sqlite-check` for both drivers' isolated correctness checks and `./scripts/dev sqlite-bench -rows 1000000` for a synthetic metadata comparison. The experiment is a nested module, so root `go test ./...` does not include it. Native CI runs it explicitly. Cache subdirectories are separated by UID to prevent ownership conflicts when a Compose volume is reused by different users.
 
@@ -43,6 +43,8 @@ Run the binary matching your host for native smoke tests, for example `./dist/ry
 
 GitHub Actions runs checks and race detection on native macOS/Linux runners, plus Docker workflow validation and four-target cross-builds on Linux. Native CI does not replace physical laptop battery/sleep testing or the read-only soak.
 
+Run `./scripts/worker-smoke ./dist/rydd-darwin-arm64` on Apple Silicon (or the matching binary elsewhere) for a disposable native CLI lifecycle test. It initializes a private fixture, starts the worker, checks pause/resume/status and writer exclusion, stops it, and checks offline status. It leaves logs/state in a unique ignored `.local/worker-smoke.*` directory. Native CI runs this script too; Go tests also forcibly kill a worker process while a queue lease is held, then verify restart recovery and SIGTERM shutdown.
+
 Required future coverage includes APFS/ext4 behavior, symlink/path changes, permission-denied directories, interrupted/disconnected volumes, huge directories, sparse/hardlinked files, crash recovery, policy revocation and resource budgets. Track evidence against phase gates in `PROGRESS.md`.
 
 ## Fixtures and caches
@@ -50,8 +52,8 @@ Required future coverage includes APFS/ext4 behavior, symlink/path changes, perm
 - Place disposable local fixtures in ignored `.local/`; committed synthetic fixtures belong in `testdata/`.
 - Never commit real scan databases, filenames from personal inventories, quarantine contents, logs or credentials.
 - Development mounts the checkout only. Integration with a host Docker engine is a later, separately configured test; the default container gets no socket or credentials.
-- `./scripts/dev cache-clear` removes the Compose project's Go cache volume. It does not perform any product cleanup or touch application data.
-- Containers stop after each command; no `docker compose up` is needed.
+- `./scripts/dev cache-clear` removes the Compose project's Go cache and control-socket runtime volumes. Stop development workers first. Application state in the checkout is preserved.
+- Containers stop after each command; `daemon` is a foreground command that stays running until stopped. No `docker compose up` is needed. A small runtime volume shares control sockets between development commands; all use the same UID and canonical state path.
 
 ## Changes and progress
 

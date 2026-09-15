@@ -37,7 +37,7 @@ Terminal CLI ── reads reports ────────────► SQLite
                                   platform integrations
 ```
 
-- One worker process per user, with an exclusive instance lock.
+- One worker process for the user's default state directory, with an exclusive writer lock. Explicit separate state directories support isolated instances and tests; do not configure them to scan overlapping roots.
 - One filesystem work task at a time initially. Stream directory entries and file contents with bounded buffers.
 - The worker performs database writes; reports use short read transactions. A private Unix socket carries pause/resume and approved action requests. Check socket ownership and restrict access to the current user.
 - Store accepted actions durably before execution; a socket disconnect must not produce ambiguous duplicate execution. Use action IDs and idempotent recovery.
@@ -51,6 +51,8 @@ Text files are appropriate for configuration and exports. The inventory needs in
 Use SQLite WAL mode so reports can read while scanning writes. Keep transactions short, set bounded busy retries, and monitor/checkpoint WAL growth. WAL has auxiliary files and belongs on a local filesystem, not a network share. [SQLite WAL](https://www.sqlite.org/wal.html)
 
 Implemented foundation defaults: FULL durability, a 4 MiB cache per connection, memory mapping disabled, one connection per store, 1 second busy timeout, and automatic checkpointing every 1000 pages. Passive checkpoint support and a 32 MiB WAL backpressure signal are available; enforcement in the scheduler is still pending. Reader commands do not initialize or migrate state. Application/schema identity rejects unrelated or newer databases.
+
+The worker foundation uses schema v2, an OS-held writer lock, a private versioned Unix control socket, durable pause state and token-fenced job leases. It dispatches at most one cooperative chunk at a time and sleeps without queue polling when idle. No scanner handlers are registered yet. [Worker design](docs/worker.md) specifies recovery, pacing and the remaining scanner/budget integration; cadence alone is not CPU or I/O budget enforcement.
 
 Default locations:
 

@@ -4,7 +4,7 @@ A quiet storage cleanup companion for macOS and Linux. Part of Saga.
 
 Rydd will gradually discover developer clutter and duplicate files, explain what can be removed, and help reclaim space through reviewed actions or explicitly enabled automatic policies.
 
-**Status: configuration and state foundation.** The CLI can initialize private configuration and SQLite state, validate settings, and show a saved status summary. Scanning, cleanup, services and automatic policies are not implemented. Nothing runs in the background when you clone, build or initialize this repository.
+**Status: background worker foundation.** The CLI can initialize private configuration and SQLite state, run a single worker, pause/resume it, and show saved and live status. The worker has a persistent job queue and crash recovery. Scanning, cleanup, service installation and automatic policies are not implemented. Nothing runs in the background when you clone, build or initialize this repository.
 
 ## Project map
 
@@ -57,6 +57,29 @@ Inside Docker, keep disposable state in this checkout so it survives between com
 This records the selected root but does not scan it. `--data-dir` is a global option and comes **before** the command. Use a dedicated directory: existing shared directories and symlinked state/config files are rejected. `init` never overwrites an existing config. After editing the config, `state init` validates it and updates registered roots while preserving existing inventory; it also retries a failed initial database setup.
 
 Without `--data-dir`, native macOS uses `~/Library/Application Support/saga-rydd`; Linux follows XDG config/state directories. Explicit roots and exclusions are absolute paths or start with `~/`; exclusions refer to subtrees, not glob patterns. Unknown settings, overlapping roots and invalid budgets are rejected. Roots may be offline at configuration time; physical identity, symlink aliases and availability checks belong to the upcoming scanner. Budget settings are saved now and will be enforced by that worker.
+
+### Run and control the worker
+
+In one terminal:
+
+```sh
+./scripts/dev run --data-dir /workspace/.local/demo daemon
+```
+
+In another terminal, using the same checkout:
+
+```sh
+./scripts/dev run --data-dir /workspace/.local/demo status --json
+./scripts/dev run --data-dir /workspace/.local/demo pause
+./scripts/dev run --data-dir /workspace/.local/demo resume
+./scripts/dev run --data-dir /workspace/.local/demo stop
+```
+
+`daemon` runs in the foreground until stopped, interrupted or sent SIGTERM. On a native build, replace `./scripts/dev run` with your binary and use a native data path. Service installation will follow in P1-09. The current worker stays idle because no filesystem handlers are registered yet.
+
+Pause is saved before acknowledgment and survives restart. It cancels an active chunk cooperatively; status shows whether that chunk is still draining. `stop` acknowledges a shutdown request; wait for the daemon process to exit before restarting or running `state init`. Reports work while the worker is stopped. A second worker or state writer using the same state directory is rejected. Configuration changes take effect on the next worker start.
+
+Controls use a private Unix socket with same-user peer checks. Docker commands share a small runtime volume so separate development containers can communicate. Native sockets use a private directory under `/tmp`; set the same short, absolute `RYDD_RUNTIME_DIR` for daemon and clients if overriding it. Keep application state on a local filesystem. See [worker design](docs/worker.md) for recovery and remaining scheduler work.
 
 ## Design commitments
 

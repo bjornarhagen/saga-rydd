@@ -22,7 +22,9 @@ func TestCancellationAndBoundedWriterContention(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.Close()
-	b, err := OpenWriter(ctx, dir)
+	// Deliberately bypass the application lock to simulate an external SQLite
+	// client. Normal OpenWriter calls must now reject a second writer.
+	b, err := connect(ctx, filepath.Join(dir, Filename), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +128,7 @@ func TestMigrationReopenAndReadOnly(t *testing.T) {
 	if err := w.db.QueryRow("SELECT count(*) FROM settings WHERE key='preserve'").Scan(&n); err != nil || n != 1 {
 		t.Fatalf("lost existing state: %d %v", n, err)
 	}
-	if err := w.db.QueryRow("SELECT count(*) FROM schema_migrations").Scan(&n); err != nil || n != 1 {
+	if err := w.db.QueryRow("SELECT count(*) FROM schema_migrations").Scan(&n); err != nil || n != schemaVersion {
 		t.Fatalf("duplicate migration: %d %v", n, err)
 	}
 	w.db.SetMaxIdleConns(0)

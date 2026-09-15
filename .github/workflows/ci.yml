@@ -39,6 +39,7 @@ jobs:
         run: |
           ./dist/rydd --help
           ./dist/rydd --version
+          ./scripts/worker-smoke ./dist/rydd
 
   docker:
     name: Docker workflow and cross-builds
@@ -52,3 +53,4 @@ jobs:
         run: |
           test "$(stat -c %u dist/rydd)" = "$(id -u)"
           ./dist/rydd-linux-amd64 --help
+          ./scripts/worker-smoke ./dist/rydd-linux-amd64
