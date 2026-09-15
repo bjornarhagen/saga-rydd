@@ -6,7 +6,7 @@ Rydd will gradually discover developer clutter and duplicate files, explain what
 
 **Status: experimental metadata inventory.** The worker can scan explicitly selected fixture directories in bounded, resumable batches and save metadata, skip reasons and directory reconciliation markers in SQLite. Scanning requires `daemon --experimental-scan`; ordinary `daemon` stays idle. Durable dispatch cadence, a daily batch cap and WAL backpressure are enforced; fine-grained CPU/I/O/power budgets, recommendations, cleanup and service installation are not implemented. Nothing runs in the background when you clone, build or initialize this repository.
 
-For humans and AI: readable output by default, versioned JSON with `--json`, and `rydd capabilities --json` for discovery. See the [CLI contract](docs/cli.md).
+For humans and AI: readable output by default, versioned JSON with `--json`, and `rydd capabilities --json` for discovery. Live status also reports scanner metadata API counters to help inspect background work. See the [CLI contract](docs/cli.md).
 
 ## Project map
 

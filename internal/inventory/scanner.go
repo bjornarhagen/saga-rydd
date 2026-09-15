@@ -24,6 +24,7 @@ import (
 
 type Scanner struct {
 	mu           sync.Mutex
+	metrics      counters
 	closed       atomic.Bool
 	roots        map[string]bool
 	excludes     []string
@@ -48,11 +49,12 @@ func New(roots, excludes, privatePaths []string) (*Scanner, error) {
 	}
 	for _, p := range protected {
 		var st unix.Stat_t
+		s.metrics.stat.Add(1)
 		if unix.Stat(p, &st) == nil {
 			s.protectedIDs[objectID(st)] = true
 		}
 		s.excludes = append(s.excludes, filepath.Clean(p))
-		if canonical, err := filepath.EvalSymlinks(p); err == nil {
+		if canonical, err := s.resolve(p); err == nil {
 			s.excludes = append(s.excludes, canonical)
 		}
 	}
@@ -60,10 +62,11 @@ func New(roots, excludes, privatePaths []string) (*Scanner, error) {
 	var infos []os.FileInfo
 	for _, root := range roots {
 		s.roots[root] = true
-		canonical, err := filepath.EvalSymlinks(root)
+		canonical, err := s.resolve(root)
 		if err != nil {
 			continue
 		} // Unavailable roots become saved job errors.
+		s.metrics.stat.Add(1)
 		info, err := os.Stat(canonical)
 		if err != nil {
 			continue
@@ -98,16 +101,19 @@ func (s *Scanner) Close() {
 
 func (s *Scanner) openat(fd int, name string) (int, error) {
 	var before, after unix.Stat_t
+	s.metrics.stat.Add(1)
 	if err := unix.Fstatat(fd, name, &before, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 		return -1, err
 	}
 	if dataless(before) || s.protectedIDs[objectID(before)] {
 		return -1, errors.New("dataless or protected directory")
 	}
+	s.metrics.open.Add(1)
 	next, err := unix.Openat(fd, name, openFlags, 0)
 	if err != nil {
 		return -1, err
 	}
+	s.metrics.stat.Add(1)
 	if err := unix.Fstat(next, &after); err != nil {
 		unix.Close(next)
 		return -1, err
@@ -141,6 +147,7 @@ const openFlags = unix.O_RDONLY | unix.O_DIRECTORY | unix.O_CLOEXEC | unix.O_NOF
 // Open every component relative to a directory descriptor. Only configured root
 // aliases are resolved, before opening; descendants are never followed.
 func (s *Scanner) openAbsolute(ctx context.Context, path string) (*os.File, error) {
+	s.metrics.open.Add(1)
 	fd, err := unix.Open("/", openFlags, 0)
 	if err != nil {
 		return nil, err
@@ -165,8 +172,9 @@ func (s *Scanner) openAbsolute(ctx context.Context, path string) (*os.File, erro
 
 func objectID(st unix.Stat_t) string { return fmt.Sprintf("%d:%d", st.Dev, st.Ino) }
 
-func statFile(f *os.File) (unix.Stat_t, error) {
+func (s *Scanner) statFile(f *os.File) (unix.Stat_t, error) {
 	var st unix.Stat_t
+	s.metrics.stat.Add(1)
 	err := unix.Fstat(int(f.Fd()), &st)
 	return st, err
 }
@@ -196,7 +204,7 @@ func (s *Scanner) open(ctx context.Context, j state.Job) (*os.File, string, stri
 	if !s.roots[root] || !validPath(path) {
 		return nil, "", "", errors.New("invalid scan scope")
 	}
-	canonical, err := filepath.EvalSymlinks(root)
+	canonical, err := s.resolve(root)
 	if err != nil {
 		return nil, "", "", err
 	}
@@ -208,11 +216,11 @@ func (s *Scanner) open(ctx context.Context, j state.Job) (*os.File, string, stri
 		return nil, "", "", err
 	}
 	fail := func(err error) (*os.File, string, string, error) { f.Close(); return nil, "", "", err }
-	st, err := statFile(f)
+	st, err := s.statFile(f)
 	if err != nil {
 		return fail(err)
 	}
-	volume, mount, err := filesystem(int(f.Fd()))
+	volume, mount, err := s.filesystem(int(f.Fd()))
 	if err != nil {
 		return fail(err)
 	}
@@ -234,7 +242,7 @@ func (s *Scanner) open(ctx context.Context, j state.Job) (*os.File, string, stri
 			}
 			f.Close()
 			f = os.NewFile(uintptr(fd), path)
-			v, m, err := filesystem(fd)
+			v, m, err := s.filesystem(fd)
 			if err != nil {
 				return fail(err)
 			}
@@ -275,7 +283,7 @@ func (s *Scanner) Next(ctx context.Context, j state.Job) (state.ScanBatch, error
 	if err != nil {
 		return fault(err)
 	}
-	st, err := statFile(f)
+	st, err := s.statFile(f)
 	if err != nil {
 		f.Close()
 		return fault(err)
@@ -298,11 +306,12 @@ func (s *Scanner) Next(ctx context.Context, j state.Job) (state.ScanBatch, error
 		f.Close()
 	}
 	stream := s.current
-	parentVolume, parentMount, err := filesystem(int(stream.file.Fd()))
+	parentVolume, parentMount, err := s.filesystem(int(stream.file.Fd()))
 	if err != nil {
 		return fault(err)
 	}
 	b := state.ScanBatch{Identity: identity, Generation: stream.generation, Directory: observation(string(j.Path), st)}
+	s.metrics.read.Add(1)
 	names, readErr := stream.file.Readdirnames(state.MaxBatchEntries)
 	if readErr != nil && !errors.Is(readErr, io.EOF) {
 		return fault(readErr)
@@ -315,6 +324,7 @@ func (s *Scanner) Next(ctx context.Context, j state.Job) (state.ScanBatch, error
 			return fault(errors.New("invalid directory entry"))
 		}
 		var child unix.Stat_t
+		s.metrics.stat.Add(1)
 		if err := unix.Fstatat(int(stream.file.Fd()), name, &child, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 			return fault(err)
 		}
@@ -334,7 +344,7 @@ func (s *Scanner) Next(ctx context.Context, j state.Job) (state.ScanBatch, error
 			if err != nil {
 				e.SkipReason = "directory unavailable"
 			} else {
-				v, m, err := filesystem(fd)
+				v, m, err := s.filesystem(fd)
 				unix.Close(fd)
 				if err != nil || v != parentVolume || m != parentMount {
 					e.SkipReason = "unsupported filesystem or mount boundary"
@@ -349,12 +359,12 @@ func (s *Scanner) Next(ctx context.Context, j state.Job) (state.ScanBatch, error
 	if err != nil {
 		return fault(err)
 	}
-	end, err := statFile(check)
+	end, err := s.statFile(check)
 	check.Close()
 	if err != nil {
 		return fault(err)
 	}
-	current, err := statFile(stream.file)
+	current, err := s.statFile(stream.file)
 	if err != nil {
 		return fault(err)
 	}
@@ -373,4 +383,9 @@ func (s *Scanner) Next(ctx context.Context, j state.Job) (state.ScanBatch, error
 		stream.cursor = bytes.Clone(b.Cursor)
 	}
 	return b, nil
+}
+
+func (s *Scanner) resolve(path string) (string, error) {
+	s.metrics.resolve.Add(1)
+	return filepath.EvalSymlinks(path)
 }

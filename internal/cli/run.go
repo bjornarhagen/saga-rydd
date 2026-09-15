@@ -260,6 +260,9 @@ func status(ctx context.Context, args []string, paths config.Paths, home string,
 	fmt.Fprintf(out, "Scan batches reserved today (%s UTC): %d/%d; budget wait: %s\n", budget.Day, budget.Used, budget.Limit, budget.Reason)
 	if connection.Live != nil {
 		fmt.Fprintf(out, "Worker wait: %s\n", connection.Live.WaitReason)
+		if m := connection.Live.InventoryMetrics; m != nil {
+			fmt.Fprintf(out, "Scanner API calls this worker: stat=%d; directory open=%d; directory read=%d; filesystem stat=%d; mount identity=%d; path resolution=%d\n", m.StatCalls, m.DirectoryOpenCalls, m.DirectoryReadCalls, m.FilesystemStatCalls, m.MountIdentityCalls, m.PathResolutionCalls)
+		}
 	}
 	if connection.Error != "" {
 		fmt.Fprintf(out, "Worker connection: %q\n", connection.Error)

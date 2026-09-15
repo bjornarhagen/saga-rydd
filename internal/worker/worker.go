@@ -19,16 +19,17 @@ import (
 )
 
 type Snapshot struct {
-	PID           int                   `json:"pid"`
-	Instance      string                `json:"instance"`
-	StartedAt     time.Time             `json:"started_at"`
-	Paused        bool                  `json:"paused"`
-	Stopping      bool                  `json:"stopping"`
-	ActiveJob     int64                 `json:"active_job,omitempty"`
-	RecoveredJobs int64                 `json:"recovered_jobs"`
-	Handlers      int                   `json:"handlers"`
-	WaitReason    string                `json:"wait_reason"`
-	Dispatch      *state.DispatchBudget `json:"dispatch,omitempty"`
+	PID              int                   `json:"pid"`
+	Instance         string                `json:"instance"`
+	StartedAt        time.Time             `json:"started_at"`
+	Paused           bool                  `json:"paused"`
+	Stopping         bool                  `json:"stopping"`
+	ActiveJob        int64                 `json:"active_job,omitempty"`
+	RecoveredJobs    int64                 `json:"recovered_jobs"`
+	Handlers         int                   `json:"handlers"`
+	WaitReason       string                `json:"wait_reason"`
+	InventoryMetrics *inventory.Metrics    `json:"inventory_metrics,omitempty"`
+	Dispatch         *state.DispatchBudget `json:"dispatch,omitempty"`
 }
 
 type Result struct {
@@ -85,6 +86,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 	if err := w.SyncRoots(ctx, cfg.Roots); err != nil {
 		return err
 	}
+	var scannerMetrics func() inventory.Metrics
 	if options.ExperimentalScan {
 		endpoint, err := Endpoint(dir)
 		if err != nil {
@@ -95,6 +97,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 			return err
 		}
 		defer scanner.Close()
+		scannerMetrics = scanner.Metrics
 		if _, exists := handlers[state.ScanKind]; exists {
 			return errors.New("inventory handler already registered")
 		}
@@ -123,6 +126,13 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 		return err
 	}
 	live := Snapshot{PID: os.Getpid(), Instance: hex.EncodeToString(id[:]), StartedAt: time.Now().UTC(), Paused: paused, RecoveredJobs: recovered, Handlers: len(handlers)}
+	refreshMetrics := func() {
+		if scannerMetrics != nil {
+			metrics := scannerMetrics()
+			live.InventoryMetrics = &metrics
+		}
+	}
+	refreshMetrics()
 	calls := make(chan controlCall, 8)
 	srv, err := listen(dir, calls)
 	if err != nil {
@@ -260,6 +270,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 				response.OK = false
 				response.Error = "unknown control command"
 			}
+			refreshMetrics()
 			response.Status = live
 			call.reply <- response
 		case <-tick:

@@ -33,6 +33,23 @@ Above 32 MiB of WAL, a passive checkpoint gates new inventory chunks. If a reade
 
 Batch reservations do not meter metadata calls, bytes or CPU. Fine-grained resource limits, battery/sleep integration and production resource measurements remain unfinished. Scanning remains experimental and opt-in on each worker start.
 
+## Live scanner accounting
+
+When experimental inventory is enabled, live worker snapshots include `inventory_metrics`. Human `status` prints the same counters. `capabilities --json` advertises `metadata_api_counters: true`; `metadata_rate_limit` remains false.
+
+| Counter | Attempted scanner API calls |
+| --- | --- |
+| `stat_calls` | Stat, Fstat and Fstatat, including scope checks and revalidation |
+| `directory_open_calls` | Open and Openat for directory descriptors |
+| `directory_read_calls` | Readdirnames batches, including EOF reads |
+| `filesystem_stat_calls` | Fstatfs filesystem checks |
+| `mount_identity_calls` | Linux Statx mount-ID checks; zero on macOS |
+| `path_resolution_calls` | EvalSymlinks calls for configured/protected paths |
+
+Counters include startup validation, retries and failed attempts. They are fixed-size in-memory counters for one worker instance, reset on restart, and absent when no inventory scanner is running. Use the worker `instance` field when computing deltas. Each field is sampled independently; a live snapshot is not a transaction across all counters. Reading metrics does not acquire the scanner lock.
+
+These count API attempts, not kernel syscalls or physical disk operations. In particular, EvalSymlinks can perform multiple internal metadata calls, and Readdirnames buffers directory reads. Descriptor closes, SQLite work and runtime activity are outside these counters. There is no per-path history, CPU/byte measurement, persisted consumption quota or new rate enforcement in this slice. Full metadata limiting must cover resolution internals and database work and preserve progress at low rates and short work deadlines.
+
 ## Future actions
 
 Keep discovery, review and execution as explicit commands. Machine readability is not cleanup authorization: future actions must use exact plans, revalidation and explicit user approval or an already approved narrow policy. Destructive commands and idempotency keys will be designed when action execution is implemented.

@@ -326,6 +326,9 @@ func TestDailyDispatchCapAcrossWorkerRestart(t *testing.T) {
 	_, done = start(t, dir, c, options)
 	waitUntil(t, func() bool { return control(t, dir, "status").WaitReason == "daily_chunk_limit" })
 	snapshot := control(t, dir, "status")
+	if snapshot.InventoryMetrics == nil || snapshot.InventoryMetrics.StatCalls == 0 {
+		t.Fatal("missing live scanner counters", snapshot)
+	}
 	if snapshot.Dispatch == nil || snapshot.Dispatch.Used != 1 || snapshot.ActiveJob != 0 {
 		t.Fatal(snapshot)
 	}

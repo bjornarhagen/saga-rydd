@@ -9,8 +9,9 @@ func timestamps(s *unix.Stat_t) (int64, int64) { return s.Mtim.Nano(), s.Ctim.Na
 
 func dataless(s unix.Stat_t) bool { return false }
 
-func filesystem(fd int) (string, string, error) {
+func (s *Scanner) filesystem(fd int) (string, string, error) {
 	var fs unix.Statfs_t
+	s.metrics.filesystem.Add(1)
 	if err := unix.Fstatfs(fd, &fs); err != nil {
 		return "", "", err
 	}
@@ -21,6 +22,7 @@ func filesystem(fd int) (string, string, error) {
 		return "", "", fmt.Errorf("unsupported filesystem type %#x", fs.Type)
 	}
 	var st unix.Statx_t
+	s.metrics.mount.Add(1)
 	if err := unix.Statx(fd, "", unix.AT_EMPTY_PATH|unix.AT_SYMLINK_NOFOLLOW, unix.STATX_MNT_ID, &st); err != nil {
 		return "", "", err
 	}
