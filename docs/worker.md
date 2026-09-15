@@ -23,7 +23,7 @@ The next chunk starts no earlier than the configured interval after the precedin
 ## Next integrations
 
 - **P1-05 implemented:** `--experimental-scan` registers metadata inventory, seeds root jobs and commits bounded batches atomically. Schema v3 adds directory watermarks and skip reasons. See [inventory design](inventory.md). Keep experimental activation explicit until budget enforcement is verified.
-- **P1-06:** enforce persistent metadata/content/CPU and daily budgets, power/sleep behavior, low priority and WAL checkpoint/backpressure. The current cadence is only dispatch pacing; it does not enforce those resource targets.
+- **P1-06:** enforce persistent metadata/content/CPU and daily budgets, power/sleep behavior and low priority. Durable dispatch cadence/daily batch reservations and WAL checkpoint backpressure are implemented; see [CLI contract](cli.md). The current cadence is only dispatch pacing; it does not enforce those resource targets.
 - **P1-07:** fair/adaptive revisits and robust continuation across large directories.
 - **P1-09:** install/uninstall native launchd/systemd user services. The current command does not self-install, detach or survive an unsupervised terminal closing.
 

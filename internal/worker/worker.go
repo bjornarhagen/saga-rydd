@@ -19,14 +19,16 @@ import (
 )
 
 type Snapshot struct {
-	PID           int       `json:"pid"`
-	Instance      string    `json:"instance"`
-	StartedAt     time.Time `json:"started_at"`
-	Paused        bool      `json:"paused"`
-	Stopping      bool      `json:"stopping"`
-	ActiveJob     int64     `json:"active_job,omitempty"`
-	RecoveredJobs int64     `json:"recovered_jobs"`
-	Handlers      int       `json:"handlers"`
+	PID           int                   `json:"pid"`
+	Instance      string                `json:"instance"`
+	StartedAt     time.Time             `json:"started_at"`
+	Paused        bool                  `json:"paused"`
+	Stopping      bool                  `json:"stopping"`
+	ActiveJob     int64                 `json:"active_job,omitempty"`
+	RecoveredJobs int64                 `json:"recovered_jobs"`
+	Handlers      int                   `json:"handlers"`
+	WaitReason    string                `json:"wait_reason"`
+	Dispatch      *state.DispatchBudget `json:"dispatch,omitempty"`
 }
 
 type Result struct {
@@ -157,6 +159,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 	nextAllowed := time.Time{}
 	stop := func() {
 		live.Stopping = true
+		live.WaitReason = "stopping"
 		ctxDone = nil
 		if timer != nil {
 			timer.Stop()
@@ -180,6 +183,9 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 			}
 			tick = nil
 			reschedule = false
+			if live.Paused {
+				live.WaitReason = "paused"
+			}
 			if !live.Paused && !live.Stopping && active == nil {
 				due, err := w.NextJobDue(ctx, kinds)
 				if err != nil {
@@ -190,11 +196,30 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 					return err
 				}
 				if !due.IsZero() {
+					if options.ExperimentalScan {
+						budget, err := w.DispatchBudget(ctx, time.Now(), cfg.Scan.MaxScanChunksPerDay)
+						if err != nil {
+							if ctx.Err() != nil {
+								stop()
+								continue
+							}
+							return err
+						}
+						live.Dispatch = &budget
+						if budget.NextAllowed.After(due) {
+							due = budget.NextAllowed
+						}
+						if live.WaitReason != "wal_backpressure" {
+							live.WaitReason = budget.Reason
+						}
+					}
 					if due.Before(nextAllowed) {
 						due = nextAllowed
 					}
 					timer = time.NewTimer(max(time.Until(due), 0))
 					tick = timer.C
+				} else {
+					live.WaitReason = "idle"
 				}
 			}
 		}
@@ -239,6 +264,35 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 			call.reply <- response
 		case <-tick:
 			tick = nil
+			if options.ExperimentalScan {
+				blocked, err := w.WALBlocked(ctx, state.WALBackpressureBytes)
+				if err != nil {
+					if ctx.Err() != nil {
+						stop()
+						continue
+					}
+					return err
+				}
+				if blocked {
+					live.WaitReason = "wal_backpressure"
+					nextAllowed = time.Now().Add(time.Minute)
+					reschedule = true
+					continue
+				}
+				budget, err := w.DispatchBudget(ctx, time.Now(), cfg.Scan.MaxScanChunksPerDay)
+				if err != nil {
+					if ctx.Err() != nil {
+						stop()
+						continue
+					}
+					return err
+				}
+				live.Dispatch = &budget
+				if budget.Reason != "" {
+					reschedule = true
+					continue
+				}
+			}
 			now := time.Now()
 			job, err := w.ClaimJob(ctx, kinds, now, work+10*time.Second)
 			if err != nil {
@@ -252,7 +306,22 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 				reschedule = true
 				continue
 			}
+			if options.ExperimentalScan && job.Kind == state.ScanKind {
+				budget, err := w.ReserveScanChunk(ctx, time.Now(), interval, cfg.Scan.MaxScanChunksPerDay)
+				if errors.Is(err, state.ErrDispatchDeferred) {
+					if err := w.FinishJob(ctx, *job, false, job.Cursor, budget.NextAllowed, ""); err != nil {
+						return err
+					}
+					reschedule = true
+					continue
+				}
+				if err != nil {
+					return fmt.Errorf("reserve scan dispatch: %w", err)
+				}
+				live.Dispatch = &budget
+			}
 			active = job
+			live.WaitReason = "running"
 			live.ActiveJob = job.ID
 			cancelTask = startChunk(ctx, work, *job, handlers[job.Kind], done)
 		case result := <-done:

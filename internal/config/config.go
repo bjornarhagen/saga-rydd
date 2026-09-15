@@ -67,16 +67,17 @@ type Config struct {
 }
 
 type Scan struct {
-	WorkSeconds        int   `toml:"work_seconds"`
-	IntervalSeconds    int   `toml:"interval_seconds"`
-	MetadataPerSecond  int   `toml:"metadata_per_second"`
-	ReadBytesPerSecond int64 `toml:"read_bytes_per_second"`
-	ReadBytesPerDay    int64 `toml:"read_bytes_per_day"`
-	PauseOnBattery     bool  `toml:"pause_on_battery"`
+	WorkSeconds         int   `toml:"work_seconds"`
+	IntervalSeconds     int   `toml:"interval_seconds"`
+	MetadataPerSecond   int   `toml:"metadata_per_second"`
+	ReadBytesPerSecond  int64 `toml:"read_bytes_per_second"`
+	ReadBytesPerDay     int64 `toml:"read_bytes_per_day"`
+	PauseOnBattery      bool  `toml:"pause_on_battery"`
+	MaxScanChunksPerDay int   `toml:"max_scan_chunks_per_day"`
 }
 
 func Default() Config {
-	return Config{Version: Version, Roots: []string{}, Excludes: []string{}, Scan: Scan{30, 300, 100, 5 << 20, 5 << 30, true}}
+	return Config{Version: Version, Roots: []string{}, Excludes: []string{}, Scan: Scan{30, 300, 100, 5 << 20, 5 << 30, true, 288}}
 }
 
 func normalizePath(value, home string) (string, error) {
@@ -126,6 +127,9 @@ func (c *Config) Validate(home string) error {
 		}
 	}
 	s := c.Scan
+	if s.MaxScanChunksPerDay < 1 || s.MaxScanChunksPerDay > 100000 {
+		return errors.New("max_scan_chunks_per_day must be 1–100000")
+	}
 	if s.WorkSeconds < 1 || s.IntervalSeconds < s.WorkSeconds || s.IntervalSeconds > 86400 {
 		return errors.New("scan interval must be 1–86400 seconds and at least work_seconds; work_seconds must be positive")
 	}

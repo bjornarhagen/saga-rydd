@@ -30,6 +30,7 @@ func TestWorkerProcess(t *testing.T) {
 	if root := os.Getenv("RYDD_TEST_SCAN_ROOT"); root != "" {
 		c.Roots = []string{root}
 		options.ExperimentalScan = true
+		options.Interval = time.Second // A short persisted cooldown survives the kill.
 		if os.Getenv("RYDD_TEST_SCAN_FAST") == "1" {
 			options.Interval = 5 * time.Millisecond
 		}

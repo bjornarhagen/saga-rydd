@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -303,4 +304,43 @@ func TestControlValidationAndSocketProtection(t *testing.T) {
 	}
 	control(t, dir, "stop")
 	waitExit(t, done)
+}
+
+func TestDailyDispatchCapAcrossWorkerRestart(t *testing.T) {
+	dir, c := fixture(t)
+	root := t.TempDir()
+	c.Roots = []string{root}
+	c.Scan.MaxScanChunksPerDay = 1
+	for i := 0; i < 140; i++ {
+		if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("file-%03d", i)), []byte("fixture"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	options := Options{ExperimentalScan: true, Interval: 10 * time.Millisecond}
+	_, done := start(t, dir, c, options)
+	waitUntil(t, func() bool { return control(t, dir, "status").WaitReason == "daily_chunk_limit" })
+	control(t, dir, "pause")
+	control(t, dir, "resume")
+	control(t, dir, "stop")
+	waitExit(t, done)
+	_, done = start(t, dir, c, options)
+	waitUntil(t, func() bool { return control(t, dir, "status").WaitReason == "daily_chunk_limit" })
+	snapshot := control(t, dir, "status")
+	if snapshot.Dispatch == nil || snapshot.Dispatch.Used != 1 || snapshot.ActiveJob != 0 {
+		t.Fatal(snapshot)
+	}
+	control(t, dir, "stop")
+	waitExit(t, done)
+	r, err := state.OpenReader(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	summary, err := r.Summary(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Entries != 129 {
+		t.Fatalf("daily cap allowed extra batch: %+v", summary)
+	}
 }

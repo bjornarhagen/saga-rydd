@@ -9,6 +9,7 @@ Install a small terminal application, enable its background worker, and let it g
 Primary requirements:
 
 - macOS and Linux support.
+- Equally usable by humans and AI: discoverable commands, noninteractive operation, versioned JSON, stable errors and explicit action authorization.
 - Low CPU, memory, disk traffic, and battery impact; scanning speed is secondary.
 - Persistent progress across restarts, sleep, and temporary volume disconnection.
 - Explainable recommendations with evidence, freshness, and estimated savings.
@@ -50,9 +51,9 @@ Text files are appropriate for configuration and exports. The inventory needs in
 
 Use SQLite WAL mode so reports can read while scanning writes. Keep transactions short, set bounded busy retries, and monitor/checkpoint WAL growth. WAL has auxiliary files and belongs on a local filesystem, not a network share. [SQLite WAL](https://www.sqlite.org/wal.html)
 
-Implemented foundation defaults: FULL durability, a 4 MiB cache per connection, memory mapping disabled, one connection per store, 1 second busy timeout, and automatic checkpointing every 1000 pages. Passive checkpoint support and a 32 MiB WAL backpressure signal are available; enforcement in the scheduler is still pending. Reader commands do not initialize or migrate state. Application/schema identity rejects unrelated or newer databases.
+Implemented foundation defaults: FULL durability, a 4 MiB cache per connection, memory mapping disabled, one connection per store, 1 second busy timeout, and automatic checkpointing every 1000 pages. Passive checkpoint support and a 32 MiB WAL backpressure signal are available; the scheduler now defers new inventory chunks when a passive checkpoint cannot clear pending frames. Reader commands do not initialize or migrate state. Application/schema identity rejects unrelated or newer databases.
 
-The worker uses an OS-held writer lock, a private versioned Unix control socket, durable pause state and token-fenced job leases. Schema v3 adds bounded inventory batches, directory reconciliation watermarks and skip reasons. It dispatches at most one cooperative chunk at a time and sleeps without queue polling when idle. Metadata scanning requires `--experimental-scan` until full budget enforcement is verified. [Worker design](docs/worker.md) and [inventory design](docs/inventory.md) specify recovery, pacing and remaining integrations; cadence alone is not CPU or I/O budget enforcement.
+The worker uses an OS-held writer lock, a private versioned Unix control socket, durable pause state and token-fenced job leases. Schema v3 adds bounded inventory batches, directory reconciliation watermarks and skip reasons; v4 persists dispatch reservations and cadence. It dispatches at most one cooperative chunk at a time and sleeps without queue polling when idle. Metadata scanning requires `--experimental-scan` until full budget enforcement is verified. [Worker design](docs/worker.md) and [inventory design](docs/inventory.md) specify recovery, pacing and remaining integrations; cadence alone is not CPU or I/O budget enforcement.
 
 Default locations:
 
@@ -79,6 +80,8 @@ Initial logical tables:
 Index sizes, due jobs, parent paths and hashes; avoid indexing every field. Preserve filesystem path bytes and escape unusual filenames safely in terminal output. Keep a current inventory and bounded observation history rather than recording every scan event forever.
 
 The inventory can be rebuilt, but outstanding quarantine/restore records must be preserved. Treat action history as durable data, use durable commits for action transitions, and provide a supported backup/export path. Bound logs and database growth; pause new discovery when the configured state budget is reached and report why. Never automatically purge files or restoration records to meet that budget.
+
+The [CLI contract](docs/cli.md) defines machine output and the implemented dispatch limits. Fine-grained resource accounting remains separate from daily batch reservations.
 
 ## 4. Scanning slowly and predictably
 

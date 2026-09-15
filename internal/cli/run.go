@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"github.com/bjornarhagen/saga-rydd/internal/config"
 	"github.com/bjornarhagen/saga-rydd/internal/state"
@@ -28,11 +29,12 @@ Commands:
   daemon [--experimental-scan]                         Run the worker (scanning opt-in for fixtures)
   pause / resume                                       Persistently pause or resume work
   stop                                                 Request graceful worker shutdown
+  capabilities [--json]                                Discover commands and supported features
 
-Options: --help, --version
+Options: --help, --version; --json on finite commands
 
-Experimental metadata scanning is available for disposable fixtures. CPU/I/O,
-daily and power budgets are not enforced yet. Service installation, duplicate
+Experimental metadata scanning is available for disposable fixtures. Fine-grained
+metadata/content, CPU and power budgets are not enforced yet. Service installation, duplicate
 detection and cleanup are not available yet.
 `
 
@@ -41,7 +43,7 @@ type pathsFlag []string
 func (p *pathsFlag) String() string         { return fmt.Sprint([]string(*p)) }
 func (p *pathsFlag) Set(value string) error { *p = append(*p, value); return nil }
 
-func Run(ctx context.Context, args []string, out, errOut io.Writer) int {
+func runHuman(ctx context.Context, args []string, out, errOut io.Writer) int {
 	flags := flag.NewFlagSet("rydd", flag.ContinueOnError)
 	flags.SetOutput(errOut)
 	dataDir := flags.String("data-dir", "", "private directory for both config and state")
@@ -60,6 +62,10 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) int {
 	remaining := flags.Args()
 	if len(remaining) == 0 {
 		fmt.Fprint(out, help)
+		return 0
+	}
+	if remaining[0] == "capabilities" && len(remaining) == 1 {
+		fmt.Fprintln(out, "Rydd commands: init, config check, state init, status, pause, resume, stop, capabilities.\nAdd --json for versioned machine output. daemon is foreground-only and uses text output.\nAll commands are noninteractive. Exit codes: 0 success, 1 operation failed, 2 invalid usage.\nScanning is experimental. Deletion, duplicate detection, and full resource controls are unavailable.")
 		return 0
 	}
 	paths, err := config.ResolvePaths(*dataDir)
@@ -141,6 +147,10 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) int {
 		} else {
 			fmt.Fprintln(errOut, err)
 		}
+		var usage usageError
+		if errors.As(err, &usage) {
+			return 2
+		}
 		return 1
 	}
 	return 0
@@ -153,10 +163,10 @@ func initialize(ctx context.Context, args []string, paths config.Paths, home str
 	flags.Var(&roots, "root", "explicit root (repeatable)")
 	flags.Var(&excludes, "exclude", "excluded subtree (repeatable)")
 	if err := flags.Parse(args); err != nil {
-		return err
+		return usageError{err}
 	}
 	if flags.NArg() != 0 {
-		return errors.New("unexpected init arguments")
+		return usageError{errors.New("unexpected init arguments")}
 	}
 	c := config.Default()
 	c.Roots = roots
@@ -213,6 +223,10 @@ func status(ctx context.Context, args []string, paths config.Paths, home string,
 	if err != nil {
 		return err
 	}
+	budget, err := r.DispatchBudget(ctx, time.Now(), c.Scan.MaxScanChunksPerDay)
+	if err != nil {
+		return err
+	}
 	type workerStatus struct {
 		State string           `json:"state"`
 		Live  *worker.Snapshot `json:"live,omitempty"`
@@ -228,25 +242,30 @@ func status(ctx context.Context, args []string, paths config.Paths, home string,
 	}
 	if *asJSON {
 		return json.NewEncoder(out).Encode(struct {
-			Stage           string        `json:"stage"`
-			ConfigFile      string        `json:"config_file"`
-			StateDir        string        `json:"state_dir"`
-			ConfiguredRoots []string      `json:"configured_roots"`
-			State           state.Summary `json:"state"`
-			Paused          bool          `json:"saved_pause"`
-			Worker          workerStatus  `json:"worker"`
-		}{"experimental-inventory", paths.ConfigFile, paths.StateDir, c.Roots, summary, paused, connection})
+			Stage           string               `json:"stage"`
+			ConfigFile      string               `json:"config_file"`
+			StateDir        string               `json:"state_dir"`
+			ConfiguredRoots []string             `json:"configured_roots"`
+			State           state.Summary        `json:"state"`
+			Paused          bool                 `json:"saved_pause"`
+			Worker          workerStatus         `json:"worker"`
+			Dispatch        state.DispatchBudget `json:"dispatch_budget"`
+		}{"experimental-inventory", paths.ConfigFile, paths.StateDir, c.Roots, summary, paused, connection, budget})
 	}
 	fmt.Fprintf(out, "Saga — Rydd\nConfig: %q\nState: %q\nSchema: %d (SQLite %s)\nConfigured roots: %d; saved enabled roots: %d\nSaved observations: %d; pending jobs: %d; running jobs: %d\nDatabase: %d bytes; WAL: %d bytes\nWorker: %s; saved pause: %t\nScanning: experimental, opt-in; full resource limits not enforced.\n", paths.ConfigFile, paths.StateDir, summary.Schema, summary.SQLiteVersion, len(c.Roots), summary.EnabledRoots, summary.Entries, summary.PendingJobs, summary.RunningJobs, summary.DatabaseBytes, summary.WALBytes, connection.State, paused)
 	fmt.Fprintf(out, "Completed directory passes: %d; directory errors: %d; skipped observations: %d\n", summary.CompleteDirectories, summary.DirectoryErrors, summary.SkippedEntries)
 	if connection.Live != nil {
 		fmt.Fprintf(out, "Worker PID: %d; paused: %t; stopping: %t; active job: %d\n", connection.Live.PID, connection.Live.Paused, connection.Live.Stopping, connection.Live.ActiveJob)
 	}
+	fmt.Fprintf(out, "Scan batches reserved today (%s UTC): %d/%d; budget wait: %s\n", budget.Day, budget.Used, budget.Limit, budget.Reason)
+	if connection.Live != nil {
+		fmt.Fprintf(out, "Worker wait: %s\n", connection.Live.WaitReason)
+	}
 	if connection.Error != "" {
 		fmt.Fprintf(out, "Worker connection: %q\n", connection.Error)
 	}
 	if summary.NeedsBackpressure {
-		fmt.Fprintln(out, "WAL exceeds the background-write threshold; a future worker must pause writes until checkpoint progress resumes.")
+		fmt.Fprintln(out, "WAL exceeds the checkpoint threshold; the worker checks checkpoint progress before further scanning.")
 	}
 	return nil
 }
