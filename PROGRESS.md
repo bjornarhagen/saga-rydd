@@ -106,7 +106,7 @@ This file is the canonical implementation tracker. The architecture and full acc
 - `TestProcessKillRecoveryAndSIGTERM` kills a separate worker with an active lease, restarts through its stale socket, verifies the saved cursor and recovery count, and checks SIGTERM plus persistent pause across process restarts.
 - `./scripts/dev check`, `./scripts/dev race` and `./scripts/dev build-all` passed. `scripts/worker-smoke` passed with the Docker-built native macOS arm64 binary and the Linux container binary. No host Go installation was used.
 - Separate Docker command containers successfully paused, queried, resumed and stopped a fixture worker through the shared runtime volume. All fixture workers exited; no service was installed.
-- Native macOS/Linux CI verification is pending for this implementation; do not check off P1-04 until it passes.
+- Initial [CI run 34977696796](https://github.com/bjornarhagen/saga-rydd/actions/runs/34977696796) passed native macOS/Linux, but Docker exposed a pacing error under slower job claims: database latency shortened the gap between handler starts. Pacing now uses the actual handler start time. Full CI verification of the correction is pending; do not check off P1-04 until it passes.
 
 ## Handoff
 

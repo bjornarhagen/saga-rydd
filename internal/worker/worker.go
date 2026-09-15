@@ -43,8 +43,9 @@ type Options struct {
 	Interval, WorkDuration time.Duration
 }
 type outcome struct {
-	result Result
-	err    error
+	result    Result
+	err       error
+	startedAt time.Time
 }
 
 func Run(ctx context.Context, dir string, cfg config.Config, options Options) error {
@@ -223,11 +224,13 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 			}
 			active = job
 			live.ActiveJob = job.ID
-			nextAllowed = now.Add(interval)
 			cancelTask = startChunk(ctx, work, *job, handlers[job.Kind], done)
 		case result := <-done:
 			cancelTask()
 			cancelTask = nil
+			// Claiming can take time on a busy disk. Pace from actual handler
+			// execution so that database latency never shortens the interval.
+			nextAllowed = result.startedAt.Add(interval)
 			due := result.result.NextAt
 			if due.IsZero() {
 				due = time.Now()
@@ -260,10 +263,11 @@ func startChunk(ctx context.Context, duration time.Duration, job state.Job, hand
 	taskCtx, cancel := context.WithTimeout(ctx, duration)
 	go func() {
 		defer cancel()
-		result := outcome{}
+		result := outcome{startedAt: time.Now()}
 		defer func() {
 			if recover() != nil {
-				result = outcome{err: errors.New("job handler panicked")}
+				result.result = Result{}
+				result.err = errors.New("job handler panicked")
 			}
 			done <- result
 		}()
