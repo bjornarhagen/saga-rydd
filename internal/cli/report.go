@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -20,6 +21,7 @@ func report(ctx context.Context, args []string, paths config.Paths) (state.FileR
 	cursor := f.String("cursor", "", "next page cursor")
 	candidates := f.Bool("candidates", false, "review old node_modules observations")
 	directory := f.String("directory", "", "measure a saved directory subtree")
+	f.StringVar(directory, "d", "", "directory alias")
 	if err := f.Parse(args); err != nil {
 		return state.FileReport{}, usageError{err}
 	}
@@ -27,22 +29,42 @@ func report(ctx context.Context, args []string, paths config.Paths) (state.FileR
 		return state.FileReport{}, usageError{errors.New("report accepts --limit 1–200 and --cursor TOKEN, or --directory ABSOLUTE_PATH")}
 	}
 	directorySet, pageSet, limitSet := false, false, false
+	directoryFlags := 0
 	f.Visit(func(v *flag.Flag) {
 		if v.Name == "limit" {
 			limitSet = true
 		}
-		if v.Name == "directory" {
+		if v.Name == "directory" || v.Name == "d" {
 			directorySet = true
+			directoryFlags++
 		}
 		if v.Name == "cursor" || v.Name == "limit" {
 			pageSet = true
 		}
 	})
-	if *candidates && (directorySet || limitSet) {
-		return state.FileReport{}, usageError{errors.New("--candidates accepts --cursor only; do not combine with --directory or --limit")}
+	if directoryFlags > 1 {
+		return state.FileReport{}, usageError{errors.New("use only one of -d and --directory")}
 	}
-	if directorySet && (pageSet || !filepath.IsAbs(*directory)) {
-		return state.FileReport{}, usageError{errors.New("--directory requires an absolute path and cannot be combined with --limit or --cursor")}
+	if *candidates && limitSet {
+		return state.FileReport{}, usageError{errors.New("--candidates accepts --cursor and an optional manual-scan directory, but not --limit")}
+	}
+	if directorySet && pageSet && !*candidates {
+		return state.FileReport{}, usageError{errors.New("directory size reports cannot be combined with --limit or --cursor")}
+	}
+	if directorySet {
+		normalized, err := directoryPath(*directory)
+		if err != nil {
+			return state.FileReport{}, err
+		}
+		*directory = normalized
+		manual := manualState(paths, normalized)
+		if _, err := os.Lstat(filepath.Join(manual, state.Filename)); err == nil {
+			paths.StateDir = manual
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return state.FileReport{}, err
+		} else if *candidates {
+			return state.FileReport{}, usageError{errors.New("scoped candidates require a manual scan of this exact directory; run scan -d PATH first")}
+		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()

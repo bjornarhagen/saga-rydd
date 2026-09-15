@@ -170,3 +170,32 @@ func TestPacedPendingNamesAreDiscardedAfterDirectoryMutation(t *testing.T) {
 		t.Fatal(second)
 	}
 }
+
+func TestExactEntryDelay(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := &Scanner{}
+		if err := WithEntryDelay(1500 * time.Millisecond)(s); err != nil {
+			t.Fatal(err)
+		}
+		start := time.Now()
+		if err := s.paceEntry(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.paceEntry(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if time.Since(start) != 1500*time.Millisecond {
+			t.Fatal(time.Since(start))
+		}
+		if err := WithEntryDelay(0)(s); err != nil {
+			t.Fatal(err)
+		}
+		start = time.Now()
+		if err := s.paceEntry(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if time.Since(start) != 0 {
+			t.Fatal("--now still paced")
+		}
+	})
+}

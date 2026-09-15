@@ -1,0 +1,22 @@
+#!/bin/sh
+# Disposable native foreground-scan fixture; no configured personal roots.
+set -eu
+binary=${1:?Usage: scripts/manual-scan-smoke /path/to/native/rydd}
+fixture=$(mktemp -d "${TMPDIR:-/tmp}/rydd-manual.XXXXXX")
+mkdir "$fixture/root" "$fixture/root/node_modules"
+printf '{}\n' >"$fixture/root/package.json"
+printf 'hello\n' >"$fixture/root/node_modules/file"
+touch -t 202001010000 "$fixture/root/package.json" "$fixture/root/node_modules"
+rydd() { "$binary" --data-dir "$fixture/state" "$@"; }
+rydd scan -d "$fixture/root" --now --json >"$fixture/scan.json"
+grep -q '"outcome":"queue_drained"' "$fixture/scan.json"
+rydd report -d "$fixture/root" --json >"$fixture/report.json"
+grep -q '"logical_file_bytes":9' "$fixture/report.json"
+rydd report -d "$fixture/root" --candidates --json >"$fixture/candidates.json"
+grep -q '"classification":"review_required"' "$fixture/candidates.json"
+rydd scan -d "$fixture/root" -s 10 >"$fixture/scan.txt"
+grep -q 'Scan stopped: queue_drained' "$fixture/scan.txt"
+rydd report -d "$fixture/root" >"$fixture/report.txt"
+grep -q 'saved directory size' "$fixture/report.txt"
+test ! -e "$fixture/state/config.toml"
+printf 'Native manual scan smoke passed.\n'

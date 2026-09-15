@@ -30,7 +30,7 @@ func (s *Scanner) paceEntry(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if s.entryRate == 0 {
+	if s.entrySpacing == 0 {
 		return nil
 	}
 	if delay := time.Until(s.nextEntry); delay > 0 {
@@ -53,4 +53,19 @@ func (s *Scanner) paceEntry(ctx context.Context) error {
 	}
 	s.nextEntry = time.Now().Add(s.entrySpacing)
 	return nil
+}
+
+// WithEntryDelay sets exact spacing for explicitly invoked foreground scans.
+func WithEntryDelay(delay time.Duration) Option {
+	return func(s *Scanner) error {
+		if delay < 0 || delay > time.Minute {
+			return errors.New("entry delay must be between zero and one minute")
+		}
+		s.entrySpacing = delay
+		s.entryRate = 0
+		if delay > 0 {
+			s.entryRate = int(time.Second / delay)
+		}
+		return nil
+	}
 }

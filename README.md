@@ -4,11 +4,25 @@ A quiet storage cleanup companion for macOS and Linux. Part of Saga.
 
 Rydd will gradually discover developer clutter and duplicate files, explain what can be removed, and help reclaim space through reviewed actions or explicitly enabled automatic policies.
 
-**Status: experimental metadata inventory.** The worker can scan explicitly selected fixture directories in bounded, resumable batches and save metadata, skip reasons and directory reconciliation markers in SQLite. Scanning requires `daemon --experimental-scan`; ordinary `daemon` stays idle. Durable dispatch cadence, a daily batch cap, child-entry pacing and WAL backpressure are enforced; saved largest-file and selected-directory size reports and review-required `node_modules` candidates are available. Fine-grained CPU/I/O/power budgets, cleanup and service installation are not implemented. Nothing runs in the background when you clone, build or initialize this repository.
+**Status: experimental metadata inventory.** The worker can scan explicitly selected fixture directories in bounded, resumable batches and save metadata, skip reasons and directory reconciliation markers in SQLite. Use `scan -d PATH` for a foreground scan, or `daemon --experimental-scan` for configured roots; ordinary `daemon` stays idle. Durable dispatch cadence, a daily batch cap, child-entry pacing and WAL backpressure are enforced; saved largest-file and selected-directory size reports and review-required `node_modules` candidates are available. Fine-grained CPU/I/O/power budgets, cleanup and service installation are not implemented. Nothing runs in the background when you clone, build or initialize this repository.
 
 For humans and AI: readable output by default, versioned JSON with `--json`, and `rydd capabilities --json` for discovery. Live status also reports scanner metadata API counters to help inspect background work. See the [CLI contract](docs/cli.md).
 
 **Next milestone: useful read-only reports and one `node_modules` recommendation category.** We are prioritizing this MVP and controlled user feedback before finishing unattended-operation infrastructure. See the [execution priority](PROGRESS.md#execution-priority--read-only-mvp-first); numbered phases are not a strict work order. File and selected-directory size reports are available; the first candidate category has also been exercised in a controlled native project trial. See [trial lessons](docs/mvp-trial-results.md) for current limits and next steps.
+
+## Scan a chosen folder
+
+```sh
+rydd scan -d /path/to/project          # 10 ms between entry inspections
+rydd scan -d /path/to/project -s 25    # slower, 25 ms
+rydd scan -d /path/to/project --now    # no deliberate delay
+rydd report -d /path/to/project
+rydd report -d /path/to/project --candidates --json
+```
+
+No initialization is needed for a manual scan. It runs in the foreground and saves a separate inventory per selected folder; your configured background roots remain unchanged. Ctrl+C stops it; rerun the command to revisit the folder and continue saved work. Filesystem protections and configured exclusions still apply. No file contents are read or deleted. `--now` can produce substantial metadata I/O. `-s` spaces child-entry inspections, not every filesystem operation.
+
+Reports select the manual inventory for that exact normalized path when present. Directory-size reports otherwise use the existing configured inventory. Scoped `--candidates` requires a manual scan of that exact folder. Relative paths and `~/` are accepted; use the same global `--data-dir` across commands when overriding it. Manual inventories are separate from default `status` and unscoped reports. See [manual scan semantics](docs/cli.md#foreground-manual-scans).
 
 ## View saved results
 

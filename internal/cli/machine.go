@@ -35,7 +35,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) int {
 			continue
 		}
 		filtered = append(filtered, a)
-		if (a == "--data-dir" || a == "--root" || a == "--exclude" || a == "--limit" || a == "--cursor" || a == "--directory") && i+1 < len(args) {
+		if (a == "--data-dir" || a == "--root" || a == "--exclude" || a == "--limit" || a == "--cursor" || a == "--directory" || a == "-d" || a == "-s" || a == "--sleep") && i+1 < len(args) {
 			i++
 			filtered = append(filtered, args[i])
 		}
@@ -120,7 +120,7 @@ func runMachine(ctx context.Context, args []string, out, errOut io.Writer) int {
 		if len(a) != 2 {
 			return invalid("unexpected arguments")
 		}
-	case "init", "report":
+	case "init", "report", "scan":
 	default:
 		return invalid("unknown command; use capabilities --json")
 	}
@@ -134,6 +134,10 @@ func runMachine(ctx context.Context, args []string, out, errOut io.Writer) int {
 	}
 	result := map[string]any{"api_version": APIVersion, "ok": true, "command": command}
 	switch command {
+	case "scan":
+		var r ScanReport
+		r, err = scan(ctx, a[1:], paths, io.Discard)
+		result["scan"] = r
 	case "report":
 		var r any
 		r, err = report(ctx, a[1:], paths)
@@ -185,12 +189,13 @@ func capabilities() map[string]any {
 		"commands": []command{
 			{"init", true, "writes_configuration_and_state", []string{"--root PATH (repeatable)", "--exclude PATH (repeatable)"}},
 			{"config check", true, "read_only", []string{}}, {"state init", true, "writes_state", []string{}},
-			{"report", true, "read_only", []string{"--limit N (1–200)", "--cursor TOKEN", "--directory ABSOLUTE_PATH (instead of file pagination)", "--candidates [--cursor TOKEN] (old node_modules review)"}},
+			{"scan", true, "scans_metadata_and_writes_isolated_state", []string{"-d PATH / --directory PATH", "-s MS / --sleep MS (default 10)", "--now (no entry delay)"}},
+			{"report", true, "read_only", []string{"--limit N (1–200)", "--cursor TOKEN", "-d PATH / --directory PATH (saved folder size; combine with --candidates for manual scan root)", "--candidates [--cursor TOKEN] (old node_modules review)"}},
 			{"status", true, "read_only", []string{}}, {"pause", true, "writes_state", []string{}}, {"resume", true, "writes_state", []string{}},
 			{"stop", true, "stops_worker", []string{}}, {"daemon", false, "runs_worker", []string{"--experimental-scan"}}, {"capabilities", true, "read_only", []string{}},
 		},
 		"exit_codes":  map[string]string{"0": "success", "1": "operation_failed", "2": "invalid_usage_or_output"},
 		"error_codes": []string{"invalid_arguments", "unsupported_output", "worker_not_running", "writer_busy", "not_found", "already_exists", "permission_denied", "canceled", "command_failed"},
-		"features":    map[string]bool{"experimental_inventory": true, "durable_dispatch_limits": true, "wal_backpressure": true, "entry_rate_limit": true, "metadata_api_counters": true, "metadata_rate_limit": false, "cpu_limit": false, "power_controls": false, "file_reports": true, "directory_size_reports": true, "findings": true, "duplicates": false, "cleanup": false, "service_installation": false},
+		"features":    map[string]bool{"manual_scan": true, "experimental_inventory": true, "durable_dispatch_limits": true, "wal_backpressure": true, "entry_rate_limit": true, "metadata_api_counters": true, "metadata_rate_limit": false, "cpu_limit": false, "power_controls": false, "file_reports": true, "directory_size_reports": true, "findings": true, "duplicates": false, "cleanup": false, "service_installation": false},
 	}
 }

@@ -9,7 +9,7 @@ This file is the canonical implementation tracker. The architecture and full acc
 - **Confirmed:** Go, local SQLite, TOML configuration, macOS/Linux, low resource usage, developer clutter plus duplicates, opt-in automatic cleanup in v1.
 - **Development:** Docker first; do not require host Go or additional host development tooling.
 - **Implemented app behavior:** initialization, saved/live status, paginated largest-file and selected-directory size reports, worker controls and opt-in experimental metadata scanning; private TOML/SQLite state, exclusive writer lock, bounded batches, atomic inventory/job commits and directory reconciliation watermarks. Durable dispatch cadence/daily batch reservations, child-entry pacing with partial batches, live scanner accounting, WAL backpressure and versioned JSON commands are implemented. Fine-grained CPU/I/O/power enforcement, service installation and cleanup remain unavailable; the first review-required node_modules candidate report is available.
-- **Active task:** none. P2-05a implemented and verified. MVP-TRIAL remains open for owner feedback on usefulness and actual project activity.
+- **Active task:** P1-08c in progress: user-requested foreground scan of a chosen folder, entry-delay controls and directory report aliases, with isolated manual inventory.
 - **Blockers:** none currently. Scanner resource targets and native service behavior remain unvalidated; the database experiment is not a scanner benchmark.
 
 ## Execution priority — read-only MVP first
@@ -61,6 +61,7 @@ The next milestone is: **Rydd shows useful cleanup candidates with enough eviden
   - [x] P1-08a — Versioned JSON controls/status, stable machine errors and capability discovery for AI and scripts.
   - [x] P1-08b1 — paginated largest-observed-files report, saved-inventory coverage/freshness, human/JSON parity and offline availability.
   - [x] P1-08b2 — incremental/bounded directory-size reports with partial/stale/unknown labels and logical/allocated-size qualifications.
+  - [ ] P1-08c — Foreground `scan -d PATH [-s MS | --now]`, isolated per-folder state, cancellation and `report -d PATH` / scoped candidate reports.
 - [ ] P1-09 — Implement launchd/systemd user service installation, status, stop and uninstall; document other supervisors.
 - [ ] P1-GATE — Verify restart/sleep recovery, disconnected volumes, permissions, concurrent reports and bounded memory on wide/deep million-entry fixtures. No deletion capability in this phase.
 
@@ -70,6 +71,7 @@ The next milestone is: **Rydd shows useful cleanup candidates with enough eviden
   - [x] P2-01a — minimum saved finding/report contract for one detector: identity, rule/version, evidence, review requirement, freshness and measured-size completeness; keep unsupported actions explicit.
 - [ ] P2-02 — Implement old `node_modules` detection with project recognition and incremental directory measurement.
   - [x] P2-02a — First end-to-end recommendation: recognized project, potentially stale dependencies, measured/partial size, evidence and regeneration caveats in human/JSON reports. Age alone never establishes safety or actual inactivity.
+  - [ ] P2-02b — **Next after P1-08c:** represent node_modules as one logical item with resumable aggregate size measurement; stop storing each descendant as ordinary inventory by default. Preserve partial/stale/unknown, hardlink accounting, scope protections and interruption recovery; support explicit detailed inventory.
 - [ ] P2-03 — Implement one recognized build-output category and one narrowly validated cache category eligible for later automation.
 - [ ] P2-04 — Implement opt-in bounded Docker metadata discovery with pinned local context/builder and no helper containers/image pulls.
 - [ ] P2-05 — Implement finding explanations, regeneration caveats, partial sizes, freshness and overlap-aware totals.
@@ -177,9 +179,9 @@ The next milestone is: **Rydd shows useful cleanup candidates with enough eviden
 
 **Last updated:** 2026-09-16.
 
-**Completed this session:** implemented P2-05a candidate selection diagnostics. Human/JSON reports expose first-match outcome counts for each examined entry, with explicit saved-page continuation/exhaustion. Counts cover only the current page, and selected counts correspond to returned candidates. Existing age, evidence, nested suppression and review-required eligibility remain unchanged. Added synthetic reason/precedence, pagination, CLI and native smoke assertions; Docker checks/race and four-target builds passed; native macOS candidate smoke passed. [CI run 35031272610](https://github.com/bjornarhagen/saga-rydd/actions/runs/35031272610) passed for `e1c402b`: native macOS (1m17s), native Linux (1m16s), Docker workflow/cross-builds (2m34s). Installed Mac binary updated and offline diagnostics verified. P2-05a is complete; broader P2-05/MVP gates remain open. No dependencies, schema changes or personal scan required. Private trial measurements remain unpublished.
+**Completed this session:** implementing P1-08c user-requested manual foreground scanning with per-folder private state, exact entry-delay controls and report directory aliases/scoped candidates. Tests cover isolated roots, unchanged background config/inventory, exclusions, cancellation/recovery, writer contention, invalid arguments and slow pacing. Docker checks/race and four-target builds passed. Native macOS manual-scan and candidate smoke passed; actual SIGINT termination and rerun recovery passed on a disposable fixture. CI verification remains pending. The user also requested aggregated dependency-tree inventory; P2-02b is now the next storage priority. Its boundary/measurement behavior is planned, not yet implemented. No private measurements are published.
 
-**Next action:** review candidate diagnostics with the user and obtain owner feedback for MVP-TRIAL, including whether the selected project is still used. Use that feedback to choose the next discovery/measurement improvement or proceed toward duplicate detection; do not infer inactivity or relax the age rule simply to generate findings. Preserve the read-only MVP priority before duplicate/cleanup work. Keep GitHub-hosted CI. Private measurements remain outside Git.
+**Next action:** finish P1-08c native/CI validation and installed binary update, then implement P2-02b generated-tree aggregation. Preserve the chosen-folder read-only trial scope. Do not skip node_modules traversal and call its size zero; exact aggregate measurement still needs bounded metadata walks.
 
 **Remaining decisions:** first automation-eligible cache category; supported minimum OS/libc versions; tuned resource/scan-root defaults; license. Go and naming are settled.
 

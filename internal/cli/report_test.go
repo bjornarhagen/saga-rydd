@@ -86,7 +86,7 @@ func TestReportHumanAndJSONOffline(t *testing.T) {
 		t.Fatal(code, human, errOut)
 	}
 
-	for _, args := range [][]string{{"report", "--candidates", "--limit", "1", "--json"}, {"report", "--candidates", "--cursor", "bad", "--json"}, {"report", "--limit", "0", "--json"}, {"report", "--cursor", "bad", "--json"}, {"report", "--bad", "--json"}, {"report", "--directory", "relative", "--json"}, {"report", "--directory", "/offline-fixture", "--limit", "1", "--json"}} {
+	for _, args := range [][]string{{"report", "--candidates", "--limit", "1", "--json"}, {"report", "--candidates", "--cursor", "bad", "--json"}, {"report", "--limit", "0", "--json"}, {"report", "--cursor", "bad", "--json"}, {"report", "--bad", "--json"}, {"report", "--directory", "", "--json"}, {"report", "--directory", "/offline-fixture", "--limit", "1", "--json"}} {
 		code, out, stderr := run(args...)
 		if code != 2 || stderr != "" || !strings.Contains(out, `"invalid_arguments"`) {
 			t.Fatal(code, out, stderr)

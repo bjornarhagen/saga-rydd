@@ -22,6 +22,7 @@ A quiet storage cleanup companion for macOS and Linux.
 Usage: rydd [--data-dir /absolute/path] <command>
 
 Commands:
+  scan -d PATH [-s MS | --now] [--json]                Foreground metadata scan (default delay 10 ms)
   init --root /path [--root /another] [--exclude /path]  Create config and state
   config check                                         Validate configuration
   state init                                           Initialize/migrate state from existing config
@@ -30,13 +31,13 @@ Commands:
   pause / resume                                       Persistently pause or resume work
   stop                                                 Request graceful worker shutdown
   report --candidates [--cursor TOKEN] [--json]         Node modules review candidates
-  report --directory PATH [--json]                     Saved directory size
+  report -d PATH [--json]                             Saved directory size
   report [--limit N] [--cursor TOKEN] [--json]           Largest observed files
   capabilities [--json]                                Discover commands and supported features
 
 Options: --help, --version; --json on finite commands
 
-Experimental metadata scanning is available for disposable fixtures. Fine-grained
+Experimental foreground metadata scanning is available for selected folders. Fine-grained
 metadata/content, CPU and power budgets are not enforced yet. Service installation, duplicate
 detection and cleanup are not available yet.
 `
@@ -68,7 +69,7 @@ func runHuman(ctx context.Context, args []string, out, errOut io.Writer) int {
 		return 0
 	}
 	if remaining[0] == "capabilities" && len(remaining) == 1 {
-		fmt.Fprintln(out, "Rydd commands: init, config check, state init, status, report, pause, resume, stop, capabilities.\nAdd --json for versioned machine output. daemon is foreground-only and uses text output.\nAll commands are noninteractive. Exit codes: 0 success, 1 operation failed, 2 invalid usage.\nScanning is experimental. Deletion, duplicate detection, and full resource controls are unavailable.")
+		fmt.Fprintln(out, "Rydd commands: init, config check, state init, status, scan, report, pause, resume, stop, capabilities.\nAdd --json for versioned machine output. daemon is foreground-only and uses text output.\nAll commands are noninteractive. Exit codes: 0 success, 1 operation failed, 2 invalid usage.\nScanning is experimental. Deletion, duplicate detection, and full resource controls are unavailable.")
 		return 0
 	}
 	paths, err := config.ResolvePaths(*dataDir)
@@ -92,7 +93,7 @@ func runHuman(ctx context.Context, args []string, out, errOut io.Writer) int {
 		var c config.Config
 		c, err = config.Load(paths.ConfigFile, home)
 		if err == nil {
-			fmt.Fprintf(out, "Configuration valid: %q\n%d root(s), %d exclusion(s). Scanning requires daemon --experimental-scan.\n", paths.ConfigFile, len(c.Roots), len(c.Excludes))
+			fmt.Fprintf(out, "Configuration valid: %q\n%d root(s), %d exclusion(s). Use scan -d PATH for foreground scans, or daemon --experimental-scan for configured roots.\n", paths.ConfigFile, len(c.Roots), len(c.Excludes))
 		}
 	case "state":
 		if len(remaining) != 2 || remaining[1] != "init" {
@@ -106,6 +107,12 @@ func runHuman(ctx context.Context, args []string, out, errOut io.Writer) int {
 			if err == nil {
 				fmt.Fprintf(out, "State ready: %q\n", paths.StateDir)
 			}
+		}
+	case "scan":
+		var r ScanReport
+		r, err = scan(ctx, remaining[1:], paths, out)
+		if err == nil {
+			printScanReport(out, r)
 		}
 	case "report":
 		var r state.FileReport

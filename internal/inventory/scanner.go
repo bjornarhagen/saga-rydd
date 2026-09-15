@@ -335,7 +335,7 @@ func (s *Scanner) Next(ctx context.Context, j state.Job) (state.ScanBatch, error
 	}
 	entryCtx := ctx
 	cancelEntries := func() {}
-	if deadline, ok := ctx.Deadline(); ok && s.entryRate > 0 {
+	if deadline, ok := ctx.Deadline(); ok && s.entrySpacing > 0 {
 		// Reserve half the remaining window for pathname revalidation and
 		// committing a partial result. Slow kernel calls remain cooperative.
 		entryCtx, cancelEntries = context.WithDeadline(ctx, time.Now().Add(time.Until(deadline)/2))
