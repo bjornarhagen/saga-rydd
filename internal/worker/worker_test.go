@@ -347,3 +347,38 @@ func TestDailyDispatchCapAcrossWorkerRestart(t *testing.T) {
 		t.Fatalf("daily cap allowed extra batch: %+v", summary)
 	}
 }
+
+func TestPacedInventoryControlsAndCompletion(t *testing.T) {
+	dir, c := fixture(t)
+	root := t.TempDir()
+	c.Roots = []string{root}
+	c.Scan.MetadataPerSecond = 5
+	for i := 0; i < 5; i++ {
+		if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("file-%d", i)), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, done := start(t, dir, c, Options{ExperimentalScan: true, Interval: 350 * time.Millisecond, WorkDuration: 300 * time.Millisecond})
+	waitUntil(t, func() bool { m := control(t, dir, "status").InventoryMetrics; return m != nil && m.Throttled })
+	control(t, dir, "pause")
+	waitUntil(t, func() bool { return control(t, dir, "status").ActiveJob == 0 })
+	control(t, dir, "resume")
+	r, err := state.OpenReader(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	waitUntil(t, func() bool {
+		summary, err := r.Summary(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return summary.Entries == 6 && summary.CompleteDirectories == 1 && summary.PendingJobs == 0 && summary.RunningJobs == 0
+	})
+	m := control(t, dir, "status").InventoryMetrics
+	if m == nil || m.EntryRatePerSecond != 5 || m.EntryInspections < 5 || m.ThrottleWaitNS == 0 {
+		t.Fatal(m)
+	}
+	control(t, dir, "stop")
+	waitExit(t, done)
+}

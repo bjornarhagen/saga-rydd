@@ -81,7 +81,7 @@ Index sizes, due jobs, parent paths and hashes; avoid indexing every field. Pres
 
 The inventory can be rebuilt, but outstanding quarantine/restore records must be preserved. Treat action history as durable data, use durable commits for action transitions, and provide a supported backup/export path. Bound logs and database growth; pause new discovery when the configured state budget is reached and report why. Never automatically purge files or restoration records to meet that budget.
 
-The [CLI contract](docs/cli.md) defines machine output and the implemented dispatch limits. Live scanner API counters now expose traversal, enumeration, failed calls and revalidation separately. They are not durable consumption quotas or exact syscall counts; resolution internals, database work, CPU and bytes need separate accounting before full rate enforcement. Fine-grained resource accounting remains separate from daily batch reservations.
+The [CLI contract](docs/cli.md) defines machine output and the implemented dispatch limits. Live scanner API counters now expose traversal, enumeration, failed calls and revalidation separately. Child-entry inspections are now paced using `metadata_per_second`, with partial-batch continuation when the throttle window expires. This is not full metadata rate enforcement. The counters are not durable consumption quotas or exact syscall counts; resolution internals, database work, CPU and bytes need separate accounting before full rate enforcement. Fine-grained resource accounting remains separate from daily batch reservations.
 
 ## 4. Scanning slowly and predictably
 

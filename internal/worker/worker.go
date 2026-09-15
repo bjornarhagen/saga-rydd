@@ -92,7 +92,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 		if err != nil {
 			return err
 		}
-		scanner, err := inventory.New(cfg.Roots, cfg.Excludes, append(append([]string{}, options.PrivatePaths...), dir, filepath.Dir(endpoint)))
+		scanner, err := inventory.New(cfg.Roots, cfg.Excludes, append(append([]string{}, options.PrivatePaths...), dir, filepath.Dir(endpoint)), inventory.WithEntryRate(cfg.Scan.MetadataPerSecond))
 		if err != nil {
 			return err
 		}

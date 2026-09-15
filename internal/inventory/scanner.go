@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/bjornarhagen/saga-rydd/internal/config"
 	"github.com/bjornarhagen/saga-rydd/internal/state"
@@ -25,6 +26,9 @@ import (
 type Scanner struct {
 	mu           sync.Mutex
 	metrics      counters
+	entryRate    int
+	entrySpacing time.Duration
+	nextEntry    time.Time
 	closed       atomic.Bool
 	roots        map[string]bool
 	excludes     []string
@@ -37,10 +41,17 @@ type stream struct {
 	cursor     []byte
 	generation int64
 	stamp      unix.Stat_t
+	pending    []string
+	eof        bool
 }
 
-func New(roots, excludes, privatePaths []string) (*Scanner, error) {
+func New(roots, excludes, privatePaths []string, options ...Option) (*Scanner, error) {
 	s := &Scanner{roots: make(map[string]bool), protectedIDs: make(map[string]bool)}
+	for _, option := range options {
+		if err := option(s); err != nil {
+			return nil, err
+		}
+	}
 	protected := append([]string{}, excludes...)
 	protected = append(protected, privatePaths...)
 	protected = append(protected, "/proc", "/sys", "/dev", "/run", "/System", "/Library", "/usr", "/bin", "/sbin", "/etc", "/private/etc")
@@ -311,19 +322,41 @@ func (s *Scanner) Next(ctx context.Context, j state.Job) (state.ScanBatch, error
 		return fault(err)
 	}
 	b := state.ScanBatch{Identity: identity, Generation: stream.generation, Directory: observation(string(j.Path), st)}
-	s.metrics.read.Add(1)
-	names, readErr := stream.file.Readdirnames(state.MaxBatchEntries)
-	if readErr != nil && !errors.Is(readErr, io.EOF) {
-		return fault(readErr)
+	// Keep unread names in the one bounded stream. Throttle deadlines yield a
+	// valid partial batch; they must not discard names already enumerated.
+	if len(stream.pending) == 0 && !stream.eof {
+		s.metrics.read.Add(1)
+		names, readErr := stream.file.Readdirnames(state.MaxBatchEntries)
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return fault(readErr)
+		}
+		stream.pending = names
+		stream.eof = errors.Is(readErr, io.EOF)
 	}
-	for _, name := range names {
-		if err := ctx.Err(); err != nil {
+	entryCtx := ctx
+	cancelEntries := func() {}
+	if deadline, ok := ctx.Deadline(); ok && s.entryRate > 0 {
+		// Reserve half the remaining window for pathname revalidation and
+		// committing a partial result. Slow kernel calls remain cooperative.
+		entryCtx, cancelEntries = context.WithDeadline(ctx, time.Now().Add(time.Until(deadline)/2))
+	}
+	defer cancelEntries()
+	for len(stream.pending) > 0 {
+		if err := s.paceEntry(entryCtx); err != nil {
+			if ctx.Err() != nil {
+				return fault(ctx.Err())
+			}
+			if errors.Is(err, context.DeadlineExceeded) {
+				break
+			}
 			return fault(err)
 		}
+		name := stream.pending[0]
 		if name == "." || name == ".." || strings.ContainsRune(name, '/') {
 			return fault(errors.New("invalid directory entry"))
 		}
 		var child unix.Stat_t
+		s.metrics.inspections.Add(1)
 		s.metrics.stat.Add(1)
 		if err := unix.Fstatat(int(stream.file.Fd()), name, &child, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 			return fault(err)
@@ -352,6 +385,8 @@ func (s *Scanner) Next(ctx context.Context, j state.Job) (state.ScanBatch, error
 			}
 		}
 		b.Entries = append(b.Entries, e)
+		stream.pending[0] = ""
+		stream.pending = stream.pending[1:]
 	}
 	// Reopen the path as well as fstat'ing the stream: a renamed/replaced
 	// ancestor must not let an old descriptor certify the current pathname.
@@ -371,7 +406,7 @@ func (s *Scanner) Next(ctx context.Context, j state.Job) (state.ScanBatch, error
 	if !sameStamp(stream.stamp, end) || !sameStamp(stream.stamp, current) {
 		return fault(errors.New("directory changed during enumeration; retry required"))
 	}
-	b.Complete = errors.Is(readErr, io.EOF)
+	b.Complete = stream.eof && len(stream.pending) == 0
 	if b.Complete {
 		s.reset()
 	} else {

@@ -186,6 +186,6 @@ func capabilities() map[string]any {
 		},
 		"exit_codes":  map[string]string{"0": "success", "1": "operation_failed", "2": "invalid_usage_or_output"},
 		"error_codes": []string{"invalid_arguments", "unsupported_output", "worker_not_running", "writer_busy", "not_found", "already_exists", "permission_denied", "canceled", "command_failed"},
-		"features":    map[string]bool{"experimental_inventory": true, "durable_dispatch_limits": true, "wal_backpressure": true, "metadata_api_counters": true, "metadata_rate_limit": false, "cpu_limit": false, "power_controls": false, "findings": false, "duplicates": false, "cleanup": false, "service_installation": false},
+		"features":    map[string]bool{"experimental_inventory": true, "durable_dispatch_limits": true, "wal_backpressure": true, "entry_rate_limit": true, "metadata_api_counters": true, "metadata_rate_limit": false, "cpu_limit": false, "power_controls": false, "findings": false, "duplicates": false, "cleanup": false, "service_installation": false},
 	}
 }
