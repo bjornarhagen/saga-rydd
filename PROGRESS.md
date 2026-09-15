@@ -9,7 +9,7 @@ This file is the canonical implementation tracker. The architecture and full acc
 - **Confirmed:** Go, local SQLite, TOML configuration, macOS/Linux, low resource usage, developer clutter plus duplicates, opt-in automatic cleanup in v1.
 - **Development:** Docker first; do not require host Go or additional host development tooling.
 - **Implemented app behavior:** initialization, saved/live status, paginated largest-file and selected-directory size reports, worker controls and opt-in experimental metadata scanning; private TOML/SQLite state, exclusive writer lock, bounded batches, atomic inventory/job commits and directory reconciliation watermarks. Durable dispatch cadence/daily batch reservations, child-entry pacing with partial batches, live scanner accounting, WAL backpressure and versioned JSON commands are implemented. Fine-grained CPU/I/O/power enforcement, service installation and cleanup remain unavailable; the first review-required node_modules candidate report is available.
-- **Active task:** P2-05a in progress: bounded candidate-selection diagnostics in human/JSON reports, preserving existing eligibility rules.
+- **Active task:** none. P2-05a implemented and verified. MVP-TRIAL remains open for owner feedback on usefulness and actual project activity.
 - **Blockers:** none currently. Scanner resource targets and native service behavior remain unvalidated; the database experiment is not a scanner benchmark.
 
 ## Execution priority — read-only MVP first
@@ -73,7 +73,7 @@ The next milestone is: **Rydd shows useful cleanup candidates with enough eviden
 - [ ] P2-03 — Implement one recognized build-output category and one narrowly validated cache category eligible for later automation.
 - [ ] P2-04 — Implement opt-in bounded Docker metadata discovery with pinned local context/builder and no helper containers/image pulls.
 - [ ] P2-05 — Implement finding explanations, regeneration caveats, partial sizes, freshness and overlap-aware totals.
-  - [ ] P2-05a — **Next:** explain empty candidate pages with bounded human/JSON selection diagnostics: mutually exclusive rejection counts, inspected coverage and continuation. Distinguish age rejection, missing/unsupported manifest, skips and unconfirmed/incomplete parent evidence. Preserve the current rule and review requirement; add fixture regressions.
+  - [x] P2-05a — explain empty candidate pages with bounded human/JSON selection diagnostics: mutually exclusive rejection counts, inspected coverage and continuation. Distinguish age rejection, missing/unsupported manifest, skips and unconfirmed/incomplete parent evidence. Preserve the current rule and review requirement; add fixture regressions.
 - [ ] P2-GATE — Verify supported/modified/unrecognized project fixtures; missing Docker and unknown sizes are harmless; no remote Docker access or broad disposable-category assumptions.
 
 ## Read-only MVP trial
@@ -177,9 +177,9 @@ The next milestone is: **Rydd shows useful cleanup candidates with enough eviden
 
 **Last updated:** 2026-09-16.
 
-**Completed this session:** implemented P2-05a candidate selection diagnostics. Human/JSON reports expose first-match outcome counts for each examined entry, with explicit saved-page continuation/exhaustion. Counts cover only the current page, and selected counts correspond to returned candidates. Existing age, evidence, nested suppression and review-required eligibility remain unchanged. Added synthetic reason/precedence, pagination, CLI and native smoke assertions; Docker checks/race and four-target builds passed; native macOS candidate smoke passed. CI verification is pending. No dependencies, schema changes or personal scan required. Private trial measurements remain unpublished.
+**Completed this session:** implemented P2-05a candidate selection diagnostics. Human/JSON reports expose first-match outcome counts for each examined entry, with explicit saved-page continuation/exhaustion. Counts cover only the current page, and selected counts correspond to returned candidates. Existing age, evidence, nested suppression and review-required eligibility remain unchanged. Added synthetic reason/precedence, pagination, CLI and native smoke assertions; Docker checks/race and four-target builds passed; native macOS candidate smoke passed. [CI run 35031272610](https://github.com/bjornarhagen/saga-rydd/actions/runs/35031272610) passed for `e1c402b`: native macOS (1m17s), native Linux (1m16s), Docker workflow/cross-builds (2m34s). Installed Mac binary updated and offline diagnostics verified. P2-05a is complete; broader P2-05/MVP gates remain open. No dependencies, schema changes or personal scan required. Private trial measurements remain unpublished.
 
-**Next action:** finish P2-05a validation, then review candidate diagnostics and obtain owner feedback for MVP-TRIAL. Preserve the read-only MVP priority before duplicate/cleanup work. Keep GitHub-hosted CI. Private measurements remain outside Git.
+**Next action:** review candidate diagnostics with the user and obtain owner feedback for MVP-TRIAL, including whether the selected project is still used. Use that feedback to choose the next discovery/measurement improvement or proceed toward duplicate detection; do not infer inactivity or relax the age rule simply to generate findings. Preserve the read-only MVP priority before duplicate/cleanup work. Keep GitHub-hosted CI. Private measurements remain outside Git.
 
 **Remaining decisions:** first automation-eligible cache category; supported minimum OS/libc versions; tuned resource/scan-root defaults; license. Go and naming are settled.
 
