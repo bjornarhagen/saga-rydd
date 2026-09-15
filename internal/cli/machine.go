@@ -35,7 +35,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) int {
 			continue
 		}
 		filtered = append(filtered, a)
-		if (a == "--data-dir" || a == "--root" || a == "--exclude") && i+1 < len(args) {
+		if (a == "--data-dir" || a == "--root" || a == "--exclude" || a == "--limit" || a == "--cursor") && i+1 < len(args) {
 			i++
 			filtered = append(filtered, args[i])
 		}
@@ -120,7 +120,7 @@ func runMachine(ctx context.Context, args []string, out, errOut io.Writer) int {
 		if len(a) != 2 {
 			return invalid("unexpected arguments")
 		}
-	case "init":
+	case "init", "report":
 	default:
 		return invalid("unknown command; use capabilities --json")
 	}
@@ -134,6 +134,10 @@ func runMachine(ctx context.Context, args []string, out, errOut io.Writer) int {
 	}
 	result := map[string]any{"api_version": APIVersion, "ok": true, "command": command}
 	switch command {
+	case "report":
+		var r any
+		r, err = report(ctx, a[1:], paths)
+		result["report"] = r
 	case "status":
 		var data bytes.Buffer
 		err = status(ctx, []string{"--json"}, paths, home, &data, io.Discard)
@@ -181,11 +185,12 @@ func capabilities() map[string]any {
 		"commands": []command{
 			{"init", true, "writes_configuration_and_state", []string{"--root PATH (repeatable)", "--exclude PATH (repeatable)"}},
 			{"config check", true, "read_only", []string{}}, {"state init", true, "writes_state", []string{}},
+			{"report", true, "read_only", []string{"--limit N (1–200)", "--cursor TOKEN"}},
 			{"status", true, "read_only", []string{}}, {"pause", true, "writes_state", []string{}}, {"resume", true, "writes_state", []string{}},
 			{"stop", true, "stops_worker", []string{}}, {"daemon", false, "runs_worker", []string{"--experimental-scan"}}, {"capabilities", true, "read_only", []string{}},
 		},
 		"exit_codes":  map[string]string{"0": "success", "1": "operation_failed", "2": "invalid_usage_or_output"},
 		"error_codes": []string{"invalid_arguments", "unsupported_output", "worker_not_running", "writer_busy", "not_found", "already_exists", "permission_denied", "canceled", "command_failed"},
-		"features":    map[string]bool{"experimental_inventory": true, "durable_dispatch_limits": true, "wal_backpressure": true, "entry_rate_limit": true, "metadata_api_counters": true, "metadata_rate_limit": false, "cpu_limit": false, "power_controls": false, "findings": false, "duplicates": false, "cleanup": false, "service_installation": false},
+		"features":    map[string]bool{"experimental_inventory": true, "durable_dispatch_limits": true, "wal_backpressure": true, "entry_rate_limit": true, "metadata_api_counters": true, "metadata_rate_limit": false, "cpu_limit": false, "power_controls": false, "file_reports": true, "directory_size_reports": false, "findings": false, "duplicates": false, "cleanup": false, "service_installation": false},
 	}
 }

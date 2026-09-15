@@ -29,6 +29,7 @@ Commands:
   daemon [--experimental-scan]                         Run the worker (scanning opt-in for fixtures)
   pause / resume                                       Persistently pause or resume work
   stop                                                 Request graceful worker shutdown
+  report [--limit N] [--cursor TOKEN] [--json]           Largest observed files
   capabilities [--json]                                Discover commands and supported features
 
 Options: --help, --version; --json on finite commands
@@ -65,7 +66,7 @@ func runHuman(ctx context.Context, args []string, out, errOut io.Writer) int {
 		return 0
 	}
 	if remaining[0] == "capabilities" && len(remaining) == 1 {
-		fmt.Fprintln(out, "Rydd commands: init, config check, state init, status, pause, resume, stop, capabilities.\nAdd --json for versioned machine output. daemon is foreground-only and uses text output.\nAll commands are noninteractive. Exit codes: 0 success, 1 operation failed, 2 invalid usage.\nScanning is experimental. Deletion, duplicate detection, and full resource controls are unavailable.")
+		fmt.Fprintln(out, "Rydd commands: init, config check, state init, status, report, pause, resume, stop, capabilities.\nAdd --json for versioned machine output. daemon is foreground-only and uses text output.\nAll commands are noninteractive. Exit codes: 0 success, 1 operation failed, 2 invalid usage.\nScanning is experimental. Deletion, duplicate detection, and full resource controls are unavailable.")
 		return 0
 	}
 	paths, err := config.ResolvePaths(*dataDir)
@@ -103,6 +104,12 @@ func runHuman(ctx context.Context, args []string, out, errOut io.Writer) int {
 			if err == nil {
 				fmt.Fprintf(out, "State ready: %q\n", paths.StateDir)
 			}
+		}
+	case "report":
+		var r state.FileReport
+		r, err = report(ctx, remaining[1:], paths)
+		if err == nil {
+			printReport(out, r)
 		}
 	case "status":
 		err = status(ctx, remaining[1:], paths, home, out, errOut)
