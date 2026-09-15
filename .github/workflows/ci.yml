@@ -33,6 +33,11 @@ jobs:
             experiments/sqlite/go.sum
       - run: ./scripts/tasks check
       - run: ./scripts/tasks race
+      - name: Isolated Linux bind-mount boundary
+        if: runner.os == 'Linux'
+        run: |
+          go test -c -o dist/inventory.test ./internal/inventory
+          sudo unshare --mount --propagation private env RYDD_TEST_MOUNTS=1 ./dist/inventory.test -test.run=^TestBindMountBoundary$ -test.v
       - run: ./scripts/tasks sqlite-check
       - run: ./scripts/tasks sqlite-bench -rows 100000
       - name: Native CLI smoke check
@@ -40,6 +45,7 @@ jobs:
           ./dist/rydd --help
           ./dist/rydd --version
           ./scripts/worker-smoke ./dist/rydd
+          ./scripts/scanner-smoke ./dist/rydd
 
   docker:
     name: Docker workflow and cross-builds
@@ -54,3 +60,4 @@ jobs:
           test "$(stat -c %u dist/rydd)" = "$(id -u)"
           ./dist/rydd-linux-amd64 --help
           ./scripts/worker-smoke ./dist/rydd-linux-amd64
+          ./scripts/scanner-smoke ./dist/rydd-linux-amd64

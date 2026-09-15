@@ -43,7 +43,7 @@ func TestInitValidateStatusAndNoOverwrite(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &report); err != nil {
 		t.Fatal(err)
 	}
-	if report.Stage != "worker-foundation" || report.State.EnabledRoots != 1 || report.State.Entries != 0 {
+	if report.Stage != "experimental-inventory" || report.State.EnabledRoots != 1 || report.State.Entries != 0 {
 		t.Fatalf("%+v", report)
 	}
 	before, _ := os.ReadFile(filepath.Join(dir, "config.toml"))

@@ -47,6 +47,8 @@ Run `./scripts/worker-smoke ./dist/rydd-darwin-arm64` on Apple Silicon (or the m
 
 Required future coverage includes APFS/ext4 behavior, symlink/path changes, permission-denied directories, interrupted/disconnected volumes, huge directories, sparse/hardlinked files, crash recovery, policy revocation and resource budgets. Track evidence against phase gates in `PROGRESS.md`.
 
+`./scripts/scanner-smoke ./dist/rydd-darwin-arm64` creates a tiny temporary fixture and verifies experimental inventory completion. It leaves logs/state in the OS temporary directory and stops its worker. Scanner tests cover bounded 301-file streaming, a 20-level tree, kill/restart completion, transaction rollback, stale leases, exclusions, symlinks, FIFO metadata, sparse files, unusual filenames, permissions and root replacement. Linux native CI separately runs a real same-filesystem bind-mount test under `sudo unshare --mount --propagation private`; its only mount is inside a temporary fixture. Ordinary dev tests need no mount privileges or Docker socket. Provider hydration, physical remounts, power/sleep and million-entry resource measurements remain phase-gate work.
+
 ## Fixtures and caches
 
 - Place disposable local fixtures in ignored `.local/`; committed synthetic fixtures belong in `testdata/`.

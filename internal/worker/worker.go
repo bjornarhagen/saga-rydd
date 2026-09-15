@@ -1,5 +1,5 @@
-// Package worker runs one cooperative, read-only job chunk at a time. Filesystem
-// handlers are intentionally absent until the scanner milestone.
+// Package worker runs one cooperative, read-only job chunk at a time and commits
+// bounded results through its single owning event loop.
 package worker
 
 import (
@@ -9,10 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"time"
 
 	"github.com/bjornarhagen/saga-rydd/internal/config"
+	"github.com/bjornarhagen/saga-rydd/internal/inventory"
 	"github.com/bjornarhagen/saga-rydd/internal/state"
 )
 
@@ -31,14 +33,17 @@ type Result struct {
 	Done   bool
 	Cursor []byte
 	NextAt time.Time
+	Scan   *state.ScanBatch
 }
 
 // Handlers must honor cancellation and have no irreversible effects. They return
 // bounded progress to the owning event loop rather than holding a DB connection.
 type Handler func(context.Context, state.Job) (Result, error)
 type Options struct {
-	Handlers map[string]Handler
-	Ready    func(Snapshot)
+	Handlers         map[string]Handler
+	Ready            func(Snapshot)
+	ExperimentalScan bool
+	PrivatePaths     []string
 	// Overrides support small deterministic lifecycle fixtures, not public flags.
 	Interval, WorkDuration time.Duration
 }
@@ -77,6 +82,31 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 	defer w.Close()
 	if err := w.SyncRoots(ctx, cfg.Roots); err != nil {
 		return err
+	}
+	if options.ExperimentalScan {
+		endpoint, err := Endpoint(dir)
+		if err != nil {
+			return err
+		}
+		scanner, err := inventory.New(cfg.Roots, cfg.Excludes, append(append([]string{}, options.PrivatePaths...), dir, filepath.Dir(endpoint)))
+		if err != nil {
+			return err
+		}
+		defer scanner.Close()
+		if _, exists := handlers[state.ScanKind]; exists {
+			return errors.New("inventory handler already registered")
+		}
+		handlers[state.ScanKind] = func(ctx context.Context, j state.Job) (Result, error) {
+			batch, err := scanner.Next(ctx, j)
+			if err != nil {
+				return Result{}, err
+			}
+			return Result{Scan: &batch}, nil
+		}
+		kinds = append(kinds, state.ScanKind)
+		if err := w.SeedInventory(ctx); err != nil {
+			return err
+		}
 	}
 	recovered, err := w.RecoverJobs(ctx, time.Now())
 	if err != nil {
@@ -247,7 +277,12 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 				}
 			}
 			finishCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			err := w.FinishJob(finishCtx, *active, result.result.Done, result.result.Cursor, due, lastError)
+			var err error
+			if result.result.Scan != nil {
+				err = w.CommitScan(finishCtx, *active, *result.result.Scan)
+			} else {
+				err = w.FinishJob(finishCtx, *active, result.result.Done, result.result.Cursor, due, lastError)
+			}
 			cancel()
 			if err != nil {
 				return fmt.Errorf("save job progress: %w", err)

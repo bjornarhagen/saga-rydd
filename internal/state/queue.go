@@ -23,6 +23,8 @@ type Job struct {
 	Attempts     int
 	Token        string
 	LeaseUntil   time.Time
+	RootPath     []byte
+	RootIdentity string
 }
 
 func validKind(kind string) bool {
@@ -113,7 +115,9 @@ func (s *Store) ClaimJob(ctx context.Context, kinds []string, now time.Time, lea
 	err = s.db.QueryRowContext(ctx, `UPDATE jobs SET status='running',lease_token=?,lease_until_ns=?,attempts=attempts+1
  WHERE id=(SELECT j.id FROM jobs j JOIN roots r ON r.id=j.root_id WHERE j.status='pending' AND j.due_at_ns<=?
  AND r.enabled=1 AND j.kind IN (`+clause+`) ORDER BY j.due_at_ns,j.id LIMIT 1)
- RETURNING id,root_id,kind,path,cursor,attempts,lease_token,lease_until_ns`, params...).Scan(&j.ID, &j.RootID, &j.Kind, &j.Path, &j.Cursor, &j.Attempts, &j.Token, &until)
+ RETURNING id,root_id,kind,path,cursor,attempts,lease_token,lease_until_ns,
+ (SELECT path FROM roots WHERE roots.id=jobs.root_id),
+ (SELECT volume_id FROM roots WHERE roots.id=jobs.root_id)`, params...).Scan(&j.ID, &j.RootID, &j.Kind, &j.Path, &j.Cursor, &j.Attempts, &j.Token, &until, &j.RootPath, &j.RootIdentity)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -124,12 +128,19 @@ func (s *Store) ClaimJob(ctx context.Context, kinds []string, now time.Time, lea
 	return &j, nil
 }
 
-// FinishJob commits a cursor or completion only for the current attempt. Job
-// effects will need the same transaction when scanner batches are added (P1-05).
+// FinishJob commits a cursor or completion only for the current attempt.
 func (s *Store) FinishJob(ctx context.Context, j Job, done bool, cursor []byte, due time.Time, lastError string) error {
 	if s.readOnly {
 		return errors.New("state is read-only")
 	}
+	return finishJob(ctx, s.db, j, done, cursor, due, lastError)
+}
+
+type executor interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func finishJob(ctx context.Context, db executor, j Job, done bool, cursor []byte, due time.Time, lastError string) error {
 	if j.Token == "" {
 		return ErrStaleLease
 	}
@@ -142,9 +153,9 @@ func (s *Store) FinishJob(ctx context.Context, j Job, done bool, cursor []byte, 
 	var result sql.Result
 	var err error
 	if done {
-		result, err = s.db.ExecContext(ctx, "DELETE FROM jobs WHERE id=? AND status='running' AND lease_token=?", j.ID, j.Token)
+		result, err = db.ExecContext(ctx, "DELETE FROM jobs WHERE id=? AND status='running' AND lease_token=?", j.ID, j.Token)
 	} else {
-		result, err = s.db.ExecContext(ctx, `UPDATE jobs SET status='pending',cursor=?,due_at_ns=?,last_error=?,lease_token='',lease_until_ns=0,
+		result, err = db.ExecContext(ctx, `UPDATE jobs SET status='pending',cursor=?,due_at_ns=?,last_error=?,lease_token='',lease_until_ns=0,
  attempts=CASE WHEN ?='' THEN 0 ELSE attempts END WHERE id=? AND status='running' AND lease_token=?`, cursor, due.UnixNano(), lastError, lastError, j.ID, j.Token)
 	}
 	if err != nil {

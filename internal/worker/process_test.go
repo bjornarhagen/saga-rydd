@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"testing"
 	"time"
@@ -26,6 +27,13 @@ func TestWorkerProcess(t *testing.T) {
 	c := config.Default()
 	c.Roots = []string{"/synthetic"}
 	options := Options{Ready: func(s Snapshot) { _ = json.NewEncoder(os.Stdout).Encode(s) }}
+	if root := os.Getenv("RYDD_TEST_SCAN_ROOT"); root != "" {
+		c.Roots = []string{root}
+		options.ExperimentalScan = true
+		if os.Getenv("RYDD_TEST_SCAN_FAST") == "1" {
+			options.Interval = 5 * time.Millisecond
+		}
+	}
 	if os.Getenv("RYDD_TEST_WORKER_CLAIM") == "1" {
 		options.Handlers = map[string]Handler{"fixture": func(ctx context.Context, j state.Job) (Result, error) {
 			fmt.Println("claimed:" + string(j.Cursor))
@@ -38,6 +46,62 @@ func TestWorkerProcess(t *testing.T) {
 	if err := Run(ctx, dir, c, options); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestInventoryWorkerKillAndComplete(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(t.TempDir(), "state")
+	for i := 0; i < 301; i++ {
+		if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("file-%03d", i)), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	childPath := root
+	for i := 0; i < 20; i++ {
+		childPath = filepath.Join(childPath, "directory")
+		if err := os.Mkdir(childPath, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(childPath, "file"), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("RYDD_TEST_SCAN_ROOT", root)
+	child, _ := spawnWorker(t, dir, false)
+	r, err := state.OpenReader(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	waitUntil(t, func() bool {
+		summary, err := r.Summary(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return summary.Entries == 129 && summary.RunningJobs == 0
+	})
+	if err := child.cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-child.done:
+		if err == nil {
+			t.Fatal("kill exited successfully")
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatal("kill timed out")
+	}
+	t.Setenv("RYDD_TEST_SCAN_FAST", "1")
+	child, _ = spawnWorker(t, dir, false)
+	waitUntil(t, func() bool {
+		summary, err := r.Summary(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return summary.Entries == 342 && summary.CompleteDirectories == 21 && summary.PendingJobs == 0 && summary.RunningJobs == 0 && summary.DirectoryErrors == 0
+	})
+	control(t, dir, "stop")
+	waitExit(t, child.done)
 }
 
 type childWorker struct {

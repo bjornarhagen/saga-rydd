@@ -252,15 +252,18 @@ func (s *Store) SyncRoots(ctx context.Context, roots []string) error {
 }
 
 type Summary struct {
-	Schema            int    `json:"schema"`
-	SQLiteVersion     string `json:"sqlite_version"`
-	EnabledRoots      int64  `json:"enabled_roots"`
-	Entries           int64  `json:"entries"`
-	PendingJobs       int64  `json:"pending_jobs"`
-	RunningJobs       int64  `json:"running_jobs"`
-	DatabaseBytes     int64  `json:"database_bytes"`
-	WALBytes          int64  `json:"wal_bytes"`
-	NeedsBackpressure bool   `json:"needs_backpressure"`
+	Schema              int    `json:"schema"`
+	SQLiteVersion       string `json:"sqlite_version"`
+	EnabledRoots        int64  `json:"enabled_roots"`
+	Entries             int64  `json:"entries"`
+	PendingJobs         int64  `json:"pending_jobs"`
+	RunningJobs         int64  `json:"running_jobs"`
+	CompleteDirectories int64  `json:"complete_directories"`
+	DirectoryErrors     int64  `json:"directory_errors"`
+	SkippedEntries      int64  `json:"skipped_entries"`
+	DatabaseBytes       int64  `json:"database_bytes"`
+	WALBytes            int64  `json:"wal_bytes"`
+	NeedsBackpressure   bool   `json:"needs_backpressure"`
 }
 
 func (s *Store) Summary(ctx context.Context) (Summary, error) {
@@ -268,7 +271,10 @@ func (s *Store) Summary(ctx context.Context) (Summary, error) {
 	// One statement supplies a consistent snapshot without retaining a reader lock.
 	err := s.db.QueryRowContext(ctx, `SELECT sqlite_version(),
  (SELECT count(*) FROM roots WHERE enabled=1), (SELECT count(*) FROM entries),
- (SELECT count(*) FROM jobs WHERE status='pending'), (SELECT count(*) FROM jobs WHERE status='running')`).Scan(&result.SQLiteVersion, &result.EnabledRoots, &result.Entries, &result.PendingJobs, &result.RunningJobs)
+ (SELECT count(*) FROM jobs WHERE status='pending'), (SELECT count(*) FROM jobs WHERE status='running'),
+ (SELECT count(*) FROM directories WHERE complete=1 AND last_error=''),
+ (SELECT count(*) FROM directories WHERE last_error!=''),
+ (SELECT count(*) FROM entries WHERE skip_reason!='')`).Scan(&result.SQLiteVersion, &result.EnabledRoots, &result.Entries, &result.PendingJobs, &result.RunningJobs, &result.CompleteDirectories, &result.DirectoryErrors, &result.SkippedEntries)
 	if err != nil {
 		return result, err
 	}

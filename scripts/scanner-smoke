@@ -1,0 +1,47 @@
+#!/bin/sh
+# Use a fresh local temporary filesystem, never a selected personal directory.
+set -eu
+binary=${1:?Usage: scripts/scanner-smoke /path/to/native/rydd}
+fixture=$(mktemp -d "${TMPDIR:-/tmp}/rydd-scanner.XXXXXX")
+mkdir "$fixture/root" "$fixture/root/child"
+printf 'fixture\n' >"$fixture/root/file"
+printf 'child fixture\n' >"$fixture/root/child/file"
+ln -s ../file "$fixture/root/child/link"
+worker_pid=
+cleanup() {
+    if [ -n "$worker_pid" ]; then
+        kill "$worker_pid" 2>/dev/null || true
+        wait "$worker_pid" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+rydd() { "$binary" --data-dir "$fixture/state" "$@"; }
+rydd init --root "$fixture/root"
+# Short cadence only for this tiny, explicitly created fixture.
+sed 's/work_seconds = 30/work_seconds = 1/; s/interval_seconds = 300/interval_seconds = 1/' \
+    "$fixture/state/config.toml" >"$fixture/config.tmp"
+cat "$fixture/config.tmp" >"$fixture/state/config.toml"
+"$binary" --data-dir "$fixture/state" daemon --experimental-scan >"$fixture/worker.log" 2>&1 &
+worker_pid=$!
+attempts=0
+while :; do
+    rydd status --json >"$fixture/status.json"
+    if grep -q '"complete_directories":2' "$fixture/status.json" && \
+       grep -q '"pending_jobs":0' "$fixture/status.json" && \
+       grep -q '"running_jobs":0' "$fixture/status.json"; then break; fi
+    attempts=$((attempts + 1))
+    if [ "$attempts" -ge 100 ] || ! kill -0 "$worker_pid" 2>/dev/null; then
+        cat "$fixture/status.json" "$fixture/worker.log" >&2
+        exit 1
+    fi
+    sleep 0.1
+done
+grep -q '"entries":5' "$fixture/status.json"
+grep -q '"directory_errors":0' "$fixture/status.json"
+rydd stop
+wait "$worker_pid"
+worker_pid=
+rydd status --json >"$fixture/status.json"
+grep -q '"state":"not-running"' "$fixture/status.json"
+printf 'Native scanner smoke passed; fixture: %s\n' "$fixture"

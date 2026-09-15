@@ -1,6 +1,6 @@
 # Saga — Rydd: implementation plan
 
-Status: configuration and state foundation implemented. See [PROGRESS.md](PROGRESS.md) for implementation status and acceptance evidence. Scanning and cleanup are not implemented.
+Status: configuration, state, worker and experimental metadata inventory implemented. See [PROGRESS.md](PROGRESS.md) for verification and acceptance evidence. Full resource enforcement, findings and cleanup remain unimplemented.
 
 ## 1. Product direction
 
@@ -52,7 +52,7 @@ Use SQLite WAL mode so reports can read while scanning writes. Keep transactions
 
 Implemented foundation defaults: FULL durability, a 4 MiB cache per connection, memory mapping disabled, one connection per store, 1 second busy timeout, and automatic checkpointing every 1000 pages. Passive checkpoint support and a 32 MiB WAL backpressure signal are available; enforcement in the scheduler is still pending. Reader commands do not initialize or migrate state. Application/schema identity rejects unrelated or newer databases.
 
-The worker foundation uses schema v2, an OS-held writer lock, a private versioned Unix control socket, durable pause state and token-fenced job leases. It dispatches at most one cooperative chunk at a time and sleeps without queue polling when idle. No scanner handlers are registered yet. [Worker design](docs/worker.md) specifies recovery, pacing and the remaining scanner/budget integration; cadence alone is not CPU or I/O budget enforcement.
+The worker uses an OS-held writer lock, a private versioned Unix control socket, durable pause state and token-fenced job leases. Schema v3 adds bounded inventory batches, directory reconciliation watermarks and skip reasons. It dispatches at most one cooperative chunk at a time and sleeps without queue polling when idle. Metadata scanning requires `--experimental-scan` until full budget enforcement is verified. [Worker design](docs/worker.md) and [inventory design](docs/inventory.md) specify recovery, pacing and remaining integrations; cadence alone is not CPU or I/O budget enforcement.
 
 Default locations:
 

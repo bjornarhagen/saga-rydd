@@ -4,7 +4,7 @@ A quiet storage cleanup companion for macOS and Linux. Part of Saga.
 
 Rydd will gradually discover developer clutter and duplicate files, explain what can be removed, and help reclaim space through reviewed actions or explicitly enabled automatic policies.
 
-**Status: background worker foundation.** The CLI can initialize private configuration and SQLite state, run a single worker, pause/resume it, and show saved and live status. The worker has a persistent job queue and crash recovery. Scanning, cleanup, service installation and automatic policies are not implemented. Nothing runs in the background when you clone, build or initialize this repository.
+**Status: experimental metadata inventory.** The worker can scan explicitly selected fixture directories in bounded, resumable batches and save metadata, skip reasons and directory reconciliation markers in SQLite. Scanning requires `daemon --experimental-scan`; ordinary `daemon` stays idle. CPU/I/O/daily/power budgets, recommendations, cleanup and service installation are not implemented. Nothing runs in the background when you clone, build or initialize this repository.
 
 ## Project map
 
@@ -56,7 +56,7 @@ Inside Docker, keep disposable state in this checkout so it survives between com
 
 This records the selected root but does not scan it. `--data-dir` is a global option and comes **before** the command. Use a dedicated directory: existing shared directories and symlinked state/config files are rejected. `init` never overwrites an existing config. After editing the config, `state init` validates it and updates registered roots while preserving existing inventory; it also retries a failed initial database setup.
 
-Without `--data-dir`, native macOS uses `~/Library/Application Support/saga-rydd`; Linux follows XDG config/state directories. Explicit roots and exclusions are absolute paths or start with `~/`; exclusions refer to subtrees, not glob patterns. Unknown settings, overlapping roots and invalid budgets are rejected. Roots may be offline at configuration time; physical identity, symlink aliases and availability checks belong to the upcoming scanner. Budget settings are saved now and will be enforced by that worker.
+Without `--data-dir`, native macOS uses `~/Library/Application Support/saga-rydd`; Linux follows XDG config/state directories. Explicit roots and exclusions are absolute paths or start with `~/`; exclusions refer to subtrees, not glob patterns. Unknown settings, overlapping roots and invalid budgets are rejected. Roots may be offline at configuration time. Experimental scanning establishes a root/filesystem fingerprint, rejects available root aliases, and retains saved inventory when a root is unavailable or its identity changes. Budget settings are saved; only dispatch cadence and cooperative work timeouts are implemented so far.
 
 ### Run and control the worker
 
@@ -75,11 +75,17 @@ In another terminal, using the same checkout:
 ./scripts/dev run --data-dir /workspace/.local/demo stop
 ```
 
-`daemon` runs in the foreground until stopped, interrupted or sent SIGTERM. On a native build, replace `./scripts/dev run` with your binary and use a native data path. Service installation will follow in P1-09. The current worker stays idle because no filesystem handlers are registered yet.
+`daemon` runs in the foreground until stopped, interrupted or sent SIGTERM. On a native build, replace `./scripts/dev run` with your binary and use a native data path. Service installation will follow in P1-09. The worker stays idle unless `--experimental-scan` is supplied each time it starts.
 
 Pause is saved before acknowledgment and survives restart. It cancels an active chunk cooperatively; status shows whether that chunk is still draining. `stop` acknowledges a shutdown request; wait for the daemon process to exit before restarting or running `state init`. Reports work while the worker is stopped. A second worker or state writer using the same state directory is rejected. Configuration changes take effect on the next worker start.
 
 Controls use a private Unix socket with same-user peer checks. Docker commands share a small runtime volume so separate development containers can communicate. Native sockets use a private directory under `/tmp`; set the same short, absolute `RYDD_RUNTIME_DIR` for daemon and clients if overriding it. Keep application state on a local filesystem. See [worker design](docs/worker.md) for recovery and remaining scheduler work.
+
+## Try the experimental scanner
+
+Try experimental scanning on a disposable fixture with `./scripts/scanner-smoke ./dist/rydd-darwin-arm64` after `./scripts/dev build-all` (choose the binary for your host). Inside Docker, run `./scripts/dev shell -c './scripts/scanner-smoke ./dist/rydd'` after `./scripts/dev check`. The script creates five synthetic entries, scans them with a short fixture cadence, checks results and stops its worker. No ordinary file contents are opened, hashed or deleted. Keep broad personal-directory scans disabled until P1-06 resource enforcement.
+
+Each batch contains at most 128 child observations. A restart re-enumerates the interrupted directory with a fresh generation and idempotent upserts. Completed directory passes have reconciliation markers; old observations remain for later stale-entry processing. Counts are historical observations, not a whole-tree percentage or reclaimable space. See [inventory design](docs/inventory.md) for filesystem support and limitations.
 
 ## Design commitments
 

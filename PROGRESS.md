@@ -4,12 +4,12 @@ This file is the canonical implementation tracker. The architecture and full acc
 
 ## Current state
 
-- **Stage:** configuration, state and worker foundations complete (P1-01–P1-04). The rest of Phase 1 remains open.
+- **Stage:** P1-01–P1-04 complete; P1-05 experimental metadata inventory implemented, awaiting native CI verification. The rest of Phase 1 remains open.
 - **App / brand:** Rydd / Saga. Repository: `bjornarhagen/saga-rydd`; executable: `rydd`.
 - **Confirmed:** Go, local SQLite, TOML configuration, macOS/Linux, low resource usage, developer clutter plus duplicates, opt-in automatic cleanup in v1.
 - **Development:** Docker first; do not require host Go or additional host development tooling.
-- **Implemented app behavior:** `init`, `config check`, `state init`, saved/live `status`/JSON, foreground `daemon`, durable `pause`/`resume`, and `stop`; private TOML/SQLite state, exclusive writer lock and saved queue. No scanner, service installation or cleanup capability.
-- **Active task:** none; next is P1-05, streaming inventory and scanner integration.
+- **Implemented app behavior:** initialization, saved/live status, worker controls and opt-in experimental metadata scanning; private TOML/SQLite state, exclusive writer lock, bounded batches, atomic inventory/job commits and directory reconciliation watermarks. No resource-budget enforcement, service installation, findings or cleanup capability.
+- **Active task:** P1-05 native CI and isolated Linux bind-mount verification. Experimental fixture-only activation remains until P1-06 budgets are enforced.
 - **Blockers:** none currently. Scanner resource targets and native service behavior remain unvalidated; the database experiment is not a scanner benchmark.
 
 ## How to use this tracker
@@ -109,14 +109,22 @@ This file is the canonical implementation tracker. The architecture and full acc
 - Initial [CI run 34977696796](https://github.com/bjornarhagen/saga-rydd/actions/runs/34977696796) passed native macOS/Linux, but Docker exposed a pacing error under slower job claims: database latency shortened the gap between handler starts. Pacing now uses the actual handler start time; ten repeated pacing regressions passed locally, along with checks/race/four-target builds.
 - Final [CI run 34978064639](https://github.com/bjornarhagen/saga-rydd/actions/runs/34978064639) passed for implementation commit `979257c`: native Linux (32s), native macOS (49s), Docker checks/four-target builds/native Linux binary smoke (2m37s). Native jobs ran application tests, race checks, SQLite experiments and the new worker CLI smoke. P1-04 is complete; full Phase 1 gates remain open.
 
+### Experimental inventory
+
+- Schema v3 adds directory reconciliation watermarks and skip reasons. `CommitScan` atomically saves metadata, child jobs and cursor/completion with a lease fence; tests inject a constraint failure after partial SQL work and verify complete rollback.
+- Scanner tests verify 128-entry bounds, 301-file enumeration/restart, root replacement, cancellation, private inode aliases, exclusions, symlink refusal, FIFO metadata, sparse/hardlinked files, non-UTF-8 names where supported, and unprivileged permission failures. Scanner close does not wait behind a blocked filesystem call.
+- `TestInventoryWorkerKillAndComplete` kills a worker after its first saved batch, restarts it, then verifies 342 unique observations across a 20-level fixture tree and 21 completed directory passes with an empty queue. Existing lease-crash/SIGTERM tests remain enabled.
+- `./scripts/dev check`, `./scripts/dev race` and `./scripts/dev build-all` passed. The scanner smoke script passed natively on macOS arm64 and inside Linux Docker using only five synthetic entries. No host toolchain or background service was installed.
+- Native CI and its new isolated Linux bind-mount test are pending before checking off P1-05. Cloud providers, physical remount/rebind, million-entry resource bounds and laptop sleep remain unverified phase gates.
+
 ## Handoff
 
 **Last updated:** 2026-09-15.
 
-**Completed this session:** P1-04's writer lock, private same-user control protocol, durable pause, queue leasing/cursor recovery, scheduler pacing and worker CLI. Docker tests/race checks, four cross-builds, local native macOS arm64/Linux-container smoke checks and native macOS/Linux CI passed. Implementation is in `fef0d9a` with the pacing correction in `979257c`. All bootstrap items B01–B06 and P1-01–P1-04 are complete; all full product phase gates remain open.
+**Completed this session:** implemented P1-05 experimental metadata inventory, schema v3, atomic batch/child-job/cursor commits, root/filesystem identity guards, exclusions, no-follow traversal, conservative directory watermarks and saved skip/error counts. Docker checks/race/four-target builds and native macOS/Linux-container fixture smoke passed; final native CI and isolated bind-mount verification are pending. All full product phase gates remain open.
 
-**Next action:** implement P1-05 streaming inventory. Read [worker integration notes](docs/worker.md): seed jobs through the owning event loop, return bounded inventory batches, and commit effects/cursor changes in one token-checked transaction. Establish native volume identity, symlink/mount boundaries and resumable permission-error/reconciliation behavior using disposable fixtures. Follow with P1-06 daily budgets, power handling and WAL backpressure; no real-user background scans before resource enforcement.
+**Next action:** verify P1-05 native CI, then implement P1-06 independent metadata/content/CPU and persistent daily budgets, low priority, power/sleep fallbacks and WAL backpressure. Count scanner component opens/stat/enumeration and database work rather than only discovered entries. Preserve cancellation/restart semantics and validate on fixtures before allowing unattended personal-root scanning. P1-07 follows with fair/adaptive revisits, robust huge-directory continuation, stale descendant filtering and user-reviewed root rebinding. See [inventory design](docs/inventory.md).
 
 **Remaining decisions:** first automation-eligible cache category; supported minimum OS/libc versions; tuned resource/scan-root defaults; license. Go and naming are settled.
 
-**Do not infer:** the synthetic database benchmark is not an hourly scanner resource test; dispatch cadence does not enforce CPU/I/O/daily/power/WAL budgets; physical root identity/aliases/availability are not established by config parsing. The worker has no production handlers, so it stays idle. No scanning, cleanup or service installation exists. Future action/restore data must never be removed by inventory rebuilds. Stop the worker before `rydd state init`; schema v1 upgrades preserve roots/jobs/settings and never overwrite configuration.
+**Do not infer:** the database benchmark is not an hourly scanner resource test; cadence does not enforce CPU/I/O/daily/power/WAL budgets. Ordinary `daemon` stays idle; scanning requires `--experimental-scan` each start. The root fingerprint is a scoped identity hint, not cleanup authorization. Root completion only covers direct children, and summary counts retain old observations. Huge-directory fairness, stale descendant lifecycle, cloud-provider hydration avoidance, physical remount/rebind and million-entry resource/sleep tests remain open. No findings, cleanup or service installation exists. Future action/restore data must never be removed by inventory rebuilds. Stop the worker before `state init`; migrations preserve inventory and configuration.

@@ -3,7 +3,7 @@ package state
 // Migrations are append-only. Inventory tables are rebuildable, but the database
 // must never be deleted/recreated as a migration strategy: future action/restore
 // records will live in their own durable tables here.
-const schemaVersion = 2
+const schemaVersion = 3
 const applicationID = 0x52594444 // RYDD
 
 const migration1 = `
@@ -52,4 +52,15 @@ INSERT INTO settings(key,value) VALUES('worker.paused',X'30') ON CONFLICT(key) D
 var migrations = []struct{ name, sql string }{
 	{"inventory-foundation", migration1},
 	{"worker-queue-leases", migration2},
+	{"streaming-inventory", migration3},
 }
+
+const migration3 = `
+ALTER TABLE entries ADD COLUMN skip_reason TEXT NOT NULL DEFAULT '';
+CREATE TABLE directories (
+ root_id INTEGER NOT NULL REFERENCES roots(id), path BLOB NOT NULL,
+ generation INTEGER NOT NULL DEFAULT 0, complete INTEGER NOT NULL DEFAULT 0 CHECK(complete IN (0,1)),
+ checked_at_ns INTEGER NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '',
+ PRIMARY KEY(root_id,path)
+);
+`
