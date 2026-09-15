@@ -1,6 +1,6 @@
 # Saga — Rydd: implementation plan
 
-Status: configuration, state, worker and experimental metadata inventory implemented. See [PROGRESS.md](PROGRESS.md) for verification and acceptance evidence. Largest-observed-file reporting is implemented and verified; see PROGRESS.md for evidence. Selected-directory size reports are implemented and verified with bounded saved-subtree measurement; see PROGRESS.md for evidence. Full resource enforcement, findings and cleanup remain unimplemented.
+Status: configuration, state, worker and experimental metadata inventory implemented. See [PROGRESS.md](PROGRESS.md) for verification and acceptance evidence. Largest-observed-file reporting is implemented and verified; see PROGRESS.md for evidence. Selected-directory size reports are implemented and verified with bounded saved-subtree measurement; see PROGRESS.md for evidence. The first review-required node_modules finding slice is implemented and verified. Full resource enforcement and cleanup remain unimplemented.
 
 ## Current execution priority: useful read-only MVP
 
@@ -15,6 +15,8 @@ The delivery phases in section 11 remain scope/acceptance groups, not a strict d
 5. **After this feedback:** develop duplicate detection and reviewed cleanup alongside remaining resource controls. Destructive operations still require their own revalidation, approval and recovery safeguards before use.
 
 Do not put complete CPU/metadata/battery budgets, native priority tuning, service installation, general diagnostics or the full soak ahead of this MVP unless a demonstrated dependency blocks the trial or its correctness. Minimum stale-data/measurement fixes needed for truthful reports may be pulled forward from P1-07. Preserve current safeguards and experimental scope; this plan does not authorize broad unattended personal scans or deletion. Complete resource, platform, action-safety and soak gates still apply to their respective unattended/release claims.
+
+The controlled trial procedure is in [docs/mvp-trial.md](docs/mvp-trial.md). CI remains on GitHub-hosted runners by user decision; keep native macOS/Linux validation.
 
 **MVP acceptance:** on synthetic fixtures and a selected development-folder trial, a user can open the saved report, see meaningful file/folder sizes with honest completeness/freshness, and assess at least one explained cleanup-candidate category. AI receives the same evidence through the documented JSON contract. The MVP is read-only; it does not require full v1 cleanup/automation to be useful.
 
