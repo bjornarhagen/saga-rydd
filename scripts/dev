@@ -1,0 +1,22 @@
+#!/bin/sh
+set -eu
+
+repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$repo_dir"
+export RYDD_DEV_UID="$(id -u)"
+export RYDD_DEV_GID="$(id -g)"
+
+if ! command -v docker >/dev/null 2>&1; then
+    echo 'Docker with Compose v2+ is required; no host Go installation is needed.' >&2
+    exit 1
+fi
+
+task=${1:-check}
+if [ "$#" -gt 0 ]; then shift; fi
+
+case "$task" in
+    rebuild) exec docker compose build --pull dev ;;
+    cache-clear) exec docker compose down --volumes ;;
+    shell) exec docker compose run --rm --build dev /bin/sh ;;
+    *) exec docker compose run --rm --build dev ./scripts/tasks "$task" "$@" ;;
+esac

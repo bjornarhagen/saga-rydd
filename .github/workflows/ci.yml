@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    name: Native checks (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false # Enable module caching when go.sum exists.
+      - run: ./scripts/tasks check
+      - run: ./scripts/tasks race
+      - name: Native CLI smoke check
+        run: |
+          ./dist/rydd --help
+          ./dist/rydd --version
+
+  docker:
+    name: Docker workflow and cross-builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - run: ./scripts/dev check
+      - run: ./scripts/dev build-all
+      - name: Verify Linux host output ownership and executable
+        run: |
+          test "$(stat -c %u dist/rydd)" = "$(id -u)"
+          ./dist/rydd-linux-amd64 --help

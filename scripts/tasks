@@ -1,0 +1,41 @@
+#!/bin/sh
+set -eu
+
+repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$repo_dir"
+
+task=${1:-check}
+if [ "$#" -gt 0 ]; then shift; fi
+
+case "$task" in
+    fmt) exec go fmt ./... ;;
+    test) exec go test ./... "$@" ;;
+    race) exec go test -race ./... "$@" ;;
+    run) exec go run ./cmd/rydd "$@" ;;
+    check)
+        unformatted=$(gofmt -l cmd internal)
+        if [ -n "$unformatted" ]; then
+            echo 'Run ./scripts/dev fmt to format these files:' >&2
+            printf '%s\n' "$unformatted" >&2
+            exit 1
+        fi
+        go vet ./...
+        go test ./...
+        mkdir -p dist
+        go build -trimpath -o dist/rydd ./cmd/rydd
+        ;;
+    build-all)
+        mkdir -p dist
+        for target_os in darwin linux; do
+            for target_arch in arm64 amd64; do
+                GOOS="$target_os" GOARCH="$target_arch" CGO_ENABLED=0 \
+                    go build -trimpath -o "dist/rydd-$target_os-$target_arch" ./cmd/rydd
+            done
+        done
+        ;;
+    *)
+        echo "Unknown task: $task" >&2
+        echo 'Tasks: check, fmt, test, race, run, build-all' >&2
+        exit 2
+        ;;
+esac
