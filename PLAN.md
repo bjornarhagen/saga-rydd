@@ -1,6 +1,6 @@
 # Saga — Rydd: implementation plan
 
-Status: configuration, state, worker and experimental metadata inventory implemented. See [PROGRESS.md](PROGRESS.md) for verification and acceptance evidence. Largest-observed-file reporting is implemented and verified; see PROGRESS.md for evidence. Directory-size reports, full resource enforcement, findings and cleanup remain unimplemented.
+Status: configuration, state, worker and experimental metadata inventory implemented. See [PROGRESS.md](PROGRESS.md) for verification and acceptance evidence. Largest-observed-file reporting is implemented and verified; see PROGRESS.md for evidence. Selected-directory size reports are implemented with bounded saved-subtree measurement; verification is recorded in PROGRESS.md. Full resource enforcement, findings and cleanup remain unimplemented.
 
 ## Current execution priority: useful read-only MVP
 

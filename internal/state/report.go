@@ -57,15 +57,16 @@ type ReportRoot struct {
 	DirectoryErrors int64      `json:"directory_errors"`
 }
 type FileReport struct {
-	GeneratedAt          time.Time    `json:"generated_at"`
-	Source               string       `json:"source"`
-	CurrentStateVerified bool         `json:"current_state_verified"`
-	Files                []ReportFile `json:"files"`
-	Roots                []ReportRoot `json:"roots"`
-	RootsTruncated       bool         `json:"roots_truncated"`
-	NextCursor           string       `json:"next_cursor,omitempty"`
-	Limit                int          `json:"limit"`
-	Notes                []string     `json:"notes"`
+	Directory            *DirectoryReport `json:"directory,omitempty"`
+	GeneratedAt          time.Time        `json:"generated_at"`
+	Source               string           `json:"source"`
+	CurrentStateVerified bool             `json:"current_state_verified"`
+	Files                []ReportFile     `json:"files"`
+	Roots                []ReportRoot     `json:"roots"`
+	RootsTruncated       bool             `json:"roots_truncated"`
+	NextCursor           string           `json:"next_cursor,omitempty"`
+	Limit                int              `json:"limit"`
+	Notes                []string         `json:"notes"`
 }
 
 // LargestFiles uses keyset pagination and short-lived read snapshots. No path

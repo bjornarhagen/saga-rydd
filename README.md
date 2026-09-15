@@ -4,21 +4,23 @@ A quiet storage cleanup companion for macOS and Linux. Part of Saga.
 
 Rydd will gradually discover developer clutter and duplicate files, explain what can be removed, and help reclaim space through reviewed actions or explicitly enabled automatic policies.
 
-**Status: experimental metadata inventory.** The worker can scan explicitly selected fixture directories in bounded, resumable batches and save metadata, skip reasons and directory reconciliation markers in SQLite. Scanning requires `daemon --experimental-scan`; ordinary `daemon` stays idle. Durable dispatch cadence, a daily batch cap, child-entry pacing and WAL backpressure are enforced; saved largest-file reports are available. Fine-grained CPU/I/O/power budgets, recommendations, cleanup and service installation are not implemented. Nothing runs in the background when you clone, build or initialize this repository.
+**Status: experimental metadata inventory.** The worker can scan explicitly selected fixture directories in bounded, resumable batches and save metadata, skip reasons and directory reconciliation markers in SQLite. Scanning requires `daemon --experimental-scan`; ordinary `daemon` stays idle. Durable dispatch cadence, a daily batch cap, child-entry pacing and WAL backpressure are enforced; saved largest-file and selected-directory size reports are available. Fine-grained CPU/I/O/power budgets, recommendations, cleanup and service installation are not implemented. Nothing runs in the background when you clone, build or initialize this repository.
 
 For humans and AI: readable output by default, versioned JSON with `--json`, and `rydd capabilities --json` for discovery. Live status also reports scanner metadata API counters to help inspect background work. See the [CLI contract](docs/cli.md).
 
-**Next milestone: useful read-only reports and one `node_modules` recommendation category.** We are prioritizing this MVP and controlled user feedback before finishing unattended-operation infrastructure. See the [execution priority](PROGRESS.md#execution-priority--read-only-mvp-first); numbered phases are not a strict work order. The largest-observed-files report is available; directory-size reports and recommendations are next.
+**Next milestone: useful read-only reports and one `node_modules` recommendation category.** We are prioritizing this MVP and controlled user feedback before finishing unattended-operation infrastructure. See the [execution priority](PROGRESS.md#execution-priority--read-only-mvp-first); numbered phases are not a strict work order. File and selected-directory size reports are available; the first recommendation category is next.
 
 ## View saved results
 
 ```sh
 rydd report
 rydd report --limit 10 --json
+rydd report --directory /absolute/path/to/folder
+rydd report --directory /absolute/path/to/folder --json
 rydd report --limit 10 --cursor TOKEN
 ```
 
-The report works while the worker is stopped and reads only saved inventory. It lists the largest observed regular files, sizes, timestamps, parent-pass freshness and saved root diagnostics. It does not rescan paths or recommend deleting large files. Use the returned `next_cursor` for another page; keep global `--data-dir` before `report` if using a separate instance. See the [report contract](docs/cli.md#saved-file-reports).
+The report works while the worker is stopped and reads only saved inventory. It lists the largest observed regular files, sizes, timestamps, parent-pass freshness and saved root diagnostics. Use `--directory` to measure up to 10,000 saved entries in a selected subtree, with partial/stale/unknown labels and qualified hardlink accounting. Reports do not rescan paths or recommend deletion. Use the returned `next_cursor` for another page; keep global `--data-dir` before `report` if using a separate instance. See the [report contract](docs/cli.md#saved-file-reports).
 
 ## Project map
 

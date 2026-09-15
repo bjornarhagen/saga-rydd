@@ -62,7 +62,19 @@ func TestReportHumanAndJSONOffline(t *testing.T) {
 	if code != 0 || len(envelope.Report.Files) != 1 || envelope.Report.Files[0].Size != 1 {
 		t.Fatal(machine, errOut)
 	}
-	for _, args := range [][]string{{"report", "--limit", "0", "--json"}, {"report", "--cursor", "bad", "--json"}, {"report", "--bad", "--json"}} {
+	code, machine, errOut = run("report", "--directory", "/offline-fixture", "--json")
+	if err = json.Unmarshal([]byte(machine), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	d := envelope.Report.Directory
+	if code != 0 || errOut != "" || d == nil || d.Status != "recorded_complete" || d.LogicalBytes == nil || *d.LogicalBytes != 2049 {
+		t.Fatal(machine, errOut)
+	}
+	code, human, errOut = run("report", "--directory", "/offline-fixture")
+	if code != 0 || errOut != "" || !strings.Contains(human, "saved directory size") || !strings.Contains(human, "2.0 KiB") {
+		t.Fatal(code, human, errOut)
+	}
+	for _, args := range [][]string{{"report", "--limit", "0", "--json"}, {"report", "--cursor", "bad", "--json"}, {"report", "--bad", "--json"}, {"report", "--directory", "relative", "--json"}, {"report", "--directory", "/offline-fixture", "--limit", "1", "--json"}} {
 		code, out, stderr := run(args...)
 		if code != 2 || stderr != "" || !strings.Contains(out, `"invalid_arguments"`) {
 			t.Fatal(code, out, stderr)
