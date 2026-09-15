@@ -158,7 +158,10 @@ func runHuman(ctx context.Context, args []string, out, errOut io.Writer) int {
 		return 2
 	}
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		var missing missingScanError
+		if errors.As(err, &missing) {
+			fmt.Fprintln(errOut, err)
+		} else if errors.Is(err, os.ErrNotExist) {
 			fmt.Fprintf(errOut, "Not initialized or unavailable: %v\nUse rydd init --root /path for new configuration, or rydd state init with existing configuration.\n", err)
 		} else {
 			fmt.Fprintln(errOut, err)

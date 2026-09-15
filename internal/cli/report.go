@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/bjornarhagen/saga-rydd/internal/config"
@@ -15,6 +16,7 @@ import (
 )
 
 func report(ctx context.Context, args []string, paths config.Paths) (state.FileReport, error) {
+	scanPaths := paths
 	f := flag.NewFlagSet("report", flag.ContinueOnError)
 	f.SetOutput(io.Discard)
 	limit := f.Int("limit", 20, "files per page (1–200)")
@@ -70,6 +72,9 @@ func report(ctx context.Context, args []string, paths config.Paths) (state.FileR
 	defer cancel()
 	s, err := state.OpenReader(ctx, paths.StateDir)
 	if err != nil {
+		if directorySet && errors.Is(err, os.ErrNotExist) {
+			return state.FileReport{}, missingScanMessage(*directory, scanPaths, err)
+		}
 		return state.FileReport{}, err
 	}
 	defer s.Close()
@@ -82,6 +87,9 @@ func report(ctx context.Context, args []string, paths config.Paths) (state.FileR
 	}
 	if directorySet {
 		d, err := s.MeasureDirectory(ctx, filepath.Clean(*directory))
+		if errors.Is(err, state.ErrDirectoryScope) {
+			err = missingScanMessage(*directory, scanPaths, err)
+		}
 		return state.FileReport{Directory: &d, GeneratedAt: d.GeneratedAt, Source: d.Source, Files: []state.ReportFile{}, Roots: []state.ReportRoot{}, Notes: d.Notes}, err
 	}
 	r, err := s.LargestFiles(ctx, *limit, *cursor)
@@ -162,26 +170,107 @@ func parentLabel(value string) string {
 }
 
 func printDirectoryReport(out io.Writer, r state.DirectoryReport) {
-	fmt.Fprintf(out, "Saga — Rydd: saved directory size\n%q\nMeasurement: %s\n", string(r.PathBytes), directoryStatusLabel(r.Status))
+	fmt.Fprintf(out, "Saga — Rydd: saved directory size\n%q\n", string(r.PathBytes))
+	status := strings.ToUpper(r.Status)
+	if r.Status == "recorded_complete" {
+		status = "COMPLETE (saved)"
+	}
+	fmt.Fprintf(out, "\nSIZE  ·  %s\n", status)
+	row := func(label string, value any) { fmt.Fprintf(out, "  %-23s %v\n", label, value) }
 	if r.LogicalBytes != nil && r.AllocatedBytes != nil {
-		fmt.Fprintf(out, "Regular files: %s logical; %s allocated (known duplicate inodes counted once)\n", humanBytes(*r.LogicalBytes), humanBytes(*r.AllocatedBytes))
+		row("Observed file size", humanBytes(*r.LogicalBytes))
+		row("Allocated on disk", humanBytes(*r.AllocatedBytes))
 	} else {
-		fmt.Fprintf(out, "Size unknown: %s\n", r.UnknownReason)
+		row("Observed file size", "Unknown")
+		if r.UnknownReason != "" {
+			printWrapped(out, r.UnknownReason, "  ")
+		}
 	}
-	fmt.Fprintf(out, "Examined %d/%d saved entries; file paths=%d; repeated inodes=%d; unknown inodes=%d\n", r.EntriesExamined, r.EntryLimit, r.FilePaths, r.RepeatedInodes, r.UnknownInodes)
-	fmt.Fprintf(out, "Unconfirmed entries=%d; incomplete directories=%d; directory errors=%d; skipped=%d\n", r.UnconfirmedEntries, r.IncompleteDirectories, r.DirectoryErrors, r.SkippedEntries)
+	switch r.Status {
+	case "partial":
+		fmt.Fprintln(out, "  Incomplete measurement — the full folder may be larger or smaller.")
+	case "stale":
+		fmt.Fprintln(out, "  Saved records are stale — these sizes may no longer match the folder.")
+	case "recorded_complete":
+		fmt.Fprintln(out, "  Complete in saved inventory; current contents are not verified.")
+	}
+	fmt.Fprintln(out, "\nSCAN COVERAGE")
+	row("Entries measured", fmt.Sprintf("%s (limit %s)", humanCount(r.EntriesExamined), humanCount(r.EntryLimit)))
+	row("Files observed", humanCount(r.FilePaths))
+	row("Incomplete directories", humanCount(r.IncompleteDirectories))
+	row("Skipped entries", humanCount(r.SkippedEntries))
+	row("Directory errors", humanCount(r.DirectoryErrors))
+	if r.UnconfirmedEntries > 0 {
+		row("Unconfirmed entries", humanCount(r.UnconfirmedEntries))
+	}
+	if r.RepeatedInodes > 0 {
+		row("Repeated file identities", humanCount(r.RepeatedInodes))
+	}
+	if r.UnknownInodes > 0 {
+		row("Unknown file identities", humanCount(r.UnknownInodes))
+	}
 	if r.Truncated {
-		fmt.Fprintln(out, "Measurement truncated at the entry limit; sizes cover only the examined portion.")
+		fmt.Fprintln(out, "  Entry limit reached; sizes cover only the measured portion.")
 	}
-	if r.OldestObservation != nil {
-		fmt.Fprintf(out, "Observation range: %s to %s\n", r.OldestObservation.Format(time.RFC3339), r.NewestObservation.Format(time.RFC3339))
+	if r.OldestObservation != nil || r.RootError != "" {
+		fmt.Fprintln(out, "\nFRESHNESS")
+		if r.OldestObservation != nil {
+			row("First observation", r.OldestObservation.Format("2006-01-02 15:04:05 MST"))
+		}
+		if r.NewestObservation != nil {
+			row("Last observation", r.NewestObservation.Format("2006-01-02 15:04:05 MST"))
+		}
+		if r.RootError != "" {
+			row("Last root error", fmt.Sprintf("%q", r.RootError))
+		}
 	}
-	if r.RootError != "" {
-		fmt.Fprintf(out, "Last root error: %q\n", r.RootError)
-	}
+	fmt.Fprintln(out, "\nABOUT THESE SIZES")
 	for _, note := range r.Notes {
-		fmt.Fprintln(out, note)
+		// Condense the generic caveats for the terminal; JSON retains full evidence.
+		switch {
+		case strings.HasPrefix(note, "Saved observations only;"):
+			if r.Status == "recorded_complete" {
+				continue
+			}
+			note = "Saved observations only; current disk contents are unverified."
+		case strings.HasPrefix(note, "Logical bytes sum regular-file paths;"):
+			note = "Regular files only. File size counts each path; allocation counts each known file identity once in the measured portion."
+		case strings.HasPrefix(note, "Hardlinks outside this folder,"):
+			note = "Not a reclaimable-space estimate: hardlinks, clones and snapshots can retain storage. Do not add overlapping folder sizes."
+		case strings.HasPrefix(note, "Stale or partial inventories"):
+			if r.Status == "partial" || r.Status == "stale" || r.Status == "recorded_complete" {
+				continue
+			}
+			note = "Partial or stale records can overstate or understate size; truncated results cover only part of the saved folder."
+		}
+		printWrapped(out, note, "  • ")
 	}
+}
+
+func humanCount(n int) string {
+	s := fmt.Sprint(n)
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	return s
+}
+
+func printWrapped(out io.Writer, text, prefix string) {
+	const width = 78
+	line := prefix
+	continuation := "    "
+	for _, word := range strings.Fields(text) {
+		if len([]rune(line))+1+len([]rune(word)) > width && strings.TrimSpace(line) != strings.TrimSpace(prefix) {
+			fmt.Fprintln(out, line)
+			line = continuation + word
+		} else {
+			if line != prefix {
+				line += " "
+			}
+			line += word
+		}
+	}
+	fmt.Fprintln(out, line)
 }
 
 func directoryStatusLabel(status string) string {
@@ -224,4 +313,24 @@ func printFindingReport(out io.Writer, r state.FindingReport) {
 	if r.NextCursor != "" {
 		fmt.Fprintf(out, "Next page: report --candidates --cursor %s (keep the same --data-dir, if set)\n", r.NextCursor)
 	}
+}
+
+type missingScanError struct {
+	cause   error
+	message string
+}
+
+func (e missingScanError) Error() string { return e.message }
+func (e missingScanError) Unwrap() error { return e.cause }
+
+func missingScanMessage(directory string, paths config.Paths, cause error) error {
+	// Single-quote shell arguments so suggested commands preserve literal paths.
+	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
+	command := "rydd"
+	defaults, err := config.ResolvePaths("")
+	if err != nil || defaults.StateDir != paths.StateDir {
+		command += " --data-dir " + quote(paths.StateDir)
+	}
+	command += " scan -d " + quote(directory)
+	return missingScanError{cause: cause, message: fmt.Sprintf("No saved scan covers folder %q in this state location.\nScan it first:\n  %s\nThen run the report again. Reports use saved results; they do not start a scan.", directory, command)}
 }

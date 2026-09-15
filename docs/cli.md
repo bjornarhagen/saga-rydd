@@ -76,6 +76,8 @@ Pages use a cursor based on size and entry ID rather than an increasing offset. 
 
 ## Saved directory-size reports
 
+Human output groups size, scan coverage, freshness and concise caveats into aligned sections. Zero-valued file-identity diagnostics are omitted from that view; JSON retains all fields and full notes. Missing scan coverage produces an actionable scan command, including custom state selection when needed, without starting a scan.
+
 ```sh
 rydd report --directory /absolute/path/to/folder
 rydd report --directory /absolute/path/to/folder --json
