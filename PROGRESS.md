@@ -4,12 +4,12 @@ This file is the canonical implementation tracker. The architecture and full acc
 
 ## Current state
 
-- **Stage:** P1-01–P1-05, P1-06a, P1-06b1/b2 and P1-08a complete; experimental metadata inventory verified on native macOS/Linux and Docker. The rest of Phase 1 remains open.
+- **Stage:** P1-01–P1-05, P1-06a, P1-06b1/b2 and P1-08a/b1 complete; experimental metadata inventory verified on native macOS/Linux and Docker. The rest of Phase 1 remains open.
 - **App / brand:** Rydd / Saga. Repository: `bjornarhagen/saga-rydd`; executable: `rydd`.
 - **Confirmed:** Go, local SQLite, TOML configuration, macOS/Linux, low resource usage, developer clutter plus duplicates, opt-in automatic cleanup in v1.
 - **Development:** Docker first; do not require host Go or additional host development tooling.
-- **Implemented app behavior:** initialization, saved/live status, worker controls and opt-in experimental metadata scanning; private TOML/SQLite state, exclusive writer lock, bounded batches, atomic inventory/job commits and directory reconciliation watermarks. Durable dispatch cadence/daily batch reservations, child-entry pacing with partial batches, live scanner accounting, WAL backpressure and versioned JSON commands are implemented. Fine-grained CPU/I/O/power enforcement, service installation, findings and cleanup remain unavailable.
-- **Active task:** P1-08b1 saved-inventory report: paginated largest observed files, saved coverage/freshness and human/JSON parity.
+- **Implemented app behavior:** initialization, saved/live status, paginated largest-file reports, worker controls and opt-in experimental metadata scanning; private TOML/SQLite state, exclusive writer lock, bounded batches, atomic inventory/job commits and directory reconciliation watermarks. Durable dispatch cadence/daily batch reservations, child-entry pacing with partial batches, live scanner accounting, WAL backpressure and versioned JSON commands are implemented. Fine-grained CPU/I/O/power enforcement, service installation, findings and cleanup remain unavailable.
+- **Active task:** none. P1-08b1 is verified; next is P1-08b2 directory-size reporting.
 - **Blockers:** none currently. Scanner resource targets and native service behavior remain unvalidated; the database experiment is not a scanner benchmark.
 
 ## Execution priority — read-only MVP first
@@ -59,8 +59,8 @@ The next milestone is: **Rydd shows useful cleanup candidates with enough eviden
 - [ ] P1-07 — Implement adaptive revisits, fair scheduling, large-directory continuation and stale/missing-entry handling.
 - [ ] P1-08 — Implement paginated saved reports, coverage/freshness, diagnostics and bounded logs/state growth.
   - [x] P1-08a — Versioned JSON controls/status, stable machine errors and capability discovery for AI and scripts.
-  - [ ] P1-08b1 — **Next:** paginated largest-observed-files report, saved-inventory coverage/freshness, human/JSON parity and offline availability.
-  - [ ] P1-08b2 — Incremental/bounded directory-size reports with partial/stale/unknown labels and logical/allocated-size qualifications.
+  - [x] P1-08b1 — paginated largest-observed-files report, saved-inventory coverage/freshness, human/JSON parity and offline availability.
+  - [ ] P1-08b2 — **Next:** incremental/bounded directory-size reports with partial/stale/unknown labels and logical/allocated-size qualifications.
 - [ ] P1-09 — Implement launchd/systemd user service installation, status, stop and uninstall; document other supervisors.
 - [ ] P1-GATE — Verify restart/sleep recovery, disconnected volumes, permissions, concurrent reports and bounded memory on wide/deep million-entry fixtures. No deletion capability in this phase.
 
@@ -162,9 +162,9 @@ The next milestone is: **Rydd shows useful cleanup candidates with enough eviden
 
 **Last updated:** 2026-09-15.
 
-**Completed this session:** implemented P1-08b1 `rydd report`: size/ID cursor pagination (default 20, max 200), logical/allocated sizes, observation/modification times, direct-parent generation labels, saved root diagnostics, quoted human output and JSON with byte-preserving paths. Reports work from saved state without a worker, config load or filesystem scan. Each page has one read snapshot and a five-second deadline; concurrent pages are not frozen exports. Directory aggregates, recommendations and current-ancestor verification remain unimplemented. Docker checks, race tests and four-target builds passed. The native macOS scanner smoke now verifies offline reports in both human and JSON output and passed. Tests cover ties/cursors, partial/unconfirmed parent records, disabled/unavailable roots, cancellation, invalid usage, unusual path bytes and human/JSON parity. Native CI is pending; no schema or dependency change.
+**Completed this session:** implemented P1-08b1 `rydd report`: size/ID cursor pagination (default 20, max 200), logical/allocated sizes, observation/modification times, direct-parent generation labels, saved root diagnostics, quoted human output and JSON with byte-preserving paths. Reports work from saved state without a worker, config load or filesystem scan. Each page has one read snapshot and a five-second deadline; concurrent pages are not frozen exports. Directory aggregates, recommendations and current-ancestor verification remain unimplemented. Docker checks, race tests and four-target builds passed. The native macOS scanner smoke now verifies offline reports in both human and JSON output and passed. Tests cover ties/cursors, partial/unconfirmed parent records, disabled/unavailable roots, cancellation, invalid usage, unusual path bytes and human/JSON parity. [CI run 35017147393](https://github.com/bjornarhagen/saga-rydd/actions/runs/35017147393) passed for `e7e8a97`: native Linux (55s), native macOS (1m33s), and Docker checks/four-target builds/native offline report smoke. The installed Mac binary was updated and both report formats verified against the saved playground inventory; no new scan was run. P1-08b1 is complete; parent report/MVP gates remain open. No schema or dependency change.
 
-**Next action:** finish P1-08b1 validation and native CI, then implement P1-08b2 directory-size reports with partial/stale/unknown labels and qualified logical/allocated accounting. Follow with P2-01a/02a (`node_modules` recommendations) and MVP-TRIAL. Do not resume resource hardening by default. Keep reports honest about historical observations and shared/overlapping storage.
+**Next action:** implement P1-08b2 directory-size reports with partial/stale/unknown labels and qualified logical/allocated accounting. Follow with P2-01a/02a (`node_modules` recommendations) and MVP-TRIAL. Do not resume resource hardening by default. Keep reports honest about historical observations and shared/overlapping storage.
 
 **Remaining decisions:** first automation-eligible cache category; supported minimum OS/libc versions; tuned resource/scan-root defaults; license. Go and naming are settled.
 
