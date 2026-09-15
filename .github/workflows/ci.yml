@@ -46,6 +46,7 @@ jobs:
           ./dist/rydd --version
           ./scripts/worker-smoke ./dist/rydd
           ./scripts/scanner-smoke ./dist/rydd
+          ./scripts/candidates-smoke ./dist/rydd
 
   docker:
     name: Docker workflow and cross-builds
@@ -61,3 +62,4 @@ jobs:
           ./dist/rydd-linux-amd64 --help
           ./scripts/worker-smoke ./dist/rydd-linux-amd64
           ./scripts/scanner-smoke ./dist/rydd-linux-amd64
+          ./scripts/candidates-smoke ./dist/rydd-linux-amd64

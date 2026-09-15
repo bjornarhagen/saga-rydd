@@ -1,0 +1,69 @@
+#!/bin/sh
+# Use a fresh local temporary filesystem, never a selected personal directory.
+set -eu
+binary=${1:?Usage: scripts/scanner-smoke /path/to/native/rydd}
+fixture=$(mktemp -d "${TMPDIR:-/tmp}/rydd-candidates.XXXXXX")
+mkdir "$fixture/root" "$fixture/root/child" "$fixture/root/node_modules"
+printf '{}\n' >"$fixture/root/package.json"
+printf 'dependency fixture\n' >"$fixture/root/node_modules/file"
+touch -t 202001010000 "$fixture/root/package.json" "$fixture/root/node_modules"
+printf 'fixture\n' >"$fixture/root/file"
+printf 'child fixture\n' >"$fixture/root/child/file"
+ln -s ../file "$fixture/root/child/link"
+worker_pid=
+cleanup() {
+    if [ -n "$worker_pid" ]; then
+        kill "$worker_pid" 2>/dev/null || true
+        wait "$worker_pid" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+rydd() { "$binary" --data-dir "$fixture/state" "$@"; }
+rydd init --root "$fixture/root"
+# Short cadence only for this tiny, explicitly created fixture.
+sed 's/work_seconds = 30/work_seconds = 1/; s/interval_seconds = 300/interval_seconds = 1/' \
+    "$fixture/state/config.toml" >"$fixture/config.tmp"
+cat "$fixture/config.tmp" >"$fixture/state/config.toml"
+"$binary" --data-dir "$fixture/state" daemon --experimental-scan >"$fixture/worker.log" 2>&1 &
+worker_pid=$!
+attempts=0
+while :; do
+    rydd status --json >"$fixture/status.json"
+    if grep -q '"complete_directories":3' "$fixture/status.json" && \
+       grep -q '"pending_jobs":0' "$fixture/status.json" && \
+       grep -q '"running_jobs":0' "$fixture/status.json"; then break; fi
+    attempts=$((attempts + 1))
+    if [ "$attempts" -ge 100 ] || ! kill -0 "$worker_pid" 2>/dev/null; then
+        cat "$fixture/status.json" "$fixture/worker.log" >&2
+        exit 1
+    fi
+    sleep 0.1
+done
+grep -q '"entries":8' "$fixture/status.json"
+grep -q '"directory_errors":0' "$fixture/status.json"
+rydd stop
+wait "$worker_pid"
+worker_pid=
+rydd status --json >"$fixture/status.json"
+grep -q '"state":"not-running"' "$fixture/status.json"
+rydd report --limit 1 --json >"$fixture/report.json"
+grep -q '"command":"report"' "$fixture/report.json"
+grep -q '"current_state_verified":false' "$fixture/report.json"
+grep -q '"next_cursor":' "$fixture/report.json"
+rydd report --limit 2 >"$fixture/report.txt"
+grep -q 'largest observed files' "$fixture/report.txt"
+rydd report --directory "$fixture/root" --json >"$fixture/directory-report.json"
+grep -q '"logical_file_bytes":44' "$fixture/directory-report.json"
+grep -q '"status":"recorded_complete"' "$fixture/directory-report.json"
+rydd report --directory "$fixture/root" >"$fixture/directory-report.txt"
+grep -q 'saved directory size' "$fixture/directory-report.txt"
+rydd report --candidates --json >"$fixture/candidates.json"
+grep -q '"classification":"review_required"' "$fixture/candidates.json"
+grep -q '"recognition":"manifest_filename_only"' "$fixture/candidates.json"
+grep -q '"available_actions":\[\]' "$fixture/candidates.json"
+grep -q '"logical_file_bytes":19' "$fixture/candidates.json"
+rydd report --candidates >"$fixture/candidates.txt"
+grep -q 'node_modules review candidates' "$fixture/candidates.txt"
+grep -q 'dependency modifications have not been inspected' "$fixture/candidates.txt"
+printf 'Native candidate smoke passed; fixture: %s\n'  "$fixture"

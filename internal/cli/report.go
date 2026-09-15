@@ -18,6 +18,7 @@ func report(ctx context.Context, args []string, paths config.Paths) (state.FileR
 	f.SetOutput(io.Discard)
 	limit := f.Int("limit", 20, "files per page (1–200)")
 	cursor := f.String("cursor", "", "next page cursor")
+	candidates := f.Bool("candidates", false, "review old node_modules observations")
 	directory := f.String("directory", "", "measure a saved directory subtree")
 	if err := f.Parse(args); err != nil {
 		return state.FileReport{}, usageError{err}
@@ -25,8 +26,11 @@ func report(ctx context.Context, args []string, paths config.Paths) (state.FileR
 	if f.NArg() != 0 || *limit < 1 || *limit > 200 {
 		return state.FileReport{}, usageError{errors.New("report accepts --limit 1–200 and --cursor TOKEN, or --directory ABSOLUTE_PATH")}
 	}
-	directorySet, pageSet := false, false
+	directorySet, pageSet, limitSet := false, false, false
 	f.Visit(func(v *flag.Flag) {
+		if v.Name == "limit" {
+			limitSet = true
+		}
 		if v.Name == "directory" {
 			directorySet = true
 		}
@@ -34,6 +38,9 @@ func report(ctx context.Context, args []string, paths config.Paths) (state.FileR
 			pageSet = true
 		}
 	})
+	if *candidates && (directorySet || limitSet) {
+		return state.FileReport{}, usageError{errors.New("--candidates accepts --cursor only; do not combine with --directory or --limit")}
+	}
 	if directorySet && (pageSet || !filepath.IsAbs(*directory)) {
 		return state.FileReport{}, usageError{errors.New("--directory requires an absolute path and cannot be combined with --limit or --cursor")}
 	}
@@ -44,6 +51,13 @@ func report(ctx context.Context, args []string, paths config.Paths) (state.FileR
 		return state.FileReport{}, err
 	}
 	defer s.Close()
+	if *candidates {
+		c, err := s.NodeModulesFindings(ctx, *cursor)
+		if errors.Is(err, state.ErrReportCursor) {
+			err = usageError{err}
+		}
+		return state.FileReport{Candidates: &c, GeneratedAt: c.GeneratedAt, Source: c.Source, Files: []state.ReportFile{}, Roots: []state.ReportRoot{}, Notes: c.Notes}, err
+	}
 	if directorySet {
 		d, err := s.MeasureDirectory(ctx, filepath.Clean(*directory))
 		return state.FileReport{Directory: &d, GeneratedAt: d.GeneratedAt, Source: d.Source, Files: []state.ReportFile{}, Roots: []state.ReportRoot{}, Notes: d.Notes}, err
@@ -55,6 +69,10 @@ func report(ctx context.Context, args []string, paths config.Paths) (state.FileR
 	return r, err
 }
 func printReport(out io.Writer, r state.FileReport) {
+	if r.Candidates != nil {
+		printFindingReport(out, *r.Candidates)
+		return
+	}
 	if r.Directory != nil {
 		printDirectoryReport(out, *r.Directory)
 		return
@@ -154,5 +172,23 @@ func directoryStatusLabel(status string) string {
 		return "stale saved records"
 	default:
 		return "unknown"
+	}
+}
+
+func printFindingReport(out io.Writer, r state.FindingReport) {
+	fmt.Fprintln(out, "Saga — Rydd: node_modules review candidates")
+	fmt.Fprintf(out, "Selection: directory and package.json recorded modification times at least %d days old. Examined %d/%d inventory entries.\n", r.MinimumAgeDays, r.EntriesExamined, r.EntryLimit)
+	for _, f := range r.Findings {
+		fmt.Fprintf(out, "\n%s — review required\n%q\nRule: %s v%d; recognition: %s\nManifest: %q\nModified: directory %s; manifest %s\nObserved: directory %s; manifest %s\n", f.ID, string(f.PathBytes), f.Rule, f.RuleVersion, f.Recognition, string(f.ManifestPathBytes), f.DirectoryModifiedAt.Format(time.RFC3339), f.ManifestModifiedAt.Format(time.RFC3339), f.DirectoryObservedAt.Format(time.RFC3339), f.ManifestObservedAt.Format(time.RFC3339))
+		printDirectoryReport(out, f.Measurement)
+	}
+	if len(r.Findings) == 0 {
+		fmt.Fprintln(out, "No candidates on this page; inventory may be incomplete or observations may not meet the rule.")
+	}
+	for _, note := range r.Notes {
+		fmt.Fprintln(out, note)
+	}
+	if r.NextCursor != "" {
+		fmt.Fprintf(out, "Next page: report --candidates --cursor %s (keep the same --data-dir, if set)\n", r.NextCursor)
 	}
 }

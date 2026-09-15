@@ -152,6 +152,12 @@ Every finding should include:
 - Estimated reclaimable space, with overlap/shared-storage qualifications.
 - Available action, recovery behavior, and options to dismiss or permanently exclude it.
 
+### First read-only detector slice (P2-01a/P2-02a)
+
+`report --candidates` derives versioned, review-required findings from saved inventory without a schema change. A regular-file sibling `package.json` identifies a project-like directory by filename only; its contents and lockfiles are not validated. Both its and `node_modules`' recorded mtimes must be at least 90 days old. This is a provisional review filter, not observed inactivity or a regeneration guarantee. Manifest and dependency directory must belong to the same completed saved parent pass; nested `node_modules` are suppressed. Each finding exposes local entry/inode identity, timestamps, rule version and the bounded directory measurement. There are no supported cleanup actions or summed savings. Findings/dismissals are not yet persisted independently of inventory.
+
+Pages examine at most 1,000 saved entries and measure at most 20 candidates, each capped at 10,000 entries. A five-second command deadline bounds elapsed database work; timeout is an error, not an empty report. Measurements use separate snapshots and carry their own freshness. A future inventory rebuild may reuse IDs, so these IDs must never authorize actions. This limited detector is sufficient for an initial feedback trial; validated manifest/lockfile contents, project activity history and incremental large-subtree aggregation remain open in P2-01/P2-02.
+
 ### Initial detectors
 
 | Detector | Evidence | Proposed action |

@@ -74,7 +74,19 @@ func TestReportHumanAndJSONOffline(t *testing.T) {
 	if code != 0 || errOut != "" || !strings.Contains(human, "saved directory size") || !strings.Contains(human, "2.0 KiB") {
 		t.Fatal(code, human, errOut)
 	}
-	for _, args := range [][]string{{"report", "--limit", "0", "--json"}, {"report", "--cursor", "bad", "--json"}, {"report", "--bad", "--json"}, {"report", "--directory", "relative", "--json"}, {"report", "--directory", "/offline-fixture", "--limit", "1", "--json"}} {
+	code, machine, errOut = run("report", "--candidates", "--json")
+	if err = json.Unmarshal([]byte(machine), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 || errOut != "" || envelope.Report.Candidates == nil || len(envelope.Report.Candidates.Findings) != 0 {
+		t.Fatal(machine, errOut)
+	}
+	code, human, errOut = run("report", "--candidates")
+	if code != 0 || !strings.Contains(human, "node_modules review candidates") {
+		t.Fatal(code, human, errOut)
+	}
+
+	for _, args := range [][]string{{"report", "--candidates", "--limit", "1", "--json"}, {"report", "--candidates", "--cursor", "bad", "--json"}, {"report", "--limit", "0", "--json"}, {"report", "--cursor", "bad", "--json"}, {"report", "--bad", "--json"}, {"report", "--directory", "relative", "--json"}, {"report", "--directory", "/offline-fixture", "--limit", "1", "--json"}} {
 		code, out, stderr := run(args...)
 		if code != 2 || stderr != "" || !strings.Contains(out, `"invalid_arguments"`) {
 			t.Fatal(code, out, stderr)

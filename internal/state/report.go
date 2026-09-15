@@ -57,6 +57,7 @@ type ReportRoot struct {
 	DirectoryErrors int64      `json:"directory_errors"`
 }
 type FileReport struct {
+	Candidates           *FindingReport   `json:"candidates,omitempty"`
 	Directory            *DirectoryReport `json:"directory,omitempty"`
 	GeneratedAt          time.Time        `json:"generated_at"`
 	Source               string           `json:"source"`

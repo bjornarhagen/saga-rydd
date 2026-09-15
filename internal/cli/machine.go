@@ -185,12 +185,12 @@ func capabilities() map[string]any {
 		"commands": []command{
 			{"init", true, "writes_configuration_and_state", []string{"--root PATH (repeatable)", "--exclude PATH (repeatable)"}},
 			{"config check", true, "read_only", []string{}}, {"state init", true, "writes_state", []string{}},
-			{"report", true, "read_only", []string{"--limit N (1–200)", "--cursor TOKEN", "--directory ABSOLUTE_PATH (instead of file pagination)"}},
+			{"report", true, "read_only", []string{"--limit N (1–200)", "--cursor TOKEN", "--directory ABSOLUTE_PATH (instead of file pagination)", "--candidates [--cursor TOKEN] (old node_modules review)"}},
 			{"status", true, "read_only", []string{}}, {"pause", true, "writes_state", []string{}}, {"resume", true, "writes_state", []string{}},
 			{"stop", true, "stops_worker", []string{}}, {"daemon", false, "runs_worker", []string{"--experimental-scan"}}, {"capabilities", true, "read_only", []string{}},
 		},
 		"exit_codes":  map[string]string{"0": "success", "1": "operation_failed", "2": "invalid_usage_or_output"},
 		"error_codes": []string{"invalid_arguments", "unsupported_output", "worker_not_running", "writer_busy", "not_found", "already_exists", "permission_denied", "canceled", "command_failed"},
-		"features":    map[string]bool{"experimental_inventory": true, "durable_dispatch_limits": true, "wal_backpressure": true, "entry_rate_limit": true, "metadata_api_counters": true, "metadata_rate_limit": false, "cpu_limit": false, "power_controls": false, "file_reports": true, "directory_size_reports": true, "findings": false, "duplicates": false, "cleanup": false, "service_installation": false},
+		"features":    map[string]bool{"experimental_inventory": true, "durable_dispatch_limits": true, "wal_backpressure": true, "entry_rate_limit": true, "metadata_api_counters": true, "metadata_rate_limit": false, "cpu_limit": false, "power_controls": false, "file_reports": true, "directory_size_reports": true, "findings": true, "duplicates": false, "cleanup": false, "service_installation": false},
 	}
 }
