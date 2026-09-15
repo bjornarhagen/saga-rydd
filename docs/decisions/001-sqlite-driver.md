@@ -1,6 +1,6 @@
 # ADR 001 — pure-Go SQLite for the state foundation
 
-Date: 2026-09-15. Decision: use `modernc.org/sqlite v1.59.0` in the application. Native CI verification is tracked in `PROGRESS.md`.
+Date: 2026-09-15. Decision: use `modernc.org/sqlite v1.59.0` in the application. [Native macOS/Linux and Docker CI passed](https://github.com/bjornarhagen/saga-rydd/actions/runs/34974105231) for implementation commit `491d932`; detailed evidence is tracked in `PROGRESS.md`.
 
 ## Why
 
