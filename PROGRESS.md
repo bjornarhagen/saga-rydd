@@ -4,12 +4,12 @@ This file is the canonical implementation tracker. The architecture and full acc
 
 ## Current state
 
-- **Stage:** project bootstrap; product implementation has not started.
+- **Stage:** project bootstrap complete; product implementation has not started.
 - **App / brand:** Rydd / Saga. Repository: `bjornarhagen/saga-rydd`; executable: `rydd`.
 - **Confirmed:** Go, local SQLite, TOML configuration, macOS/Linux, low resource usage, developer clutter plus duplicates, opt-in automatic cleanup in v1.
 - **Development:** Docker first; do not require host Go or additional host development tooling.
 - **Implemented app behavior:** help/version scaffold only. No scanner, database, background service or cleanup capability.
-- **Active task:** B05–B06: publish the public repository and verify CI.
+- **Active task:** none. Next queued task: P1-01 (SQLite driver experiment).
 - **Blockers:** none currently; native feature behavior and benchmarks remain unvalidated because those features do not exist yet.
 
 ## How to use this tracker
@@ -25,8 +25,8 @@ This file is the canonical implementation tracker. The architecture and full acc
 - [x] B02 — Confirm Saga — Rydd naming, Go and Docker-first development.
 - [x] B03 — Add agent instructions, contribution guide, stable task IDs and handoff convention.
 - [x] B04 — Validate disposable Docker workflow, UID/GID handling, formatting/vet/build commands and four-target cross-builds.
-- [ ] B05 — Publish public GitHub repository and verify remote/default branch.
-- [ ] B06 — Add and verify Linux/macOS CI and Docker workflow checks against the published commit.
+- [x] B05 — Publish public GitHub repository and verify remote/default branch.
+- [x] B06 — Add and verify Linux/macOS CI and Docker workflow checks against the published commit.
 
 ## Phase 1 — read-only foundation
 
@@ -85,15 +85,17 @@ This file is the canonical implementation tracker. The architecture and full acc
 - 2026-09-15: `./scripts/dev check`, `./scripts/dev race`, and `./scripts/dev build-all` passed using the existing Docker engine; no host Go/tooling was installed.
 - All four binaries were verified as the expected Mach-O/ELF architectures. The macOS arm64 binary ran natively: help/version succeeded and an unsupported `daemon` command returned exit status 2. Host output ownership matched the invoking user.
 - `go test` and the race invocation report **no test files** at this stage. They validate the workflow invocation, not scanner/cleanup behavior. Add meaningful feature tests as their tracked tasks are implemented.
-- GitHub native Linux/macOS and Docker CI: pending publication.
+- The [public repository](https://github.com/bjornarhagen/saga-rydd) was created and verified with default branch `main`; the initial bootstrap commit is `9e0f884`.
+- GitHub [CI run 34971463782](https://github.com/bjornarhagen/saga-rydd/actions/runs/34971463782) passed for bootstrap commit `9e0f884`: native Linux checks (24s), native macOS checks (38s), and Docker workflow/four-target cross-builds including Linux output ownership (48s).
+- `docker compose ps --status running` confirmed no development containers remained running after validation. Only the reusable development image/cache volume remains.
 
 ## Handoff
 
 **Last updated:** 2026-09-15.
 
-**Completed this session:** planning, naming, initial development scaffold, contribution guide and agent/progress conventions.
+**Completed this session:** planning, naming, public GitHub repository, Docker development scaffold, native/cross-build CI, contribution guide and agent/progress conventions. All bootstrap items B01–B06 are complete; all product phase gates remain open.
 
-**Next action:** finish bootstrap validation/publication. Then begin P1-01 with a small Docker-driven SQLite driver experiment and validate candidate builds on the macOS/Linux CI matrix. Record the selected driver before implementing persistent state.
+**Next action:** begin P1-01 with a small Docker-driven SQLite driver experiment and validate candidate builds on the macOS/Linux CI matrix. Measure memory and state growth on representative synthetic inventories, verify transaction/recovery behavior, and record the selected driver before implementing persistent state. Then move to P1-02/P1-03.
 
 **Remaining decisions:** first automation-eligible cache category; supported minimum OS/libc versions; tuned resource/scan-root defaults; license. Go and naming are settled.
 
