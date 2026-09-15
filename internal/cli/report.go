@@ -178,12 +178,23 @@ func directoryStatusLabel(status string) string {
 func printFindingReport(out io.Writer, r state.FindingReport) {
 	fmt.Fprintln(out, "Saga — Rydd: node_modules review candidates")
 	fmt.Fprintf(out, "Selection: directory and package.json recorded modification times at least %d days old. Examined %d/%d inventory entries.\n", r.MinimumAgeDays, r.EntriesExamined, r.EntryLimit)
+	fmt.Fprintln(out, "Selection outcomes on this page (first matching reason per entry):")
+	for _, d := range r.Diagnostics {
+		if d.Count > 0 {
+			fmt.Fprintf(out, "  %d: %s [%s]\n", d.Count, d.Explanation, d.Code)
+		}
+	}
+	if r.PageCoverage == "more_saved_entries" {
+		fmt.Fprintln(out, "More saved entries remain; follow the next cursor even if this page has no candidates.")
+	} else {
+		fmt.Fprintln(out, "End of saved entries reached; this does not mean filesystem scanning is complete.")
+	}
 	for _, f := range r.Findings {
 		fmt.Fprintf(out, "\n%s — review required\n%q\nRule: %s v%d; recognition: %s\nManifest: %q\nModified: directory %s; manifest %s\nObserved: directory %s; manifest %s\n", f.ID, string(f.PathBytes), f.Rule, f.RuleVersion, f.Recognition, string(f.ManifestPathBytes), f.DirectoryModifiedAt.Format(time.RFC3339), f.ManifestModifiedAt.Format(time.RFC3339), f.DirectoryObservedAt.Format(time.RFC3339), f.ManifestObservedAt.Format(time.RFC3339))
 		printDirectoryReport(out, f.Measurement)
 	}
 	if len(r.Findings) == 0 {
-		fmt.Fprintln(out, "No candidates on this page; inventory may be incomplete or observations may not meet the rule.")
+		fmt.Fprintln(out, "No candidates on this page. Selection outcomes above explain the examined records.")
 	}
 	for _, note := range r.Notes {
 		fmt.Fprintln(out, note)

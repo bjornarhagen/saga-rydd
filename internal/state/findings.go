@@ -34,27 +34,53 @@ type Finding struct {
 	Measurement         DirectoryReport `json:"measurement"`
 }
 
+// SelectionDiagnostic counts one first-match outcome per examined entry.
+// Slice order defines precedence; later conditions may also be true.
+type SelectionDiagnostic struct {
+	Code        string `json:"code"`
+	Count       int    `json:"count"`
+	Explanation string `json:"explanation"`
+}
+
+func selectionDiagnostics() []SelectionDiagnostic {
+	return []SelectionDiagnostic{
+		{Code: "not_node_modules", Explanation: "Entry is not named node_modules."},
+		{Code: "nested_dependency", Explanation: "Nested node_modules entry suppressed to avoid overlapping candidates."},
+		{Code: "not_directory", Explanation: "node_modules was not recorded as a directory."},
+		{Code: "skipped", Explanation: "Dependency directory or manifest has a saved skip reason."},
+		{Code: "manifest_missing_or_unsupported", Explanation: "No saved regular-file package.json sibling; contents are not validated."},
+		{Code: "parent_incomplete_or_error", Explanation: "Parent listing is missing, incomplete or has a saved error."},
+		{Code: "parent_unconfirmed", Explanation: "Dependency directory or manifest is unconfirmed in the saved parent generation."},
+		{Code: "timestamp_unknown", Explanation: "Directory or manifest modification timestamp is nonpositive and cannot establish the age rule."},
+		{Code: "age_not_met", Explanation: "Directory or manifest modification timestamp is newer than the age cutoff (including future timestamps)."},
+		{Code: "selected", Explanation: "Selected for review; this is not deletion authorization."},
+	}
+}
+
 type FindingReport struct {
-	GeneratedAt          time.Time `json:"generated_at"`
-	Source               string    `json:"source"`
-	CurrentStateVerified bool      `json:"current_state_verified"`
-	Findings             []Finding `json:"findings"`
-	EntriesExamined      int       `json:"entries_examined"`
-	EntryLimit           int       `json:"entry_limit"`
-	MinimumAgeDays       int       `json:"minimum_age_days"`
-	NextCursor           string    `json:"next_cursor,omitempty"`
-	Notes                []string  `json:"notes"`
+	Diagnostics          []SelectionDiagnostic `json:"selection_diagnostics"`
+	PageCoverage         string                `json:"page_coverage"`
+	GeneratedAt          time.Time             `json:"generated_at"`
+	Source               string                `json:"source"`
+	CurrentStateVerified bool                  `json:"current_state_verified"`
+	Findings             []Finding             `json:"findings"`
+	EntriesExamined      int                   `json:"entries_examined"`
+	EntryLimit           int                   `json:"entry_limit"`
+	MinimumAgeDays       int                   `json:"minimum_age_days"`
+	NextCursor           string                `json:"next_cursor,omitempty"`
+	Notes                []string              `json:"notes"`
 }
 
 // NodeModulesFindings derives review candidates from durable observations. It
 // examines one bounded ID page, then measures at most 20 candidates separately.
 // Each measurement has its own snapshot; no multi-snapshot totals are offered.
 func (s *Store) NodeModulesFindings(ctx context.Context, token string) (FindingReport, error) {
-	r := FindingReport{GeneratedAt: time.Now().UTC(), Source: "saved_inventory", Findings: []Finding{}, EntryLimit: FindingEntryLimit, MinimumAgeDays: FindingAgeDays, Notes: []string{
+	r := FindingReport{Diagnostics: selectionDiagnostics(), PageCoverage: "saved_entries_exhausted", GeneratedAt: time.Now().UTC(), Source: "saved_inventory", Findings: []Finding{}, EntryLimit: FindingEntryLimit, MinimumAgeDays: FindingAgeDays, Notes: []string{
 		"Review required. Old recorded directory and package.json modification times do not prove inactivity, continuous stability or safe deletion.",
 		"Project recognition uses a sibling regular-file package.json observation only. Manifest contents, lockfiles, source activity and dependency modifications have not been inspected.",
 		"Removing dependencies can break builds and applications or lose local edits. Regeneration may require the correct package manager, lockfile, credentials, network access and packages that remain available.",
 		"Sizes are saved measurements, not reclaimable space. Each candidate is measured in a separate snapshot; partial/stale sizes may overestimate or underestimate current contents. Do not sum shared storage.",
+		"Selection diagnostics count only this page, with one first-match outcome per examined entry in displayed order. Exhausted saved entries do not mean scanning is complete or the machine is clean.",
 		"Nested node_modules paths are suppressed. Empty pages can still have a next cursor. Pages are not a frozen snapshot; concurrent updates can change results.",
 		"Findings are derived on demand, not persisted approvals. IDs are local inventory references, not action authorization; cleanup, dismissal and automatic policies are unavailable.",
 	}}
@@ -85,6 +111,7 @@ func (s *Store) NodeModulesFindings(ctx context.Context, token string) (FindingR
 	for rows.Next() {
 		if r.EntriesExamined == FindingEntryLimit || len(r.Findings) == 20 {
 			r.NextCursor = fmt.Sprintf("nm1:%d", after)
+			r.PageCoverage = "more_saved_entries"
 			break
 		}
 		var f Finding
@@ -99,7 +126,31 @@ func (s *Store) NodeModulesFindings(ctx context.Context, token string) (FindingR
 		after = f.EntryID
 		r.EntriesExamined++
 		path := string(rel)
-		if filepath.Base(path) != "node_modules" || strings.Contains("/"+filepath.Dir(path)+"/", "/node_modules/") || kind != "directory" || skip != "" || mkind != "file" || mskip != "" || mt <= 0 || mmt <= 0 || mt > cutoff || mmt > cutoff || complete != 1 || perr != "" || gen != pgen || mgen != pgen {
+		// First matching outcome wins. Eligibility is unchanged; evidence
+		// failures precede age so uncertain records are not described as recent.
+		outcome := 9
+		switch {
+		case filepath.Base(path) != "node_modules":
+			outcome = 0
+		case strings.Contains("/"+filepath.Dir(path)+"/", "/node_modules/"):
+			outcome = 1
+		case kind != "directory":
+			outcome = 2
+		case skip != "" || mskip != "":
+			outcome = 3
+		case mkind != "file":
+			outcome = 4
+		case complete != 1 || perr != "":
+			outcome = 5
+		case gen != pgen || mgen != pgen:
+			outcome = 6
+		case mt <= 0 || mmt <= 0:
+			outcome = 7
+		case mt > cutoff || mmt > cutoff:
+			outcome = 8
+		}
+		r.Diagnostics[outcome].Count++
+		if outcome != 9 {
 			continue
 		}
 		f.Path = filepath.Join(string(root), path)

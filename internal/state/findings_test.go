@@ -89,7 +89,7 @@ func TestFindingPagesAndNestedSuppression(t *testing.T) {
 		t.Fatal(err)
 	}
 	r, err := s.NodeModulesFindings(ctx, "")
-	if err != nil || r.EntriesExamined != FindingEntryLimit || r.NextCursor == "" || len(r.Findings) != 0 {
+	if err != nil || r.EntriesExamined != FindingEntryLimit || r.PageCoverage != "more_saved_entries" || r.NextCursor == "" || len(r.Findings) != 0 {
 		t.Fatal(r, err)
 	}
 	next, err := s.NodeModulesFindings(ctx, r.NextCursor)
@@ -126,11 +126,11 @@ func TestFindingCandidateCap(t *testing.T) {
 		}
 	}
 	r, err := s.NodeModulesFindings(ctx, "")
-	if err != nil || len(r.Findings) != 20 || r.NextCursor == "" {
+	if err != nil || len(r.Findings) != 20 || r.PageCoverage != "more_saved_entries" || r.NextCursor == "" {
 		t.Fatal(r, err)
 	}
 	next, err := s.NodeModulesFindings(ctx, r.NextCursor)
-	if err != nil || len(next.Findings) != 1 || next.NextCursor != "" {
+	if err != nil || len(next.Findings) != 1 || next.PageCoverage != "saved_entries_exhausted" || next.NextCursor != "" {
 		t.Fatal(next, err)
 	}
 	if r.Findings[19].ID == next.Findings[0].ID {
@@ -138,5 +138,57 @@ func TestFindingCandidateCap(t *testing.T) {
 	}
 	if next.Findings[0].Measurement.Status != "recorded_complete" || *next.Findings[0].Measurement.LogicalBytes != 0 {
 		t.Fatal(next)
+	}
+}
+
+func TestSelectionDiagnosticReasons(t *testing.T) {
+	cases := []struct{ name, change, code string }{
+		{"selected", "", "selected"},
+		{"kind", "UPDATE entries SET kind='symlink' WHERE path=X'612f6e6f64655f6d6f64756c6573'", "not_directory"},
+		{"skip", "UPDATE entries SET skip_reason='excluded' WHERE path=X'612f6e6f64655f6d6f64756c6573'", "skipped"},
+		{"manifest skip", "UPDATE entries SET skip_reason='excluded' WHERE path=X'612f7061636b6167652e6a736f6e'", "skipped"},
+		{"missing manifest", "DELETE FROM entries WHERE path=X'612f7061636b6167652e6a736f6e'", "manifest_missing_or_unsupported"},
+		{"unsupported manifest", "UPDATE entries SET kind='symlink' WHERE path=X'612f7061636b6167652e6a736f6e'", "manifest_missing_or_unsupported"},
+		{"incomplete before age", "UPDATE directories SET complete=0 WHERE path=X'61'; UPDATE entries SET mtime_ns=9223372036854775807", "parent_incomplete_or_error"},
+		{"missing parent", "DELETE FROM directories WHERE path=X'61'", "parent_incomplete_or_error"},
+		{"parent error", "UPDATE directories SET last_error='unavailable' WHERE path=X'61'", "parent_incomplete_or_error"},
+		{"generation", "UPDATE entries SET generation=99 WHERE path=X'612f7061636b6167652e6a736f6e'", "parent_unconfirmed"},
+		{"unknown timestamp", "UPDATE entries SET mtime_ns=0 WHERE path=X'612f7061636b6167652e6a736f6e'", "timestamp_unknown"},
+		{"recent directory", "UPDATE entries SET mtime_ns=9223372036854775807 WHERE path=X'612f6e6f64655f6d6f64756c6573'", "age_not_met"},
+		{"recent manifest", "UPDATE entries SET mtime_ns=9223372036854775807 WHERE path=X'612f7061636b6167652e6a736f6e'", "age_not_met"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := directoryFixture(t)
+			for _, e := range []struct{ path, kind string }{{"a/node_modules", "directory"}, {"a/package.json", "file"}} {
+				_, err := s.db.Exec(`INSERT INTO entries(root_id,path,parent,kind,size,allocated,mtime_ns,ctime_ns,device,inode,generation,observed_at_ns) VALUES(1,?,X'61',?,0,0,1,1,'','',2,10)`, []byte(e.path), e.kind)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.change != "" {
+				if _, err := s.db.Exec(tc.change); err != nil {
+					t.Fatal(err)
+				}
+			}
+			r, err := s.NodeModulesFindings(context.Background(), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			total := 0
+			matched := false
+			for _, d := range r.Diagnostics {
+				total += d.Count
+				if d.Code == tc.code && d.Count == 1 {
+					matched = true
+				}
+			}
+			if !matched || total != r.EntriesExamined || r.PageCoverage != "saved_entries_exhausted" {
+				t.Fatal(r)
+			}
+			if (tc.code == "selected") != (len(r.Findings) == 1) {
+				t.Fatal(r)
+			}
+		})
 	}
 }

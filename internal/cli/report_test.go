@@ -78,11 +78,11 @@ func TestReportHumanAndJSONOffline(t *testing.T) {
 	if err = json.Unmarshal([]byte(machine), &envelope); err != nil {
 		t.Fatal(err)
 	}
-	if code != 0 || errOut != "" || envelope.Report.Candidates == nil || len(envelope.Report.Candidates.Findings) != 0 {
+	if code != 0 || errOut != "" || envelope.Report.Candidates == nil || len(envelope.Report.Candidates.Findings) != 0 || envelope.Report.Candidates.PageCoverage != "saved_entries_exhausted" || len(envelope.Report.Candidates.Diagnostics) != 10 || envelope.Report.Candidates.Diagnostics[0].Count != 3 {
 		t.Fatal(machine, errOut)
 	}
 	code, human, errOut = run("report", "--candidates")
-	if code != 0 || !strings.Contains(human, "node_modules review candidates") {
+	if code != 0 || (!strings.Contains(human, "node_modules review candidates") || !strings.Contains(human, "Selection outcomes on this page") || !strings.Contains(human, "[not_node_modules]")) {
 		t.Fatal(code, human, errOut)
 	}
 

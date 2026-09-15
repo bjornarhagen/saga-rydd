@@ -160,6 +160,8 @@ Every finding should include:
 
 Pages examine at most 1,000 saved entries and measure at most 20 candidates, each capped at 10,000 entries. A five-second command deadline bounds elapsed database work; timeout is an error, not an empty report. Measurements use separate snapshots and carry their own freshness. A future inventory rebuild may reuse IDs, so these IDs must never authorize actions. This limited detector is sufficient for an initial feedback trial; validated manifest/lockfile contents, project activity history and incremental large-subtree aggregation remain open in P2-01/P2-02.
 
+P2-05a adds bounded first-match selection counts and saved-page coverage in human/JSON candidate reports. Counts cover only examined entries and preserve existing eligibility; missing or unconfirmed evidence is explained before age. Exhaustion of saved entries is never described as completion of the filesystem scan.
+
 ### Initial detectors
 
 | Detector | Evidence | Proposed action |

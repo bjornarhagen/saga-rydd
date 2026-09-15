@@ -109,3 +109,22 @@ Rule `node_modules_old_metadata` version 1 requires a saved regular-file sibling
 Findings contain a local ID, rule/version, entry/root/device/inode identity, authoritative base64 path bytes, manifest path, observation/modification times and the full directory measurement contract. IDs are stable across unchanged inventory reports but not authorization and not guaranteed across inventory rebuilds. Findings derive from saved inventory; there is no persisted approval, dismissal or independent finding table yet.
 
 Pages examine at most 1,000 inventory entries and measure at most 20 candidates. Follow `next_cursor` even on an empty page; keep `--candidates` on subsequent requests. Each directory measurement reads its own snapshot, so concurrent updates can change evidence between selection and measurement. The whole command has a five-second deadline; timeout returns an error. Nested dependency directories are suppressed, and no aggregate savings are presented. Sizes remain qualified by stale/partial/unknown status and shared-storage caveats. Empty results never mean the machine is clean.
+
+### Candidate selection diagnostics
+
+`report.candidates.selection_diagnostics` is an ordered array of `{code, count, explanation}`. All codes are present, including zero counts. Counts cover only examined entries on this page, sum to `entries_examined`, and assign each entry its first matching outcome in this order:
+
+1. `not_node_modules`: different basename.
+2. `nested_dependency`: nested dependency path suppressed.
+3. `not_directory`: dependency path recorded as a non-directory.
+4. `skipped`: dependency or manifest observation has a skip reason.
+5. `manifest_missing_or_unsupported`: sibling manifest absent or not a regular file.
+6. `parent_incomplete_or_error`: parent listing absent, incomplete or errored.
+7. `parent_unconfirmed`: directory or manifest generation differs from the saved parent generation.
+8. `timestamp_unknown`: directory or manifest mtime is nonpositive.
+9. `age_not_met`: either mtime is newer than the cutoff, including future timestamps.
+10. `selected`: selected review candidate; count equals this page's finding count.
+
+Later conditions may also fail; these are first-match explanations, not an exhaustive list of issues. Human output shows nonzero counts with the same codes and explanations. Evidence failures precede age checks to avoid presenting uncertain observations as simply recent. Eligibility and rule version are unchanged.
+
+`page_coverage` is `more_saved_entries` when `next_cursor` is present, otherwise `saved_entries_exhausted`. It describes the remainder of this saved page sequence, not filesystem scan completion. Disabled roots and entries beyond the cursor/page bounds are not counted. An empty page can still require continuation; an exhausted page does not prove that the computer is clean.

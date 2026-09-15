@@ -9,7 +9,7 @@ This file is the canonical implementation tracker. The architecture and full acc
 - **Confirmed:** Go, local SQLite, TOML configuration, macOS/Linux, low resource usage, developer clutter plus duplicates, opt-in automatic cleanup in v1.
 - **Development:** Docker first; do not require host Go or additional host development tooling.
 - **Implemented app behavior:** initialization, saved/live status, paginated largest-file and selected-directory size reports, worker controls and opt-in experimental metadata scanning; private TOML/SQLite state, exclusive writer lock, bounded batches, atomic inventory/job commits and directory reconciliation watermarks. Durable dispatch cadence/daily batch reservations, child-entry pacing with partial batches, live scanner accounting, WAL backpressure and versioned JSON commands are implemented. Fine-grained CPU/I/O/power enforcement, service installation and cleanup remain unavailable; the first review-required node_modules candidate report is available.
-- **Active task:** trial documentation finalized with general lessons only. Next implementation task is P2-05a candidate-selection diagnostics; owner feedback remains pending. GitHub-hosted CI is confirmed.
+- **Active task:** P2-05a in progress: bounded candidate-selection diagnostics in human/JSON reports, preserving existing eligibility rules.
 - **Blockers:** none currently. Scanner resource targets and native service behavior remain unvalidated; the database experiment is not a scanner benchmark.
 
 ## Execution priority — read-only MVP first
@@ -177,9 +177,9 @@ The next milestone is: **Rydd shows useful cleanup candidates with enough eviden
 
 **Last updated:** 2026-09-16.
 
-**Completed this session:** recorded the user’s decision to keep project-derived measurements private and publish only general product lessons. Preserved detailed trial notes locally outside Git, removed measurements from the public documentation draft, and documented the next candidate-selection diagnostic task. See [trial lessons](docs/mvp-trial-results.md). Documentation whitespace and link checks passed; no product code changed. MVP-TRIAL remains open for owner feedback and diagnostic review.
+**Completed this session:** implemented P2-05a candidate selection diagnostics. Human/JSON reports expose first-match outcome counts for each examined entry, with explicit saved-page continuation/exhaustion. Counts cover only the current page, and selected counts correspond to returned candidates. Existing age, evidence, nested suppression and review-required eligibility remain unchanged. Added synthetic reason/precedence, pagination, CLI and native smoke assertions; Docker checks/race and four-target builds passed; native macOS candidate smoke passed. CI verification is pending. No dependencies, schema changes or personal scan required. Private trial measurements remain unpublished.
 
-**Next action:** implement P2-05a candidate selection diagnostics, using this trial's inability to explain an empty result as the concrete MVP dependency. The question about whether the selected project is still used remains pending; do not infer inactivity or change the age rule to manufacture findings. Then rerun saved reports and obtain feedback before broader duplicate/cleanup work. Keep GitHub-hosted CI. The existing installed playground configuration is unchanged; the separate trial worker is stopped.
+**Next action:** finish P2-05a validation, then review candidate diagnostics and obtain owner feedback for MVP-TRIAL. Preserve the read-only MVP priority before duplicate/cleanup work. Keep GitHub-hosted CI. Private measurements remain outside Git.
 
 **Remaining decisions:** first automation-eligible cache category; supported minimum OS/libc versions; tuned resource/scan-root defaults; license. Go and naming are settled.
 
