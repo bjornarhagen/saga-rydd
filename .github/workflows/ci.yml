@@ -27,9 +27,14 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
-          cache: false # Enable module caching when go.sum exists.
+          cache: true
+          cache-dependency-path: |
+            go.sum
+            experiments/sqlite/go.sum
       - run: ./scripts/tasks check
       - run: ./scripts/tasks race
+      - run: ./scripts/tasks sqlite-check
+      - run: ./scripts/tasks sqlite-bench -rows 100000
       - name: Native CLI smoke check
         run: |
           ./dist/rydd --help

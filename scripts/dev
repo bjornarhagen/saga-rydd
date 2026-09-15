@@ -17,6 +17,6 @@ if [ "$#" -gt 0 ]; then shift; fi
 case "$task" in
     rebuild) exec docker compose build --pull dev ;;
     cache-clear) exec docker compose down --volumes ;;
-    shell) exec docker compose run --rm --build dev /bin/sh ;;
+    shell) exec docker compose run --rm --build dev /bin/sh "$@" ;;
     *) exec docker compose run --rm --build dev ./scripts/tasks "$task" "$@" ;;
 esac

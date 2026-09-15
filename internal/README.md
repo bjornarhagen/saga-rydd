@@ -1,5 +1,6 @@
 # Internal packages
 
-Application packages will be added here as their tracked tasks are implemented.
-The planned boundaries are state, scheduler, inventory, detectors, duplicates,
-actions and platform adapters. Avoid creating empty abstractions ahead of need.
+Implemented packages: `config` (strict TOML and platform paths), `localfs`
+(private application files), `state` (SQLite migrations/connections), and `cli`.
+Scheduler, inventory, detectors, duplicates, actions and platform adapters follow
+their tracked milestones. Avoid creating empty abstractions ahead of need.

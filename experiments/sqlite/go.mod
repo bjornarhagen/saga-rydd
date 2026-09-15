@@ -1,9 +1,9 @@
-module github.com/bjornarhagen/saga-rydd
+module github.com/bjornarhagen/saga-rydd/experiments/sqlite
 
 go 1.27.1
 
 require (
-	github.com/pelletier/go-toml/v2 v2.4.3
+	github.com/mattn/go-sqlite3 v1.14.52
 	modernc.org/sqlite v1.59.0
 )
 

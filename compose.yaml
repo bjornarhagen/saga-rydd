@@ -6,6 +6,9 @@ services:
     user: "${RYDD_DEV_UID:-1000}:${RYDD_DEV_GID:-1000}"
     init: true
     working_dir: /workspace
+    environment:
+      GOCACHE: /cache/build/${RYDD_DEV_UID:-1000}
+      GOMODCACHE: /cache/modules/${RYDD_DEV_UID:-1000}
     volumes:
       - .:/workspace
       - go-cache:/cache

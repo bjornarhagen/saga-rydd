@@ -4,13 +4,13 @@ This file is the canonical implementation tracker. The architecture and full acc
 
 ## Current state
 
-- **Stage:** project bootstrap complete; product implementation has not started.
+- **Stage:** configuration and state foundation implemented; native CI validation in progress.
 - **App / brand:** Rydd / Saga. Repository: `bjornarhagen/saga-rydd`; executable: `rydd`.
 - **Confirmed:** Go, local SQLite, TOML configuration, macOS/Linux, low resource usage, developer clutter plus duplicates, opt-in automatic cleanup in v1.
 - **Development:** Docker first; do not require host Go or additional host development tooling.
-- **Implemented app behavior:** help/version scaffold only. No scanner, database, background service or cleanup capability.
-- **Active task:** none. Next queued task: P1-01 (SQLite driver experiment).
-- **Blockers:** none currently; native feature behavior and benchmarks remain unvalidated because those features do not exist yet.
+- **Implemented app behavior:** `init`, `config check`, `state init`, `status`/JSON; private TOML and SQLite state. No scanner, background service or cleanup capability.
+- **Active task:** finish native validation of P1-01/P1-02/P1-03; then P1-04 (one-worker lifecycle and persistent scheduler jobs).
+- **Blockers:** none currently. Scanner resource targets and native service behavior remain unvalidated; the database experiment is not a scanner benchmark.
 
 ## How to use this tracker
 
@@ -30,9 +30,9 @@ This file is the canonical implementation tracker. The architecture and full acc
 
 ## Phase 1 — read-only foundation
 
-- [ ] P1-01 — Compare SQLite drivers for RSS, state size, crash behavior and macOS/Linux build portability; record decision and benchmark method.
-- [ ] P1-02 — Implement TOML configuration, standard platform data directories, root selection, exclusions and validation.
-- [ ] P1-03 — Implement SQLite schema/migrations, short transactions, WAL maintenance and durable-vs-rebuildable state boundaries.
+- [ ] P1-01 — Compare SQLite drivers for RSS, state size, crash behavior and macOS/Linux build portability; record decision and benchmark method. Implemented; see ADR 001; native CI pending.
+- [ ] P1-02 — Implement TOML configuration, standard platform data directories, root selection, exclusions and validation. Implemented and tested in Docker; native CI pending.
+- [ ] P1-03 — Implement SQLite schema/migrations, short transactions, WAL maintenance and durable-vs-rebuildable state boundaries. Implemented and tested in Docker; native CI pending. Scheduler enforcement of WAL backpressure belongs to P1-06.
 - [ ] P1-04 — Implement one-worker lock, private control channel, pause/resume and saved scheduler jobs.
 - [ ] P1-05 — Implement streaming inventory, volume identity, symlink/mount boundaries, permission errors and reconciliation.
 - [ ] P1-06 — Implement independent metadata/read/CPU budgets, persistent daily limits, sleep/backoff and power-state fallbacks.
@@ -84,19 +84,28 @@ This file is the canonical implementation tracker. The architecture and full acc
 - 2026-09-15: `sh -n scripts/dev scripts/tasks` and `git diff --cached --check` passed.
 - 2026-09-15: `./scripts/dev check`, `./scripts/dev race`, and `./scripts/dev build-all` passed using the existing Docker engine; no host Go/tooling was installed.
 - All four binaries were verified as the expected Mach-O/ELF architectures. The macOS arm64 binary ran natively: help/version succeeded and an unsupported `daemon` command returned exit status 2. Host output ownership matched the invoking user.
-- `go test` and the race invocation report **no test files** at this stage. They validate the workflow invocation, not scanner/cleanup behavior. Add meaningful feature tests as their tracked tasks are implemented.
+- Historical bootstrap tests reported **no test files**; those early results validated only the workflow. Feature tests were added with the state/config foundation below.
 - The [public repository](https://github.com/bjornarhagen/saga-rydd) was created and verified with default branch `main`; the initial bootstrap commit is `9e0f884`.
 - GitHub [CI run 34971463782](https://github.com/bjornarhagen/saga-rydd/actions/runs/34971463782) passed for bootstrap commit `9e0f884`: native Linux checks (24s), native macOS checks (38s), and Docker workflow/four-target cross-builds including Linux output ownership (48s).
 - `docker compose ps --status running` confirmed no development containers remained running after validation. Only the reusable development image/cache volume remains.
+
+### Configuration/state foundation
+
+- [ADR 001](docs/decisions/001-sqlite-driver.md) records the reproducible one-million-entry SQLite comparison. Both drivers passed snapshot/rollback and forced-process-kill checks. Selected modernc used 24.3 MiB peak RSS; both database files were 252.3 MiB. These are isolated unthrottled synthetic measurements.
+- Docker tests cover strict TOML/defaults/path validation, no-overwrite initialization, read-only status, migration identity/version refusal, stable root registration and rollback, connection replacement settings, non-UTF-8 path bytes, foreign keys, WAL snapshots/checkpoints, process-crash recovery and writer contention/cancellation.
+- Fixed development cache ownership conflicts by separating cache directories per UID and allowing noninteractive commands through `scripts/dev shell -c`.
+- `./scripts/dev check`, `./scripts/dev race`, `./scripts/dev sqlite-check` and `./scripts/dev build-all` passed. All four outputs were verified as the expected Mach-O/ELF architectures.
+- The Docker-built macOS arm64 binary ran `init`, `config check`, `status --json` and `state init` natively against a private ignored fixture. It registered one root with zero scanned entries and a 61,440-byte initial database; no host Go installation was needed.
+- Native CI for both candidates and the application: pending this change's publication.
 
 ## Handoff
 
 **Last updated:** 2026-09-15.
 
-**Completed this session:** planning, naming, public GitHub repository, Docker development scaffold, native/cross-build CI, contribution guide and agent/progress conventions. All bootstrap items B01–B06 are complete; all product phase gates remain open.
+**Completed this session:** SQLite driver experiment/decision, strict configuration, private SQLite state/migrations, initialization/status CLI, and transaction/crash/permission tests. All bootstrap items B01–B06 are complete; all product phase gates remain open.
 
-**Next action:** begin P1-01 with a small Docker-driven SQLite driver experiment and validate candidate builds on the macOS/Linux CI matrix. Measure memory and state growth on representative synthetic inventories, verify transaction/recovery behavior, and record the selected driver before implementing persistent state. Then move to P1-02/P1-03.
+**Next action:** finish native CI verification for this foundation. Then implement P1-04: one-worker instance lock, private local control channel, pause/resume, persistent job leasing and crash recovery. Integrate existing `jobs`/`daily_budgets` tables and passive WAL checkpoint/backpressure APIs. Keep configuration/state initialization from writing concurrently with a future worker. Follow with P1-05 inventory and P1-06 budget enforcement.
 
 **Remaining decisions:** first automation-eligible cache category; supported minimum OS/libc versions; tuned resource/scan-root defaults; license. Go and naming are settled.
 
-**Do not infer:** a successful cross-build is not native platform validation; passing bootstrap CI is not completion of Phase 1; none of the proposed scanner/cleanup commands exist yet.
+**Do not infer:** the synthetic database benchmark is not an hourly scanner resource test; config budget values are not enforced yet; physical root identity/aliases/availability are not established by config parsing; no scanner/worker/cleanup commands exist yet. Future action/restore data must never be removed by inventory rebuilds. Existing configuration can initialize/reopen state through `rydd state init` without being overwritten.

@@ -8,12 +8,15 @@ task=${1:-check}
 if [ "$#" -gt 0 ]; then shift; fi
 
 case "$task" in
-    fmt) exec go fmt ./... ;;
+    fmt)
+        go fmt ./...
+        (cd experiments/sqlite && go fmt ./...)
+        ;;
     test) exec go test ./... "$@" ;;
     race) exec go test -race ./... "$@" ;;
     run) exec go run ./cmd/rydd "$@" ;;
     check)
-        unformatted=$(gofmt -l cmd internal)
+        unformatted=$(gofmt -l cmd internal experiments/sqlite)
         if [ -n "$unformatted" ]; then
             echo 'Run ./scripts/dev fmt to format these files:' >&2
             printf '%s\n' "$unformatted" >&2
@@ -33,9 +36,20 @@ case "$task" in
             done
         done
         ;;
+    sqlite-check)
+        cd experiments/sqlite
+        go vet ./...
+        go test ./...
+        CGO_ENABLED=1 go test -tags sqlite_cgo ./...
+        ;;
+    sqlite-bench)
+        cd experiments/sqlite
+        go run . "$@"
+        CGO_ENABLED=1 go run -tags sqlite_cgo . "$@"
+        ;;
     *)
         echo "Unknown task: $task" >&2
-        echo 'Tasks: check, fmt, test, race, run, build-all' >&2
+        echo 'Tasks: check, fmt, test, race, run, build-all, sqlite-check, sqlite-bench' >&2
         exit 2
         ;;
 esac

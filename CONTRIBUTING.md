@@ -4,7 +4,7 @@
 
 Use an existing Docker engine with Compose v2+ and `./scripts/dev`. The wrapper builds a pinned Go development image, runs a disposable container as your UID/GID, and retains compiler/module caches in a Docker volume. There are no continuously running development services.
 
-The Go version is pinned in `Dockerfile` and `go.mod`. Update them together, including any CI pin that cannot be read from `go.mod`. `GOTOOLCHAIN=local` prevents implicit toolchain downloads. There are currently no third-party Go dependencies.
+The Go version is pinned in `Dockerfile` and both `go.mod` files. Update them together, including any CI pin that cannot be read from `go.mod`. `GOTOOLCHAIN=local` prevents implicit toolchain downloads. Production direct dependencies are modernc SQLite and the pelletier TOML parser; the isolated SQLite experiment also includes the alternative mattn driver. See [ADR 001](docs/decisions/001-sqlite-driver.md).
 
 ```sh
 ./scripts/dev check
@@ -12,7 +12,9 @@ The Go version is pinned in `Dockerfile` and `go.mod`. Update them together, inc
 ./scripts/dev build-all
 ```
 
-`check` enforces formatting, runs `go vet ./...` and `go test ./...`, and builds the host-container CLI. The bootstrap has no feature tests yet; add meaningful tests with the scanner, scheduler, database and action executor. `build-all` currently uses `CGO_ENABLED=0`; revisit this deliberately when selecting a SQLite driver or adding native integrations.
+`check` enforces formatting, runs `go vet ./...` and `go test ./...`, and builds the host-container CLI. Tests cover configuration, CLI initialization, migration/identity checks, read-only access, writer contention, WAL snapshots, path bytes and process-crash recovery. Scanner/scheduler/action tests must follow with those implementations. `build-all` uses `CGO_ENABLED=0`, supported by the selected SQLite driver; revisit this deliberately when adding native integrations.
+
+Run `./scripts/dev sqlite-check` for both drivers' isolated correctness checks and `./scripts/dev sqlite-bench -rows 1000000` for a synthetic metadata comparison. The experiment is a nested module, so root `go test ./...` does not include it. Native CI runs it explicitly. Cache subdirectories are separated by UID to prevent ownership conflicts when a Compose volume is reused by different users.
 
 For arbitrary Go commands:
 
@@ -21,6 +23,8 @@ For arbitrary Go commands:
 # Inside the disposable container:
 go version
 ```
+
+For noninteractive commands, `./scripts/dev shell -c 'go version'` preserves the same UID and cache setup. Prefer this wrapper over calling Compose directly.
 
 New dependencies can be added deliberately inside that shell using `GOFLAGS= go get ...` followed by `GOFLAGS= go mod tidy`. Commit `go.mod` and `go.sum` together. Normal commands use read-only module mode.
 
@@ -35,7 +39,7 @@ dist/rydd-linux-arm64
 dist/rydd-linux-amd64
 ```
 
-Run the binary matching your host for native smoke tests, for example `./dist/rydd-darwin-arm64 --help` on Apple Silicon. Do not use the Linux container's `dist/rydd` on macOS. The bootstrap CLI only prints help/version; later scanner/service tests must use selected disposable roots and explicit setup.
+Run the binary matching your host for native smoke tests, for example `./dist/rydd-darwin-arm64 --help` on Apple Silicon. Do not use the Linux container's `dist/rydd` on macOS. Use an explicit private directory for native fixture state, such as `./dist/rydd-darwin-arm64 --data-dir "$PWD/.local/native-demo" init --root "$PWD"`. The current CLI does not scan; later scanner/service tests must use selected disposable roots and explicit setup.
 
 GitHub Actions runs checks and race detection on native macOS/Linux runners, plus Docker workflow validation and four-target cross-builds on Linux. Native CI does not replace physical laptop battery/sleep testing or the read-only soak.
 

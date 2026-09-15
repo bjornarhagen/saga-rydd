@@ -1,6 +1,6 @@
 # Saga — Rydd: implementation plan
 
-Status: accepted direction; development scaffold in place. See [PROGRESS.md](PROGRESS.md) for implementation status and acceptance evidence. Scanning and cleanup are not implemented.
+Status: configuration and state foundation implemented. See [PROGRESS.md](PROGRESS.md) for implementation status and acceptance evidence. Scanning and cleanup are not implemented.
 
 ## 1. Product direction
 
@@ -19,7 +19,7 @@ Confirmed product choices: the app is Rydd, part of the Saga collection; v1 supp
 
 ## 2. Stack and process model
 
-Confirmed stack: **Go + SQLite + TOML configuration**, distributed as one executable. Go is a practical fit for a maintainable CLI and background service; its supported targets include macOS and Linux. Select the SQLite driver after a small memory/build portability experiment; do not promise a fully static binary before checking its dependencies. [Go targets](https://go.dev/doc/install/source#environment)
+Confirmed stack: **Go + SQLite + TOML configuration**, distributed as one executable. Go is a practical fit for a maintainable CLI and background service; its supported targets include macOS and Linux. The database experiment selected the pure-Go `modernc.org/sqlite` driver; see [ADR 001](docs/decisions/001-sqlite-driver.md) for measurements and limitations. The foundation supports CGO-free macOS/Linux cross-builds; future native integrations must preserve or deliberately revisit that property. [Go targets](https://go.dev/doc/install/source#environment)
 
 Development should happen in disposable Docker containers, using the repository's `scripts/dev` wrapper; no host Go installation is required. Native macOS/Linux CI and targeted native smoke tests validate platform behavior that Linux containers cannot establish. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
@@ -49,6 +49,8 @@ Terminal CLI ── reads reports ────────────► SQLite
 Text files are appropriate for configuration and exports. The inventory needs indexed size/hash queries, partial updates, a persistent queue, and crash recovery. Implementing these over many JSON files would effectively create a custom database. SQLite is designed for local application storage and requires no database server. [SQLite use cases](https://www.sqlite.org/whentouse.html)
 
 Use SQLite WAL mode so reports can read while scanning writes. Keep transactions short, set bounded busy retries, and monitor/checkpoint WAL growth. WAL has auxiliary files and belongs on a local filesystem, not a network share. [SQLite WAL](https://www.sqlite.org/wal.html)
+
+Implemented foundation defaults: FULL durability, a 4 MiB cache per connection, memory mapping disabled, one connection per store, 1 second busy timeout, and automatic checkpointing every 1000 pages. Passive checkpoint support and a 32 MiB WAL backpressure signal are available; enforcement in the scheduler is still pending. Reader commands do not initialize or migrate state. Application/schema identity rejects unrelated or newer databases.
 
 Default locations:
 
