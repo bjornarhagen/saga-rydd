@@ -94,13 +94,28 @@ func TestInventoryWorkerKillAndComplete(t *testing.T) {
 	}
 	t.Setenv("RYDD_TEST_SCAN_FAST", "1")
 	child, _ = spawnWorker(t, dir, false)
-	waitUntil(t, func() bool {
+	// This verifies recovery correctness, not throughput. Race-instrumented
+	// SQLite on a shared CI runner can need more than five seconds for the
+	// 21 directory passes. Keep a bounded deadline and report saved progress.
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		select {
+		case err := <-child.done:
+			t.Fatalf("restarted worker exited before completion: %v", err)
+		default:
+		}
 		summary, err := r.Summary(context.Background())
 		if err != nil {
 			t.Fatal(err)
 		}
-		return summary.Entries == 342 && summary.CompleteDirectories == 21 && summary.PendingJobs == 0 && summary.RunningJobs == 0 && summary.DirectoryErrors == 0
-	})
+		if summary.Entries == 342 && summary.CompleteDirectories == 21 && summary.PendingJobs == 0 && summary.RunningJobs == 0 && summary.DirectoryErrors == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("inventory recovery did not finish: %+v", summary)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 	control(t, dir, "stop")
 	waitExit(t, child.done)
 }
