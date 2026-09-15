@@ -9,7 +9,7 @@ This file is the canonical implementation tracker. The architecture and full acc
 - **Confirmed:** Go, local SQLite, TOML configuration, macOS/Linux, low resource usage, developer clutter plus duplicates, opt-in automatic cleanup in v1.
 - **Development:** Docker first; do not require host Go or additional host development tooling.
 - **Implemented app behavior:** initialization, saved/live status, paginated largest-file and selected-directory size reports, worker controls and opt-in experimental metadata scanning; private TOML/SQLite state, exclusive writer lock, bounded batches, atomic inventory/job commits and directory reconciliation watermarks. Durable dispatch cadence/daily batch reservations, child-entry pacing with partial batches, live scanner accounting, WAL backpressure and versioned JSON commands are implemented. Fine-grained CPU/I/O/power enforcement, service installation and cleanup remain unavailable; the first review-required node_modules candidate report is available.
-- **Active task:** P1-08c in progress: user-requested foreground scan of a chosen folder, entry-delay controls and directory report aliases, with isolated manual inventory.
+- **Active task:** none. P1-08c implemented and verified; P2-02b generated dependency-tree aggregation is next.
 - **Blockers:** none currently. Scanner resource targets and native service behavior remain unvalidated; the database experiment is not a scanner benchmark.
 
 ## Execution priority — read-only MVP first
@@ -61,7 +61,7 @@ The next milestone is: **Rydd shows useful cleanup candidates with enough eviden
   - [x] P1-08a — Versioned JSON controls/status, stable machine errors and capability discovery for AI and scripts.
   - [x] P1-08b1 — paginated largest-observed-files report, saved-inventory coverage/freshness, human/JSON parity and offline availability.
   - [x] P1-08b2 — incremental/bounded directory-size reports with partial/stale/unknown labels and logical/allocated-size qualifications.
-  - [ ] P1-08c — Foreground `scan -d PATH [-s MS | --now]`, isolated per-folder state, cancellation and `report -d PATH` / scoped candidate reports.
+  - [x] P1-08c — Foreground `scan -d PATH [-s MS | --now]`, isolated per-folder state, cancellation and `report -d PATH` / scoped candidate reports.
 - [ ] P1-09 — Implement launchd/systemd user service installation, status, stop and uninstall; document other supervisors.
 - [ ] P1-GATE — Verify restart/sleep recovery, disconnected volumes, permissions, concurrent reports and bounded memory on wide/deep million-entry fixtures. No deletion capability in this phase.
 
@@ -179,9 +179,9 @@ The next milestone is: **Rydd shows useful cleanup candidates with enough eviden
 
 **Last updated:** 2026-09-16.
 
-**Completed this session:** implementing P1-08c user-requested manual foreground scanning with per-folder private state, exact entry-delay controls and report directory aliases/scoped candidates. Tests cover isolated roots, unchanged background config/inventory, exclusions, cancellation/recovery, writer contention, invalid arguments and slow pacing. Docker checks/race and four-target builds passed. Native macOS manual-scan and candidate smoke passed; actual SIGINT termination and rerun recovery passed on a disposable fixture. CI verification remains pending. The user also requested aggregated dependency-tree inventory; P2-02b is now the next storage priority. Its boundary/measurement behavior is planned, not yet implemented. No private measurements are published.
+**Completed this session:** implemented P1-08c user-requested manual foreground scanning with per-folder private state, exact entry-delay controls and report directory aliases/scoped candidates. Tests cover isolated roots, unchanged background config/inventory, exclusions, cancellation/recovery, writer contention, invalid arguments and slow pacing. Docker checks/race and four-target builds passed. Native macOS manual-scan and candidate smoke passed; actual SIGINT termination and rerun recovery passed on a disposable fixture. [CI run 35032953116](https://github.com/bjornarhagen/saga-rydd/actions/runs/35032953116) passed for `f98cc9e`: native Linux (1m12s), native macOS (1m21s), Docker/cross-builds (2m43s). The installed Mac CLI was updated atomically without interrupting its existing worker; no schema migration was needed. P1-08c is complete; broader phase gates remain open. The user also requested aggregated dependency-tree inventory; P2-02b is now the next storage priority. Its boundary/measurement behavior is planned, not yet implemented. No private measurements are published.
 
-**Next action:** finish P1-08c native/CI validation and installed binary update, then implement P2-02b generated-tree aggregation. Preserve the chosen-folder read-only trial scope. Do not skip node_modules traversal and call its size zero; exact aggregate measurement still needs bounded metadata walks.
+**Next action:** implement P2-02b generated-tree aggregation: discover node_modules as one item and measure it with resumable bounded metadata walks, without ordinary per-file inventory by default. Add mutation/restart/partial-size and hardlink fixtures plus a detailed-inventory override. Preserve the chosen-folder read-only trial scope. Do not skip node_modules traversal and call its size zero; exact aggregate measurement still needs bounded metadata walks.
 
 **Remaining decisions:** first automation-eligible cache category; supported minimum OS/libc versions; tuned resource/scan-root defaults; license. Go and naming are settled.
 

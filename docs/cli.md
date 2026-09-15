@@ -102,7 +102,7 @@ Keep discovery, review and execution as explicit commands. Machine readability i
 
 ## Saved cleanup candidates
 
-`rydd report --candidates [--cursor TOKEN] [--json]` reports the first experimental category: potentially old `node_modules`. It cannot be combined with `--directory` or `--limit`. JSON uses `report.candidates`; the standard API envelope and errors are unchanged. `capabilities` advertises `findings: true`; cleanup, duplicates and service installation remain false.
+`rydd report --candidates [--cursor TOKEN] [--json]` reports the first experimental category: potentially old `node_modules`. It cannot be combined with `--limit`; `-d` / `--directory` optionally selects an exact manual-scan root. JSON uses `report.candidates`; the standard API envelope and errors are unchanged. `capabilities` advertises `findings: true`; cleanup, duplicates and service installation remain false.
 
 Rule `node_modules_old_metadata` version 1 requires a saved regular-file sibling `package.json`, both mtimes at least 90 days old, and a common completed parent listing. Recognition is explicitly `manifest_filename_only`. Contents, lockfiles, source activity and local dependency modifications are unverified. Old metadata is not proof of inactivity or safe deletion. Every finding is `review_required`, with an empty `available_actions` list.
 
