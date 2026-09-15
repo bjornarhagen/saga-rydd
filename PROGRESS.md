@@ -4,12 +4,12 @@ This file is the canonical implementation tracker. The architecture and full acc
 
 ## Current state
 
-- **Stage:** P1-01–P1-05, P1-06a, P1-06b1/b2 and P1-08a/b1 complete; experimental metadata inventory verified on native macOS/Linux and Docker. The rest of Phase 1 remains open.
+- **Stage:** P1-01–P1-05, P1-06a, P1-06b1/b2 and P1-08a/b1/b2 complete; experimental metadata inventory verified on native macOS/Linux and Docker. The rest of Phase 1 remains open.
 - **App / brand:** Rydd / Saga. Repository: `bjornarhagen/saga-rydd`; executable: `rydd`.
 - **Confirmed:** Go, local SQLite, TOML configuration, macOS/Linux, low resource usage, developer clutter plus duplicates, opt-in automatic cleanup in v1.
 - **Development:** Docker first; do not require host Go or additional host development tooling.
-- **Implemented app behavior:** initialization, saved/live status, paginated largest-file reports, worker controls and opt-in experimental metadata scanning; private TOML/SQLite state, exclusive writer lock, bounded batches, atomic inventory/job commits and directory reconciliation watermarks. Durable dispatch cadence/daily batch reservations, child-entry pacing with partial batches, live scanner accounting, WAL backpressure and versioned JSON commands are implemented. Fine-grained CPU/I/O/power enforcement, service installation, findings and cleanup remain unavailable.
-- **Active task:** P1-08b2 bounded saved-subtree measurement through `report --directory PATH`, with completeness/freshness and qualified storage accounting.
+- **Implemented app behavior:** initialization, saved/live status, paginated largest-file and selected-directory size reports, worker controls and opt-in experimental metadata scanning; private TOML/SQLite state, exclusive writer lock, bounded batches, atomic inventory/job commits and directory reconciliation watermarks. Durable dispatch cadence/daily batch reservations, child-entry pacing with partial batches, live scanner accounting, WAL backpressure and versioned JSON commands are implemented. Fine-grained CPU/I/O/power enforcement, service installation, findings and cleanup remain unavailable.
+- **Active task:** none. P1-08b2 is verified; next is the end-to-end P2-01a/P2-02a `node_modules` recommendation slice.
 - **Blockers:** none currently. Scanner resource targets and native service behavior remain unvalidated; the database experiment is not a scanner benchmark.
 
 ## Execution priority — read-only MVP first
@@ -60,14 +60,14 @@ The next milestone is: **Rydd shows useful cleanup candidates with enough eviden
 - [ ] P1-08 — Implement paginated saved reports, coverage/freshness, diagnostics and bounded logs/state growth.
   - [x] P1-08a — Versioned JSON controls/status, stable machine errors and capability discovery for AI and scripts.
   - [x] P1-08b1 — paginated largest-observed-files report, saved-inventory coverage/freshness, human/JSON parity and offline availability.
-  - [ ] P1-08b2 — **Next:** incremental/bounded directory-size reports with partial/stale/unknown labels and logical/allocated-size qualifications.
+  - [x] P1-08b2 — incremental/bounded directory-size reports with partial/stale/unknown labels and logical/allocated-size qualifications.
 - [ ] P1-09 — Implement launchd/systemd user service installation, status, stop and uninstall; document other supervisors.
 - [ ] P1-GATE — Verify restart/sleep recovery, disconnected volumes, permissions, concurrent reports and bounded memory on wide/deep million-entry fixtures. No deletion capability in this phase.
 
 ## Phase 2 — useful recommendations
 
 - [ ] P2-01 — Implement evidence-based finding model, rule versions, risk/confidence, dismissal and persistent exclusions.
-  - [ ] P2-01a — Minimum saved finding/report contract for one detector: identity, rule/version, evidence, review requirement, freshness and measured-size completeness; keep unsupported actions explicit.
+  - [ ] P2-01a — **Next, with P2-02a:** minimum saved finding/report contract for one detector: identity, rule/version, evidence, review requirement, freshness and measured-size completeness; keep unsupported actions explicit.
 - [ ] P2-02 — Implement old `node_modules` detection with project recognition and incremental directory measurement.
   - [ ] P2-02a — First end-to-end recommendation: recognized project, potentially stale dependencies, measured/partial size, evidence and regeneration caveats in human/JSON reports. Age alone never establishes safety or actual inactivity.
 - [ ] P2-03 — Implement one recognized build-output category and one narrowly validated cache category eligible for later automation.
@@ -166,9 +166,9 @@ The next milestone is: **Rydd shows useful cleanup candidates with enough eviden
 
 **Last updated:** 2026-09-15.
 
-**Completed this session:** implemented P1-08b2 selected-directory measurement via `rydd report --directory ABSOLUTE_PATH`, with human/JSON parity. One saved read snapshot examines at most 10,000 entries and validates up to 256 saved ancestors. Results distinguish recorded-complete, partial, stale and unknown; null sizes distinguish unknown from empty. Logical file bytes are per path; known hardlinked allocations are counted once, while conflicts/missing identities are qualified. Overflow is rejected. No filesystem scan, schema change or dependency added. Docker checks/race/four-target builds passed; native macOS fixture/report smoke passed with the expected content and allocated totals. Additional tests cover a fully recorded empty folder, read-only snapshots, excluded directories, unavailable roots and conflicting inode observations. Native CI verification remains pending. This is bounded on-demand measurement, not persisted aggregation or global directory ranking; measurements above the cap remain explicitly partial.
+**Completed this session:** implemented P1-08b2 selected-directory measurement via `rydd report --directory ABSOLUTE_PATH`, with human/JSON parity. One saved read snapshot examines at most 10,000 entries and validates up to 256 saved ancestors. Results distinguish recorded-complete, partial, stale and unknown; null sizes distinguish unknown from empty. Logical file bytes are per path; known hardlinked allocations are counted once, while conflicts/missing identities are qualified. Overflow is rejected. No filesystem scan, schema change or dependency added. Docker checks/race/four-target builds passed; native macOS fixture/report smoke passed with the expected content and allocated totals. Additional tests cover a fully recorded empty folder, read-only snapshots, excluded directories, unavailable roots and conflicting inode observations. [CI run 35019688145](https://github.com/bjornarhagen/saga-rydd/actions/runs/35019688145) passed for `437cf61`: native Linux (50s), native macOS (1m13s), and Docker checks/four-target builds/native reports (3m14s). P1-08b2 is complete; the wider reporting/MVP gates remain open. The installed Mac binary was updated and both formats verified against saved playground observations; no rescan, state migration or worker start occurred. This is bounded on-demand measurement, not persisted aggregation or global directory ranking; measurements above the cap remain explicitly partial.
 
-**Next action:** finish P1-08b2 native verification, then implement the smallest P2-01a/P2-02a end-to-end `node_modules` recommendation slice. Reuse measured size/status evidence, recognize the project, show freshness and regeneration caveats, and retain review-required classification; timestamps alone do not prove inactivity or safe deletion. Follow with MVP-TRIAL on an explicitly selected real development folder. Do not return to resource hardening by default. Large-directory measurement continuation remains a known limitation to prioritize from MVP feedback.
+**Next action:** implement the smallest P2-01a/P2-02a end-to-end `node_modules` recommendation slice. Reuse measured size/status evidence, recognize the project, show freshness and regeneration caveats, and retain review-required classification; timestamps alone do not prove inactivity or safe deletion. Follow with MVP-TRIAL on an explicitly selected real development folder. Do not return to resource hardening by default. Large-directory measurement continuation remains a known limitation to prioritize from MVP feedback.
 
 **Remaining decisions:** first automation-eligible cache category; supported minimum OS/libc versions; tuned resource/scan-root defaults; license. Go and naming are settled.
 
