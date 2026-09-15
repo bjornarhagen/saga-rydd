@@ -16,7 +16,7 @@ The delivery phases in section 11 remain scope/acceptance groups, not a strict d
 
 Do not put complete CPU/metadata/battery budgets, native priority tuning, service installation, general diagnostics or the full soak ahead of this MVP unless a demonstrated dependency blocks the trial or its correctness. Minimum stale-data/measurement fixes needed for truthful reports may be pulled forward from P1-07. Preserve current safeguards and experimental scope; this plan does not authorize broad unattended personal scans or deletion. Complete resource, platform, action-safety and soak gates still apply to their respective unattended/release claims.
 
-The controlled trial procedure is in [docs/mvp-trial.md](docs/mvp-trial.md). CI remains on GitHub-hosted runners by user decision; keep native macOS/Linux validation.
+The controlled trial procedure is in [docs/mvp-trial.md](docs/mvp-trial.md). The [first native project trial](docs/mvp-trial-results.md) exposed a specific reporting gap: empty candidate pages do not explain selection failures. Implement bounded per-page rejection/coverage diagnostics (P2-05a) before moving on to duplicates or cleanup; retain the current rule pending owner feedback. CI remains on GitHub-hosted runners by user decision; keep native macOS/Linux validation.
 
 **MVP acceptance:** on synthetic fixtures and a selected development-folder trial, a user can open the saved report, see meaningful file/folder sizes with honest completeness/freshness, and assess at least one explained cleanup-candidate category. AI receives the same evidence through the documented JSON contract. The MVP is read-only; it does not require full v1 cleanup/automation to be useful.
 

@@ -1,6 +1,6 @@
 # Controlled read-only MVP trial
 
-Status: procedure prepared; real-folder trial awaits a user-selected project.
+Status: first controlled project scan completed; see [general lessons](mvp-trial-results.md). Owner feedback and selection-diagnostic review remain open.
 Task: MVP-TRIAL in [PROGRESS.md](../PROGRESS.md).
 
 ## Scope and setup
