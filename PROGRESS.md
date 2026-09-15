@@ -4,12 +4,12 @@ This file is the canonical implementation tracker. The architecture and full acc
 
 ## Current state
 
-- **Stage:** configuration/state foundation complete (P1-01–P1-03); worker foundation (P1-04) implemented and locally validated, awaiting native CI. The rest of Phase 1 remains open.
+- **Stage:** configuration, state and worker foundations complete (P1-01–P1-04). The rest of Phase 1 remains open.
 - **App / brand:** Rydd / Saga. Repository: `bjornarhagen/saga-rydd`; executable: `rydd`.
 - **Confirmed:** Go, local SQLite, TOML configuration, macOS/Linux, low resource usage, developer clutter plus duplicates, opt-in automatic cleanup in v1.
 - **Development:** Docker first; do not require host Go or additional host development tooling.
 - **Implemented app behavior:** `init`, `config check`, `state init`, saved/live `status`/JSON, foreground `daemon`, durable `pause`/`resume`, and `stop`; private TOML/SQLite state, exclusive writer lock and saved queue. No scanner, service installation or cleanup capability.
-- **Active task:** P1-04: native CI verification and final handoff for the worker foundation.
+- **Active task:** none; next is P1-05, streaming inventory and scanner integration.
 - **Blockers:** none currently. Scanner resource targets and native service behavior remain unvalidated; the database experiment is not a scanner benchmark.
 
 ## How to use this tracker
@@ -33,7 +33,7 @@ This file is the canonical implementation tracker. The architecture and full acc
 - [x] P1-01 — Compare SQLite drivers for RSS, state size, crash behavior and macOS/Linux build portability; record decision and benchmark method. See ADR 001 and CI evidence below.
 - [x] P1-02 — Implement TOML configuration, standard platform data directories, root selection, exclusions and validation. Tested in Docker and native macOS/Linux CI.
 - [x] P1-03 — Implement SQLite schema/migrations, short transactions, WAL maintenance and durable-vs-rebuildable state boundaries. Tested in Docker and native macOS/Linux CI. Scheduler enforcement of WAL backpressure belongs to P1-06.
-- [ ] P1-04 — Implement one-worker lock, private control channel, pause/resume and saved scheduler jobs.
+- [x] P1-04 — Implement one-worker lock, private control channel, pause/resume and saved scheduler jobs. Verified with process-kill recovery, native macOS/Linux CI, Docker controls and four-target builds; see worker evidence below.
 - [ ] P1-05 — Implement streaming inventory, volume identity, symlink/mount boundaries, permission errors and reconciliation.
 - [ ] P1-06 — Implement independent metadata/read/CPU budgets, persistent daily limits, sleep/backoff and power-state fallbacks.
 - [ ] P1-07 — Implement adaptive revisits, fair scheduling, large-directory continuation and stale/missing-entry handling.
@@ -106,15 +106,16 @@ This file is the canonical implementation tracker. The architecture and full acc
 - `TestProcessKillRecoveryAndSIGTERM` kills a separate worker with an active lease, restarts through its stale socket, verifies the saved cursor and recovery count, and checks SIGTERM plus persistent pause across process restarts.
 - `./scripts/dev check`, `./scripts/dev race` and `./scripts/dev build-all` passed. `scripts/worker-smoke` passed with the Docker-built native macOS arm64 binary and the Linux container binary. No host Go installation was used.
 - Separate Docker command containers successfully paused, queried, resumed and stopped a fixture worker through the shared runtime volume. All fixture workers exited; no service was installed.
-- Initial [CI run 34977696796](https://github.com/bjornarhagen/saga-rydd/actions/runs/34977696796) passed native macOS/Linux, but Docker exposed a pacing error under slower job claims: database latency shortened the gap between handler starts. Pacing now uses the actual handler start time. Full CI verification of the correction is pending; do not check off P1-04 until it passes.
+- Initial [CI run 34977696796](https://github.com/bjornarhagen/saga-rydd/actions/runs/34977696796) passed native macOS/Linux, but Docker exposed a pacing error under slower job claims: database latency shortened the gap between handler starts. Pacing now uses the actual handler start time; ten repeated pacing regressions passed locally, along with checks/race/four-target builds.
+- Final [CI run 34978064639](https://github.com/bjornarhagen/saga-rydd/actions/runs/34978064639) passed for implementation commit `979257c`: native Linux (32s), native macOS (49s), Docker checks/four-target builds/native Linux binary smoke (2m37s). Native jobs ran application tests, race checks, SQLite experiments and the new worker CLI smoke. P1-04 is complete; full Phase 1 gates remain open.
 
 ## Handoff
 
 **Last updated:** 2026-09-15.
 
-**Completed this session:** implemented P1-04's writer lock, private same-user control protocol, durable pause, queue leasing/cursor recovery, scheduler pacing and worker CLI. Docker tests/race checks, four cross-builds and native macOS arm64/Linux-container CLI smoke checks passed. Native CI verification is pending before checking off P1-04. All bootstrap items B01–B06 are complete; all full product phase gates remain open.
+**Completed this session:** P1-04's writer lock, private same-user control protocol, durable pause, queue leasing/cursor recovery, scheduler pacing and worker CLI. Docker tests/race checks, four cross-builds, local native macOS arm64/Linux-container smoke checks and native macOS/Linux CI passed. Implementation is in `fef0d9a` with the pacing correction in `979257c`. All bootstrap items B01–B06 and P1-01–P1-04 are complete; all full product phase gates remain open.
 
-**Next action:** verify native CI for P1-04, then implement P1-05 streaming inventory. Read [worker integration notes](docs/worker.md): seed jobs through the owning event loop, return bounded inventory batches, and commit effects/cursor changes in one token-checked transaction. Establish native volume identity, symlink/mount boundaries and resumable permission-error/reconciliation behavior using disposable fixtures. Follow with P1-06 daily budgets, power handling and WAL backpressure; no real-user background scans before resource enforcement.
+**Next action:** implement P1-05 streaming inventory. Read [worker integration notes](docs/worker.md): seed jobs through the owning event loop, return bounded inventory batches, and commit effects/cursor changes in one token-checked transaction. Establish native volume identity, symlink/mount boundaries and resumable permission-error/reconciliation behavior using disposable fixtures. Follow with P1-06 daily budgets, power handling and WAL backpressure; no real-user background scans before resource enforcement.
 
 **Remaining decisions:** first automation-eligible cache category; supported minimum OS/libc versions; tuned resource/scan-root defaults; license. Go and naming are settled.
 
