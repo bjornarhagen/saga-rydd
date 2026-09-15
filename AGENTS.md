@@ -4,7 +4,8 @@
 
 1. Read `README.md`, `PROGRESS.md`, then the relevant sections of `PLAN.md`.
 2. Inspect the working tree before editing. Preserve other contributors' changes.
-3. Pick a bounded unchecked task from `PROGRESS.md`; record it as in progress before substantial implementation.
+3. Follow the execution-priority section and handoff in `PROGRESS.md`, not numeric phase order. The approved next milestone is saved reports plus one `node_modules` recommendation category, followed by a controlled read-only trial. Do not resume resource hardening or service work by default.
+4. Pick a bounded unchecked task from that priority; record it as in progress before substantial implementation. Supporting work may be pulled forward only for a demonstrated MVP correctness/safety dependency, recorded in the handoff.
 
 ## Development
 

@@ -2,6 +2,24 @@
 
 Status: configuration, state, worker and experimental metadata inventory implemented. See [PROGRESS.md](PROGRESS.md) for verification and acceptance evidence. Full resource enforcement, findings and cleanup remain unimplemented.
 
+## Current execution priority: useful read-only MVP
+
+**User-approved decision:** prioritize an end-to-end report and recommendation workflow now. The existing persistence, filesystem safeguards, bounded scanner, controls and pacing are sufficient foundations for controlled read-only trials. Full resource hardening is important for unattended use, but is not a prerequisite for saved reports or the first detector.
+
+The delivery phases in section 11 remain scope/acceptance groups, not a strict dependency chain. Follow the execution order and task IDs in [PROGRESS.md](PROGRESS.md#execution-priority--read-only-mvp-first); this decision supersedes earlier resource-controls-first next steps.
+
+1. **Saved-inventory report (P1-08b1):** largest observed files; bounded deterministic pagination; coverage, freshness and skipped/unavailable locations; equivalent human/JSON output; available while the worker is stopped or scanning is incomplete. Clearly distinguish historical observations from verified current state.
+2. **Directory sizes (P1-08b2):** bounded/incremental measurement with explicit partial, stale and unknown states. Do not imply that completing a directory's direct children establishes whole-subtree completeness. Separate logical size, allocated size and potential reclaimable space; qualify hardlinks/shared storage and overlapping totals.
+3. **One recommendation category (P2-01a/02a plus the necessary P2-05 explanation slice):** potentially stale `node_modules` in recognized projects. Show measured size/completeness, project identity, rule/evidence, observation freshness and regeneration instructions/caveats. Label candidates review-required. Old timestamps alone prove neither inactivity nor safe deletion; insufficient observation history must be visible. Keep the first finding model small enough to deliver this workflow without implementing all future actions/policies.
+4. **Controlled real-folder feedback (MVP-TRIAL):** after synthetic/native validation, use a specifically selected development folder, read-only. Assess useful candidates, false positives, misleading sizes, overlap, freshness and whether the evidence supports decisions. Record sanitized lessons and revise the next work accordingly.
+5. **After this feedback:** develop duplicate detection and reviewed cleanup alongside remaining resource controls. Destructive operations still require their own revalidation, approval and recovery safeguards before use.
+
+Do not put complete CPU/metadata/battery budgets, native priority tuning, service installation, general diagnostics or the full soak ahead of this MVP unless a demonstrated dependency blocks the trial or its correctness. Minimum stale-data/measurement fixes needed for truthful reports may be pulled forward from P1-07. Preserve current safeguards and experimental scope; this plan does not authorize broad unattended personal scans or deletion. Complete resource, platform, action-safety and soak gates still apply to their respective unattended/release claims.
+
+**MVP acceptance:** on synthetic fixtures and a selected development-folder trial, a user can open the saved report, see meaningful file/folder sizes with honest completeness/freshness, and assess at least one explained cleanup-candidate category. AI receives the same evidence through the documented JSON contract. The MVP is read-only; it does not require full v1 cleanup/automation to be useful.
+
+**Why this order:** useful outputs test whether the inventory, size model and recommendations answer real questions. Infrastructure improvements should follow observed needs as well as safety requirements, rather than delaying that feedback until every supporting feature is finished.
+
 ## 1. Product direction
 
 Install a small terminal application, enable its background worker, and let it gradually build an inventory over days or weeks. Opening the terminal app should immediately show useful findings from its saved inventory, even while scanning is incomplete or the worker is stopped.
@@ -267,6 +285,8 @@ Reuse category ideas and explicit review prompts. Reimplement the mechanics:
 
 ## 11. Delivery phases and acceptance gates
 
+These group the full product scope. Use the current execution priority above for task selection; completing every Phase 1 item is not required before the read-only Phase 2 MVP slice. Full gate completion must still be supported by evidence.
+
 ### Phase 1 — read-only foundation
 
 Implement binary/CLI skeleton, config, SQLite migrations, root selection, exclusions, persistent scheduler, resource budgets, incremental inventory and reports. Add service adapters and one-instance enforcement.
@@ -287,7 +307,7 @@ Acceptance: matches independently verified fixture groups; samples never authori
 
 ### Phase 4 — manual and opt-in automatic cleanup
 
-Add immutable plans, revalidation, quarantine, restoration, explicit purge, durable action recovery and carefully scoped manual Docker cleanup. Add policy preview/enable/disable, category eligibility, scope/age limits, quotas, and explicitly enabled retention-based purge. This completes the minimum useful product, including assisted deletion/deduplication and opt-in automatic cleanup.
+Add immutable plans, revalidation, quarantine, restoration, explicit purge, durable action recovery and carefully scoped manual Docker cleanup. Add policy preview/enable/disable, category eligibility, scope/age limits, quotas, and explicitly enabled retention-based purge. This completes the planned v1 action scope, including assisted deletion/deduplication and opt-in automatic cleanup. The earlier read-only MVP is independently useful and does not wait for this phase.
 
 Acceptance: test stale plans, symlink/path swaps, modified keepers, partial failures, crash points between journal and filesystem updates, interrupted purges, restoration collisions and full disks. Test automatic-policy scope boundaries, disabled/revoked policies, quota accounting after restart, retention clocks, and exclusion changes before purge. Any uncertain action must stop safely and provide an actionable result.
 
@@ -307,4 +327,4 @@ Later candidates: additional ecosystems and automatic categories, personal-file 
 4. Choose initial roots/resource defaults during onboarding design and benchmarks.
 5. Confirmed: Saga — Rydd; repository `saga-rydd`, CLI `rydd`.
 
-Recommended first implementation milestone: the read-only background inventory and report. It establishes whether the app is quiet and useful before introducing deletion.
+Current milestone: useful saved reports and one review-required `node_modules` recommendation category, followed by controlled real-folder feedback. See the execution priority above and the task handoff in PROGRESS.md.

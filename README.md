@@ -8,6 +8,8 @@ Rydd will gradually discover developer clutter and duplicate files, explain what
 
 For humans and AI: readable output by default, versioned JSON with `--json`, and `rydd capabilities --json` for discovery. Live status also reports scanner metadata API counters to help inspect background work. See the [CLI contract](docs/cli.md).
 
+**Next milestone: useful read-only reports and one `node_modules` recommendation category.** We are prioritizing this MVP and controlled user feedback before finishing unattended-operation infrastructure. See the [execution priority](PROGRESS.md#execution-priority--read-only-mvp-first); numbered phases are not a strict work order. These reports and suggestions are planned, not available yet.
+
 ## Project map
 
 - [PLAN.md](PLAN.md): architecture, safety requirements and acceptance gates.

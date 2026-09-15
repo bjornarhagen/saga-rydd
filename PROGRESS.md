@@ -9,8 +9,24 @@ This file is the canonical implementation tracker. The architecture and full acc
 - **Confirmed:** Go, local SQLite, TOML configuration, macOS/Linux, low resource usage, developer clutter plus duplicates, opt-in automatic cleanup in v1.
 - **Development:** Docker first; do not require host Go or additional host development tooling.
 - **Implemented app behavior:** initialization, saved/live status, worker controls and opt-in experimental metadata scanning; private TOML/SQLite state, exclusive writer lock, bounded batches, atomic inventory/job commits and directory reconciliation watermarks. Durable dispatch cadence/daily batch reservations, child-entry pacing with partial batches, live scanner accounting, WAL backpressure and versioned JSON commands are implemented. Fine-grained CPU/I/O/power enforcement, service installation, findings and cleanup remain unavailable.
-- **Active task:** none. P1-06b2 is verified; full metadata/CPU/byte/power controls remain P1-06b.
+- **Active task:** none. Priority change documented; next implementation is P1-08b1 saved-inventory report.
 - **Blockers:** none currently. Scanner resource targets and native service behavior remain unvalidated; the database experiment is not a scanner benchmark.
+
+## Execution priority — read-only MVP first
+
+**Approved sequencing decision:** deliver useful reports and one recommendation category before completing unattended-operation infrastructure. The numbered phases below organize scope and acceptance; they are not a strict execution order. This section supersedes the previous resource-controls-first handoff.
+
+Follow this order:
+
+1. **P1-08b1:** paginated largest-observed-files report with coverage/freshness in human and JSON output; useful with the worker stopped and while scanning is incomplete.
+2. **P1-08b2:** directory-size reporting with explicit partial/stale/unknown states and qualified logical/allocated sizes.
+3. **P2-01a → P2-02a:** minimal finding model and one end-to-end, review-required `node_modules` detector/report. Implement the necessary explanation/freshness/overlap slice of P2-05 alongside it.
+4. **MVP-TRIAL:** evaluate the reports and recommendations on an explicitly selected real development folder after fixture validation. Record sanitized observations and use them to reprioritize further work.
+5. Then add duplicate detection and reviewed cleanup, alongside the remaining resource controls, according to what the trial reveals.
+
+Do not default to low-priority scheduling, complete CPU/battery budgets, service installation or more general diagnostics as the next task. Those remain required for unattended/release readiness, but do not gate a controlled read-only MVP. Implement supporting work now only when it directly blocks report correctness, selected-root safety or the trial; document that dependency. Existing filesystem safeguards, bounded work, pause/stop, scope restrictions and truthful size/freshness reporting remain required. No deletion or automatic broad personal-folder scan is authorized by this sequencing change.
+
+The next milestone is: **Rydd shows useful cleanup candidates with enough evidence for a person to assess them.** It is not the complete v1 release.
 
 ## How to use this tracker
 
@@ -43,17 +59,25 @@ This file is the canonical implementation tracker. The architecture and full acc
 - [ ] P1-07 — Implement adaptive revisits, fair scheduling, large-directory continuation and stale/missing-entry handling.
 - [ ] P1-08 — Implement paginated saved reports, coverage/freshness, diagnostics and bounded logs/state growth.
   - [x] P1-08a — Versioned JSON controls/status, stable machine errors and capability discovery for AI and scripts.
+  - [ ] P1-08b1 — **Next:** paginated largest-observed-files report, saved-inventory coverage/freshness, human/JSON parity and offline availability.
+  - [ ] P1-08b2 — Incremental/bounded directory-size reports with partial/stale/unknown labels and logical/allocated-size qualifications.
 - [ ] P1-09 — Implement launchd/systemd user service installation, status, stop and uninstall; document other supervisors.
 - [ ] P1-GATE — Verify restart/sleep recovery, disconnected volumes, permissions, concurrent reports and bounded memory on wide/deep million-entry fixtures. No deletion capability in this phase.
 
 ## Phase 2 — useful recommendations
 
 - [ ] P2-01 — Implement evidence-based finding model, rule versions, risk/confidence, dismissal and persistent exclusions.
+  - [ ] P2-01a — Minimum saved finding/report contract for one detector: identity, rule/version, evidence, review requirement, freshness and measured-size completeness; keep unsupported actions explicit.
 - [ ] P2-02 — Implement old `node_modules` detection with project recognition and incremental directory measurement.
+  - [ ] P2-02a — First end-to-end recommendation: recognized project, potentially stale dependencies, measured/partial size, evidence and regeneration caveats in human/JSON reports. Age alone never establishes safety or actual inactivity.
 - [ ] P2-03 — Implement one recognized build-output category and one narrowly validated cache category eligible for later automation.
 - [ ] P2-04 — Implement opt-in bounded Docker metadata discovery with pinned local context/builder and no helper containers/image pulls.
 - [ ] P2-05 — Implement finding explanations, regeneration caveats, partial sizes, freshness and overlap-aware totals.
 - [ ] P2-GATE — Verify supported/modified/unrecognized project fixtures; missing Docker and unknown sizes are harmless; no remote Docker access or broad disposable-category assumptions.
+
+## Read-only MVP trial
+
+- [ ] MVP-TRIAL — After P1-08b1/b2 and P2-01a/02a, use an explicitly selected real development folder in a controlled read-only trial. Verify report usefulness, partial/stale sizes, false positives, overlap/double counting and the evidence needed for decisions. Preserve sanitized findings and revise priorities. Fixture/native validation precedes the trial; this does not mark any full phase or release gate complete.
 
 ## Phase 3 — exact duplicates
 
@@ -130,13 +154,17 @@ This file is the canonical implementation tracker. The architecture and full acc
 
 - P1-06b1 live scanner API accounting, with atomic counters for stat, directory open/read, filesystem/mount checks and path resolution. Startup validation, failed attempts and final revalidation are included. Human status and JSON control snapshots expose the counters; capability discovery distinguishes accounting from rate enforcement. Docker formatting/vet/tests/race and all four cross-builds passed, along with native macOS worker/scanner fixture smoke. Initial CI passed native macOS but Linux race testing exceeded the existing five-second inventory-recovery deadline (no data race reported). That correctness test now has a 30-second bound, early worker-exit detection and saved-progress diagnostics. Ten repeated Docker race runs of inventory recovery and daily-cap restart passed (36.6s total), followed by checks. [Final CI 34999962258](https://github.com/bjornarhagen/saga-rydd/actions/runs/34999962258) passed for `ca8fcf0`: native macOS (56s), native Linux (42s), and Docker checks/four-target builds/native binary smoke. P1-06b1 is complete; P1-06b and Phase 1 remain open. The local test binary was updated; configuration and saved state were preserved and the worker remains stopped. No schema change or dependency added.
 
+### Entry pacing
+
+- P1-06b2 child-entry pacing using the existing `metadata_per_second` setting, interruptible waits without accumulated burst credits, bounded pending names and validated partial batches. Live human/JSON status reports effective entry rate, inspection count and throttle duration/state; capabilities distinguish entry pacing from full metadata limits. Docker checks/race/four-target builds and native macOS worker/scanner smoke passed. Tests cover minimum-rate completion in one-second windows, short-window partial batches, mutation invalidation, cancellation/no catch-up, paced worker pause/resume/completion and crash recovery. The crash fixture now uses a one-batch cap before the kill, avoiding a disk-speed assumption about the observation window. [CI run 35001556510](https://github.com/bjornarhagen/saga-rydd/actions/runs/35001556510) passed for implementation commit `199e182`: native Linux (55s), native macOS (1m24s), and Docker checks/four-target builds/native binary smoke. P1-06b2 is complete; the parent resource task and Phase 1 gates remain open. The installed test binary was updated; inventory/configuration are preserved and the worker remains stopped. No dependency or schema change.
+
 ## Handoff
 
 **Last updated:** 2026-09-15.
 
-**Completed this session:** P1-06b2 child-entry pacing using the existing `metadata_per_second` setting, interruptible waits without accumulated burst credits, bounded pending names and validated partial batches. Live human/JSON status reports effective entry rate, inspection count and throttle duration/state; capabilities distinguish entry pacing from full metadata limits. Docker checks/race/four-target builds and native macOS worker/scanner smoke passed. Tests cover minimum-rate completion in one-second windows, short-window partial batches, mutation invalidation, cancellation/no catch-up, paced worker pause/resume/completion and crash recovery. The crash fixture now uses a one-batch cap before the kill, avoiding a disk-speed assumption about the observation window. [CI run 35001556510](https://github.com/bjornarhagen/saga-rydd/actions/runs/35001556510) passed for implementation commit `199e182`: native Linux (55s), native macOS (1m24s), and Docker checks/four-target builds/native binary smoke. P1-06b2 is complete; the parent resource task and Phase 1 gates remain open. The installed test binary was updated; inventory/configuration are preserved and the worker remains stopped. No dependency or schema change.
+**Completed this session:** documented the user-approved priority change: saved reports → directory sizes → one `node_modules` recommendation category → controlled real-folder feedback. Added concrete subtask IDs and acceptance expectations; retained existing implementation evidence and all incomplete phase/release gates. Updated PLAN.md, README.md and AGENTS.md so future agents follow the execution-priority section rather than resume infrastructure by numeric phase order. Documentation only; no scanning, runtime or installed-binary change. Validation: reviewed priority/task references across all four documents and ran `git diff --check`; no runtime tests required for this documentation-only change.
 
-**Next action:** continue full P1-06b resource controls. A bounded next slice can add native low-priority scheduling with visible failure/fallback diagnostics; keep it distinct from measured CPU-budget enforcement. Cover opaque path-resolution internals and database work; add persistent consumption reservations, CPU/byte metering and low-priority/power/sleep controls. Entry pacing now yields partial batches instead of discarding them on its throttle deadline. Preserve that property when adding traversal and database limits; calls that exceed the whole work window and repeated process restarts remain separate progress limitations. Live API counters reset per worker and do not themselves enforce a rate. Preserve cancellation/restart semantics and validate fixtures before unattended personal-root scanning. P1-07 covers fair/adaptive revisits, huge-directory continuation, stale descendant filtering and reviewed root rebinding. See [CLI contract](docs/cli.md) and [inventory design](docs/inventory.md).
+**Next action:** implement P1-08b1. Inspect the saved entries/root/directory-generation schema and existing CLI contract, then add a bounded, paginated `rydd report` view of largest observed files with human/JSON parity. It must work offline, reveal incomplete/stale coverage, and avoid presenting historical observations as verified current files or reclaimable bytes. Test partial inventory, stopped worker, unavailable roots, unusual paths, deterministic pagination and saved-data freshness. Follow with P1-08b2 sizes, then P2-01a/02a and MVP-TRIAL. Do not resume P1-06b low-priority/CPU/battery work by default. Fix only supporting issues that directly block this MVP, recording why.
 
 **Remaining decisions:** first automation-eligible cache category; supported minimum OS/libc versions; tuned resource/scan-root defaults; license. Go and naming are settled.
 
