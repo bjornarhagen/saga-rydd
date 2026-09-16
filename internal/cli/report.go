@@ -15,7 +15,13 @@ import (
 	"github.com/bjornarhagen/saga-rydd/internal/state"
 )
 
-func report(ctx context.Context, args []string, paths config.Paths) (state.FileReport, error) {
+// Presentation context stays outside the serialized report contract.
+type reportResult struct {
+	state.FileReport
+	candidateCommand string
+}
+
+func report(ctx context.Context, args []string, paths config.Paths) (reportResult, error) {
 	scanPaths := paths
 	f := flag.NewFlagSet("report", flag.ContinueOnError)
 	f.SetOutput(io.Discard)
@@ -25,10 +31,10 @@ func report(ctx context.Context, args []string, paths config.Paths) (state.FileR
 	directory := f.String("directory", "", "measure a saved directory subtree")
 	f.StringVar(directory, "d", "", "directory alias")
 	if err := f.Parse(args); err != nil {
-		return state.FileReport{}, usageError{err}
+		return reportResult{}, usageError{err}
 	}
 	if f.NArg() != 0 || *limit < 1 || *limit > 200 {
-		return state.FileReport{}, usageError{errors.New("report accepts --limit 1–200 and --cursor TOKEN, or --directory ABSOLUTE_PATH")}
+		return reportResult{}, usageError{errors.New("report accepts --limit 1–200 and --cursor TOKEN, or --directory ABSOLUTE_PATH")}
 	}
 	directorySet, pageSet, limitSet := false, false, false
 	directoryFlags := 0
@@ -45,27 +51,27 @@ func report(ctx context.Context, args []string, paths config.Paths) (state.FileR
 		}
 	})
 	if directoryFlags > 1 {
-		return state.FileReport{}, usageError{errors.New("use only one of -d and --directory")}
+		return reportResult{}, usageError{errors.New("use only one of -d and --directory")}
 	}
 	if *candidates && limitSet {
-		return state.FileReport{}, usageError{errors.New("--candidates accepts --cursor and an optional manual-scan directory, but not --limit")}
+		return reportResult{}, usageError{errors.New("--candidates accepts --cursor and an optional manual-scan directory, but not --limit")}
 	}
 	if directorySet && pageSet && !*candidates {
-		return state.FileReport{}, usageError{errors.New("directory size reports cannot be combined with --limit or --cursor")}
+		return reportResult{}, usageError{errors.New("directory size reports cannot be combined with --limit or --cursor")}
 	}
 	if directorySet {
 		normalized, err := directoryPath(*directory)
 		if err != nil {
-			return state.FileReport{}, err
+			return reportResult{}, err
 		}
 		*directory = normalized
 		manual := manualState(paths, normalized)
 		if _, err := os.Lstat(filepath.Join(manual, state.Filename)); err == nil {
 			paths.StateDir = manual
 		} else if !errors.Is(err, os.ErrNotExist) {
-			return state.FileReport{}, err
+			return reportResult{}, err
 		} else if *candidates {
-			return state.FileReport{}, usageError{errors.New("scoped candidates require a manual scan of this exact directory; run scan -d PATH first")}
+			return reportResult{}, usageError{errors.New("scoped candidates require a manual scan of this exact directory; run scan -d PATH first")}
 		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -73,9 +79,9 @@ func report(ctx context.Context, args []string, paths config.Paths) (state.FileR
 	s, err := state.OpenReader(ctx, paths.StateDir)
 	if err != nil {
 		if directorySet && errors.Is(err, os.ErrNotExist) {
-			return state.FileReport{}, missingScanMessage(*directory, scanPaths, err)
+			return reportResult{}, missingScanMessage(*directory, scanPaths, err)
 		}
-		return state.FileReport{}, err
+		return reportResult{}, err
 	}
 	defer s.Close()
 	if *candidates {
@@ -83,24 +89,24 @@ func report(ctx context.Context, args []string, paths config.Paths) (state.FileR
 		if errors.Is(err, state.ErrReportCursor) {
 			err = usageError{err}
 		}
-		return state.FileReport{Candidates: &c, GeneratedAt: c.GeneratedAt, Source: c.Source, Files: []state.ReportFile{}, Roots: []state.ReportRoot{}, Notes: c.Notes}, err
+		return reportResult{FileReport: state.FileReport{Candidates: &c, GeneratedAt: c.GeneratedAt, Source: c.Source, Files: []state.ReportFile{}, Roots: []state.ReportRoot{}, Notes: c.Notes}, candidateCommand: candidateReportCommand(scanPaths, *directory)}, err
 	}
 	if directorySet {
 		d, err := s.MeasureDirectory(ctx, filepath.Clean(*directory))
 		if errors.Is(err, state.ErrDirectoryScope) {
 			err = missingScanMessage(*directory, scanPaths, err)
 		}
-		return state.FileReport{Directory: &d, GeneratedAt: d.GeneratedAt, Source: d.Source, Files: []state.ReportFile{}, Roots: []state.ReportRoot{}, Notes: d.Notes}, err
+		return reportResult{FileReport: state.FileReport{Directory: &d, GeneratedAt: d.GeneratedAt, Source: d.Source, Files: []state.ReportFile{}, Roots: []state.ReportRoot{}, Notes: d.Notes}}, err
 	}
 	r, err := s.LargestFiles(ctx, *limit, *cursor)
 	if errors.Is(err, state.ErrReportCursor) {
-		return r, usageError{err}
+		return reportResult{FileReport: r}, usageError{err}
 	}
-	return r, err
+	return reportResult{FileReport: r}, err
 }
-func printReport(out io.Writer, r state.FileReport) {
+func printReport(out io.Writer, r reportResult) {
 	if r.Candidates != nil {
-		printFindingReport(out, *r.Candidates)
+		printFindingReport(out, *r.Candidates, r.candidateCommand)
 		return
 	}
 	if r.Directory != nil {
@@ -293,33 +299,83 @@ func directoryStatusLabel(status string) string {
 	}
 }
 
-func printFindingReport(out io.Writer, r state.FindingReport) {
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
+
+func candidateReportCommand(paths config.Paths, directory string) string {
+	command := "rydd"
+	defaults, err := config.ResolvePaths("")
+	if err != nil || paths.StateDir != defaults.StateDir {
+		command += " --data-dir " + shellQuote(paths.StateDir)
+	}
+	command += " report --candidates"
+	if directory != "" {
+		command += " -d " + shellQuote(directory)
+	}
+	return command
+}
+
+func printFindingReport(out io.Writer, r state.FindingReport, command string) {
 	fmt.Fprintln(out, "Saga — Rydd: node_modules review candidates")
-	fmt.Fprintf(out, "Selection: directory and package.json recorded modification times at least %d days old. Examined %d/%d inventory entries.\n", r.MinimumAgeDays, r.EntriesExamined, r.EntryLimit)
-	fmt.Fprintln(out, "Selection outcomes on this page (first matching reason per entry):")
-	for _, d := range r.Diagnostics {
-		if d.Count > 0 {
-			fmt.Fprintf(out, "  %d: %s [%s]\n", d.Count, d.Explanation, d.Code)
-		}
-	}
-	if r.PageCoverage == "more_saved_entries" {
-		fmt.Fprintln(out, "More saved entries remain; follow the next cursor even if this page has no candidates.")
-	} else {
-		fmt.Fprintln(out, "End of saved entries reached; this does not mean filesystem scanning is complete.")
-	}
-	for _, f := range r.Findings {
-		fmt.Fprintf(out, "\n%s — review required\n%q\nRule: %s v%d; recognition: %s\nManifest: %q\nModified: directory %s; manifest %s\nObserved: directory %s; manifest %s\n", f.ID, string(f.PathBytes), f.Rule, f.RuleVersion, f.Recognition, string(f.ManifestPathBytes), f.DirectoryModifiedAt.Format(time.RFC3339), f.ManifestModifiedAt.Format(time.RFC3339), f.DirectoryObservedAt.Format(time.RFC3339), f.ManifestObservedAt.Format(time.RFC3339))
-		printDirectoryReport(out, f.Measurement)
-	}
 	if len(r.Findings) == 0 {
-		fmt.Fprintln(out, "No candidates on this page. Selection outcomes above explain the examined records.")
+		fmt.Fprintln(out, "\nNo candidates on this page.")
+	} else {
+		fmt.Fprintf(out, "\n%d candidate(s) on this page — review required.\n", len(r.Findings))
 	}
-	for _, note := range r.Notes {
-		fmt.Fprintln(out, note)
+	fmt.Fprintf(out, "\nPAGE SUMMARY\n  Saved entries checked     %s\n", humanCount(r.EntriesExamined))
+	labels := map[string]string{
+		"not_node_modules":                "Other entries",
+		"nested_dependency":               "Nested dependencies",
+		"not_directory":                   "Not a directory",
+		"skipped":                         "Excluded or skipped",
+		"manifest_missing_or_unsupported": "No usable package.json",
+		"parent_incomplete_or_error":      "Incomplete parent listing",
+		"parent_unconfirmed":              "Unconfirmed observations",
+		"timestamp_unknown":               "Unknown modification dates",
+		"age_not_met":                     "Too recent / future-dated",
+		"selected":                        "Selected for review",
+	}
+	for _, d := range r.Diagnostics {
+		if d.Count == 0 {
+			continue
+		}
+		label, ok := labels[d.Code]
+		if !ok {
+			label = d.Explanation
+		}
+		fmt.Fprintf(out, "  %-25s %s\n", label, humanCount(d.Count))
+	}
+	for i, f := range r.Findings {
+		m := f.Measurement
+		logical, allocated := "unknown", "unknown"
+		if m.LogicalBytes != nil {
+			logical = humanBytes(*m.LogicalBytes)
+		}
+		if m.AllocatedBytes != nil {
+			allocated = humanBytes(*m.AllocatedBytes)
+		}
+		fmt.Fprintf(out, "\n%d. %q\n", i+1, string(f.PathBytes))
+		fmt.Fprintf(out, "   Size       %s logical; %s allocated (%s)\n", logical, allocated, strings.ReplaceAll(m.Status, "_", " "))
+		fmt.Fprintf(out, "   Modified   folder %s; package.json %s\n", f.DirectoryModifiedAt.Format("2006-01-02"), f.ManifestModifiedAt.Format("2006-01-02"))
+		fmt.Fprintf(out, "   Reference  %s\n", f.ID)
 	}
 	if r.NextCursor != "" {
-		fmt.Fprintf(out, "Next page: report --candidates --cursor %s (keep the same --data-dir, if set)\n", r.NextCursor)
+		fmt.Fprintln(out, "\nMORE RESULTS")
+		if len(r.Findings) == 0 {
+			fmt.Fprintln(out, "  This page is empty, but more saved entries remain.")
+		} else {
+			fmt.Fprintln(out, "  More saved entries remain.")
+		}
+		fmt.Fprintf(out, "  Next page:\n    %s --cursor %s\n", command, shellQuote(r.NextCursor))
+	} else {
+		fmt.Fprintln(out, "\nEnd of saved entries. This does not prove the scan is complete.")
 	}
+	fmt.Fprintln(out, "\nABOUT THESE RESULTS")
+	printWrapped(out, fmt.Sprintf("Age filter: both the folder and package.json modification dates must be at least %d days old. Age alone does not establish inactivity or safe deletion.", r.MinimumAgeDays), "  ")
+	printWrapped(out, "Saved metadata only; sizes may be partial or stale and are not reclaimable-space estimates. Project contents and activity have not been checked.", "  ")
+	if len(r.Findings) > 0 {
+		printWrapped(out, "Removing dependencies can break builds or lose local edits. Reinstalling may need the right tools, lockfile, credentials and available packages. Cleanup is not yet supported.", "  ")
+	}
+	fmt.Fprintln(out, "  Full evidence and caveats: add --json.")
 }
 
 type missingScanError struct {

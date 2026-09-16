@@ -115,7 +115,7 @@ func runHuman(ctx context.Context, args []string, out, errOut io.Writer) int {
 			printScanReport(out, r)
 		}
 	case "report":
-		var r state.FileReport
+		var r reportResult
 		r, err = report(ctx, remaining[1:], paths)
 		if err == nil {
 			printReport(out, r)

@@ -154,3 +154,9 @@ Directory JSON adds `compacted_directories`, `compacted_files` and `compact_inod
 Generation changes replace one directory's partial totals; stale inode generations are excluded immediately. Existing ordinary file rows in that directory are also excluded immediately, before bounded retirement. Historical disappeared directories still follow existing stale-report semantics and can contribute explicitly stale totals; stale descendant lifecycle is not solved by compaction. Huge directory listing restarts and full cached allocated-size reductions remain unfinished.
 
 Writers migrate to schema 5. Reports can still read schema 4 without migration, so updating the CLI does not require stopping an existing schema-4 background worker. Older binaries cannot read schema-5 manual stores. No application database is deleted or rebuilt by this migration.
+
+### Human candidate output
+
+Candidate reports lead with the number of candidates on the current page, followed by aligned selection counts. Nonempty pages use compact candidate entries with path, measured sizes/coverage, modification dates and reference ID. Shared qualifications appear once; complete rule, recognition, observation, diagnostic and measurement evidence remains in the unchanged `--json` report.
+
+The next-page command preserves the selected manual directory and any custom global state location, with literal shell quoting. Empty pages can still have more results; the human summary makes that continuation explicit.

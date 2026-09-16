@@ -82,7 +82,7 @@ func TestReportHumanAndJSONOffline(t *testing.T) {
 		t.Fatal(machine, errOut)
 	}
 	code, human, errOut = run("report", "--candidates")
-	if code != 0 || (!strings.Contains(human, "node_modules review candidates") || !strings.Contains(human, "Selection outcomes on this page") || !strings.Contains(human, "[not_node_modules]")) {
+	if code != 0 || (!strings.Contains(human, "node_modules review candidates") || !strings.Contains(human, "PAGE SUMMARY") || !strings.Contains(human, "Other entries")) {
 		t.Fatal(code, human, errOut)
 	}
 
