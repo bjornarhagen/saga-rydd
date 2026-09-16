@@ -23,6 +23,7 @@ type Store struct {
 	db        *sql.DB
 	path      string
 	readOnly  bool
+	schema    int
 	lock      *localfs.Lock
 	closeOnce sync.Once
 	closeErr  error
@@ -64,6 +65,7 @@ func OpenWriter(ctx context.Context, dir string) (*Store, error) {
 		s.Close()
 		return nil, err
 	}
+	s.schema = schemaVersion
 	s.lock = lock
 	keepLock = true
 	return s, nil
@@ -87,10 +89,11 @@ func OpenReader(ctx context.Context, dir string) (*Store, error) {
 		s.Close()
 		return nil, err
 	}
-	if version != schemaVersion {
+	if version != schemaVersion && version != 4 {
 		s.Close()
 		return nil, fmt.Errorf("state schema %d requires migration; run rydd state init", version)
 	}
+	s.schema = version
 	if err := s.checkLedger(ctx, version); err != nil {
 		s.Close()
 		return nil, err
@@ -267,7 +270,7 @@ type Summary struct {
 }
 
 func (s *Store) Summary(ctx context.Context) (Summary, error) {
-	result := Summary{Schema: schemaVersion}
+	result := Summary{Schema: s.schema}
 	// One statement supplies a consistent snapshot without retaining a reader lock.
 	err := s.db.QueryRowContext(ctx, `SELECT sqlite_version(),
  (SELECT count(*) FROM roots WHERE enabled=1), (SELECT count(*) FROM entries),

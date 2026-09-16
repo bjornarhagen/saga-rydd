@@ -3,7 +3,7 @@ package state
 // Migrations are append-only. Inventory tables are rebuildable, but the database
 // must never be deleted/recreated as a migration strategy: future action/restore
 // records will live in their own durable tables here.
-const schemaVersion = 4
+const schemaVersion = 5
 const applicationID = 0x52594444 // RYDD
 
 const migration1 = `
@@ -54,6 +54,7 @@ var migrations = []struct{ name, sql string }{
 	{"worker-queue-leases", migration2},
 	{"streaming-inventory", migration3},
 	{"durable-scan-dispatch", migration4},
+	{"compact-directory-inventory", migration5},
 }
 
 const migration4 = `
@@ -72,4 +73,23 @@ CREATE TABLE directories (
  checked_at_ns INTEGER NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '',
  PRIMARY KEY(root_id,path)
 );
+`
+
+const migration5 = `
+CREATE TABLE compact_dirs (
+ root_id INTEGER NOT NULL REFERENCES roots(id), path BLOB NOT NULL,
+ generation INTEGER NOT NULL, logical INTEGER NOT NULL, files INTEGER NOT NULL,
+ unknown_inodes INTEGER NOT NULL, skipped_files INTEGER NOT NULL,
+ PRIMARY KEY(root_id,path)
+);
+CREATE TABLE compact_inodes (
+ root_id INTEGER NOT NULL, path BLOB NOT NULL, generation INTEGER NOT NULL,
+ device TEXT NOT NULL, inode TEXT NOT NULL, allocated INTEGER NOT NULL,
+ logical INTEGER NOT NULL, paths INTEGER NOT NULL, conflicting INTEGER NOT NULL,
+ PRIMARY KEY(root_id,path,generation,device,inode)
+) WITHOUT ROWID;
+CREATE TABLE compact_retirement (
+ root_id INTEGER NOT NULL, path BLOB NOT NULL, generation INTEGER NOT NULL, PRIMARY KEY(root_id,path,generation)
+);
+CREATE INDEX entries_compact_retire ON entries(root_id,parent,id) WHERE kind='file';
 `

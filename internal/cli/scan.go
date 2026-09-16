@@ -48,14 +48,16 @@ func manualState(paths config.Paths, root string) string {
 }
 
 type ScanReport struct {
-	Directory      string        `json:"directory"`
-	DirectoryBytes []byte        `json:"directory_bytes"`
-	StateDir       string        `json:"state_dir"`
-	SleepMS        int           `json:"sleep_ms"`
-	Mode           string        `json:"mode"`
-	Outcome        string        `json:"outcome"`
-	Batches        int           `json:"batches"`
-	Inventory      state.Summary `json:"inventory"`
+	Directory         string        `json:"directory"`
+	DirectoryBytes    []byte        `json:"directory_bytes"`
+	StateDir          string        `json:"state_dir"`
+	Compact           bool          `json:"compact"`
+	SleepMS           int           `json:"sleep_ms"`
+	Mode              string        `json:"mode"`
+	Outcome           string        `json:"outcome"`
+	RetirementBatches int           `json:"retirement_batches"`
+	Batches           int           `json:"batches"`
+	Inventory         state.Summary `json:"inventory"`
 }
 
 func scan(ctx context.Context, args []string, paths config.Paths, progress io.Writer) (ScanReport, error) {
@@ -68,13 +70,15 @@ func scan(ctx context.Context, args []string, paths config.Paths, progress io.Wr
 	f.StringVar(&path, "directory", "", "directory to scan")
 	f.IntVar(&delay, "s", 10, "milliseconds between entry inspections")
 	f.IntVar(&delay, "sleep", 10, "milliseconds between entry inspections")
+	compactFlag := f.Bool("compact", false, "store node_modules file metadata compactly")
+	detailedFlag := f.Bool("detailed", false, "store ordinary per-file inventory")
 	now := f.Bool("now", false, "disable deliberate entry delays")
 	if err := f.Parse(args); err != nil {
 		return r, usageError{err}
 	}
 	seen := map[string]bool{}
 	f.Visit(func(v *flag.Flag) { seen[v.Name] = true })
-	if f.NArg() != 0 || delay < 0 || delay > 60000 || (*now && (seen["s"] || seen["sleep"])) || (seen["d"] && seen["directory"]) || (seen["s"] && seen["sleep"]) {
+	if (seen["compact"] && seen["detailed"]) || f.NArg() != 0 || delay < 0 || delay > 60000 || (*now && (seen["s"] || seen["sleep"])) || (seen["d"] && seen["directory"]) || (seen["s"] && seen["sleep"]) {
 		return r, usageError{errors.New("scan accepts -d PATH and -s 0–60000 milliseconds or --now; do not combine aliases")}
 	}
 	root, err := directoryPath(path)
@@ -118,6 +122,18 @@ func scan(ctx context.Context, args []string, paths config.Paths, progress io.Wr
 		return r, err
 	}
 	defer w.Close()
+	var requested *bool
+	if seen["compact"] {
+		requested = compactFlag
+	}
+	if seen["detailed"] {
+		value := !*detailedFlag
+		requested = &value
+	}
+	r.Compact, err = w.ConfigureCompact(ctx, requested)
+	if err != nil {
+		return r, err
+	}
 	if err = w.SyncRoots(ctx, []string{root}); err != nil {
 		return r, err
 	}
@@ -133,8 +149,12 @@ func scan(ctx context.Context, args []string, paths config.Paths, progress io.Wr
 	if err != nil {
 		return r, err
 	}
+	retiring, err := w.HasCompactRetirement(ctx)
+	if err != nil {
+		return r, err
+	}
 	r.Mode = "new_pass"
-	if !due.IsZero() {
+	if !due.IsZero() || retiring {
 		r.Mode = "resume"
 	}
 	if err = w.SeedInventory(ctx); err != nil {
@@ -145,6 +165,9 @@ func scan(ctx context.Context, args []string, paths config.Paths, progress io.Wr
 		fmt.Fprintln(progress, "Resuming saved work before revisiting completed folders.")
 	} else {
 		fmt.Fprintln(progress, "Starting a new pass.")
+	}
+	if r.Compact {
+		fmt.Fprintln(progress, "Compact node_modules inventory enabled; file contents are not read.")
 	}
 	lastProgress := time.Now()
 	for {
@@ -164,6 +187,25 @@ func scan(ctx context.Context, args []string, paths config.Paths, progress io.Wr
 			return r, e
 		}
 		if j == nil {
+			worked, cleanupErr := w.RetireCompact(ctx)
+			if cleanupErr != nil {
+				return r, cleanupErr
+			}
+			if worked {
+				r.RetirementBatches++
+				if time.Since(lastProgress) >= time.Second {
+					fmt.Fprintf(progress, "Retiring old inventory records: %d batches.\n", r.RetirementBatches)
+					lastProgress = time.Now()
+				}
+				timer := time.NewTimer(time.Duration(max(delay, 1)) * time.Millisecond)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return r, ctx.Err()
+				case <-timer.C:
+				}
+				continue
+			}
 			r.Outcome = "queue_drained"
 			break
 		}

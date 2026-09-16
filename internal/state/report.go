@@ -97,6 +97,9 @@ func (s *Store) LargestFiles(ctx context.Context, limit int, token string) (File
  FROM entries e JOIN roots r ON r.id=e.root_id
  LEFT JOIN directories d ON d.root_id=e.root_id AND d.path=e.parent
  WHERE e.kind='file' AND r.enabled=1`
+	if s.schema >= 5 {
+		query += ` AND NOT EXISTS (SELECT 1 FROM compact_dirs c WHERE c.root_id=e.root_id AND c.path=e.parent)`
+	}
 	args := []any{}
 	if token != "" {
 		query += ` AND (e.size,e.id)<(?,?)`

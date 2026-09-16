@@ -109,6 +109,13 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 			return Result{Scan: &batch}, nil
 		}
 		kinds = append(kinds, state.ScanKind)
+		compact, modeErr := w.ConfigureCompact(ctx, nil)
+		if modeErr != nil {
+			return modeErr
+		}
+		if compact {
+			return errors.New("compact inventories currently require the manual scan command; background compact scanning is not enabled")
+		}
 		if err := w.SeedInventory(ctx); err != nil {
 			return err
 		}

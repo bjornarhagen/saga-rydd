@@ -177,9 +177,13 @@ func printDirectoryReport(out io.Writer, r state.DirectoryReport) {
 	}
 	fmt.Fprintf(out, "\nSIZE  ·  %s\n", status)
 	row := func(label string, value any) { fmt.Fprintf(out, "  %-23s %v\n", label, value) }
-	if r.LogicalBytes != nil && r.AllocatedBytes != nil {
+	if r.LogicalBytes != nil {
 		row("Observed file size", humanBytes(*r.LogicalBytes))
-		row("Allocated on disk", humanBytes(*r.AllocatedBytes))
+		if r.AllocatedBytes != nil {
+			row("Allocated on disk", humanBytes(*r.AllocatedBytes))
+		} else {
+			row("Allocated on disk", "unknown")
+		}
 	} else {
 		row("Observed file size", "Unknown")
 		if r.UnknownReason != "" {
@@ -197,6 +201,9 @@ func printDirectoryReport(out io.Writer, r state.DirectoryReport) {
 	fmt.Fprintln(out, "\nSCAN COVERAGE")
 	row("Entries measured", fmt.Sprintf("%s (limit %s)", humanCount(r.EntriesExamined), humanCount(r.EntryLimit)))
 	row("Files observed", humanCount(r.FilePaths))
+	if r.CompactedDirectories > 0 {
+		row("Compact file records", humanCount(r.CompactedFiles))
+	}
 	row("Incomplete directories", humanCount(r.IncompleteDirectories))
 	row("Skipped entries", humanCount(r.SkippedEntries))
 	row("Directory errors", humanCount(r.DirectoryErrors))

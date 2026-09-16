@@ -22,7 +22,7 @@ A quiet storage cleanup companion for macOS and Linux.
 Usage: rydd [--data-dir /absolute/path] <command>
 
 Commands:
-  scan -d PATH [-s MS | --now] [--json]                Foreground metadata scan (default delay 10 ms)
+  scan -d PATH [-s MS | --now] [--compact | --detailed] [--json]                Foreground metadata scan (default delay 10 ms)
   init --root /path [--root /another] [--exclude /path]  Create config and state
   config check                                         Validate configuration
   state init                                           Initialize/migrate state from existing config

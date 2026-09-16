@@ -46,6 +46,10 @@ Implement these as one coherent read-only feature before enabling compact storag
 - **Detailed override:** expose `--detailed` for manual scans and a corresponding saved setting for background scans. Pin storage mode for a pass; reject a mode switch while that pass has unfinished jobs rather than mixing representations. A mode switch after completion starts a new pass, with honest partial results until replaced. Document the state/store selection behavior.
 - **End-to-end validation:** fresh/legacy/detailed stores; cancellation and process kill; mutation/shrink/disappearance; unknown and shared inode identities; sparse files; nested boundaries; exclusions and symlink/mount swaps; candidate evidence; offline and concurrent reports. Verify native macOS/Linux and measure state/WAL growth, including cleanup backlog, on a large generated fixture.
 
-## What is not implemented
+## Initial production slice (P2-02b2)
 
-The experiment is not imported by production code. Rydd still stores ordinary descendant inventory inside `node_modules`; no new CLI flag, aggregation capability, schema migration or installed binary change is part of P2-02b1. The complete P2-02b task remains open.
+An opt-in manual `--compact` mode now uses production-owned schema-5 tables; it does not import the experiment or its full-ledger oracle. Per-directory logical totals are updated with the scanner lease/cursor transaction. Known inode evidence stays compact, old generations and legacy file rows are excluded immediately, and durable retirement jobs remove at most 128 obsolete records per transaction. The manual scan drains those jobs and preserves them across interruption.
+
+Reports retain the existing 10,000-entry coverage bound and inspect at most 10,000 additional compact inode records. They combine ordinary/compact identities for the measured scope. Above that identity budget, allocated size is unknown and the report is partial; logical totals remain useful. This deliberately postpones the full incremental allocated reduction described above rather than introducing a full-ledger report query.
+
+The detailed override is pass-pinned. Schema-4 readers remain supported by the new CLI, while writers migrate additively. Background compact mode is refused until its maintenance dispatch is implemented. Historical disappeared subtrees retain existing stale-report semantics; they are not yet removed from measured totals. Exact per-entry directory resume remains unsolved. These limitations keep the full P2-02b task and default enablement open.

@@ -203,3 +203,46 @@ func TestManualScanFinishesSavedPassBeforeRevisiting(t *testing.T) {
 		})
 	}
 }
+
+func TestManualCompactScanAndDetailedOverride(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	nm := filepath.Join(root, "node_modules")
+	if err := os.MkdirAll(filepath.Join(nm, "nested", "node_modules"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{filepath.Join(root, "package.json"), filepath.Join(nm, "a"), filepath.Join(nm, "nested", "node_modules", "b")} {
+		if err := os.WriteFile(p, []byte("hello"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Link(filepath.Join(nm, "a"), filepath.Join(root, "outside-link")); err != nil {
+		t.Fatal(err)
+	}
+	paths, err := config.ResolvePaths(filepath.Join(t.TempDir(), "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := scan(ctx, []string{"-d", root, "--compact", "--now"}, paths, &bytes.Buffer{})
+	if err != nil || !r.Compact || r.Outcome != "queue_drained" {
+		t.Fatal(r, err)
+	}
+	rep, err := report(ctx, []string{"-d", root}, paths)
+	if err != nil || rep.Directory == nil || *rep.Directory.LogicalBytes != 20 || rep.Directory.CompactedFiles != 2 || rep.Directory.RepeatedInodes != 1 {
+		t.Fatal(rep, err)
+	}
+	var compactAllocated int64 = *rep.Directory.AllocatedBytes
+	// Saved mode survives an invocation without flags.
+	r, err = scan(ctx, []string{"-d", root, "--now"}, paths, &bytes.Buffer{})
+	if err != nil || !r.Compact {
+		t.Fatal(r, err)
+	}
+	r, err = scan(ctx, []string{"-d", root, "--detailed", "--now"}, paths, &bytes.Buffer{})
+	if err != nil || r.Compact {
+		t.Fatal(r, err)
+	}
+	rep, err = report(ctx, []string{"-d", root}, paths)
+	if err != nil || *rep.Directory.LogicalBytes != 20 || *rep.Directory.AllocatedBytes != compactAllocated || rep.Directory.CompactedFiles != 0 {
+		t.Fatal(rep, err)
+	}
+}

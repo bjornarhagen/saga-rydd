@@ -15,6 +15,9 @@ const DirectoryEntryLimit = 10000
 var ErrDirectoryScope = errors.New("directory must be inside an enabled saved root")
 
 type DirectoryReport struct {
+	CompactedDirectories  int        `json:"compacted_directories"`
+	CompactedFiles        int        `json:"compacted_files"`
+	InodeEntriesExamined  int        `json:"compact_inode_entries_examined"`
 	GeneratedAt           time.Time  `json:"generated_at"`
 	Source                string     `json:"source"`
 	CurrentStateVerified  bool       `json:"current_state_verified"`
@@ -135,11 +138,19 @@ func (s *Store) MeasureDirectory(ctx context.Context, path string) (DirectoryRep
 		}
 		ancestor = filepath.Dir(ancestor)
 	}
+	compactSelect, compactJoin := ",0,0,0,0,0", ""
+	if s.schema >= 5 {
+		compactSelect = ",COALESCE(c.generation,0),COALESCE(c.logical,0),COALESCE(c.files,0),COALESCE(c.unknown_inodes,0),COALESCE(c.skipped_files,0)"
+		compactJoin = " LEFT JOIN compact_dirs c ON c.root_id=e.root_id AND c.path=e.path "
+	}
 	query := `SELECT e.path,e.parent,e.kind,e.size,e.allocated,e.device,e.inode,e.generation,e.observed_at_ns,e.skip_reason,
  COALESCE(p.generation,0),COALESCE(p.complete,0),COALESCE(p.last_error,''),
- COALESCE(d.complete,0),COALESCE(d.checked_at_ns,0),COALESCE(d.last_error,'')
+ COALESCE(d.complete,0),COALESCE(d.checked_at_ns,0),COALESCE(d.last_error,'')` + compactSelect + `
  FROM entries e LEFT JOIN directories p ON p.root_id=e.root_id AND p.path=e.parent
- LEFT JOIN directories d ON d.root_id=e.root_id AND d.path=e.path WHERE e.root_id=?`
+ LEFT JOIN directories d ON d.root_id=e.root_id AND d.path=e.path ` + compactJoin + ` WHERE e.root_id=?`
+	if s.schema >= 5 {
+		query += ` AND (e.kind!='file' OR NOT EXISTS (SELECT 1 FROM compact_dirs c WHERE c.root_id=e.root_id AND c.path=e.parent))`
+	}
 	args := []any{r.RootID}
 	if relative != "." {
 		prefix := []byte(relative + "/")
@@ -158,6 +169,12 @@ func (s *Store) MeasureDirectory(ctx context.Context, path string) (DirectoryRep
 	type inodeSize struct{ allocated, size int64 }
 	inodes := map[inodeKey]inodeSize{}
 	validDirectories := map[string]bool{}
+	type compactDirectory struct {
+		path       []byte
+		generation int64
+	}
+	var compactPaths []compactDirectory
+	allocatedKnown := true
 	add := func(total *int64, n int64) error {
 		if n < 0 || *total > math.MaxInt64-n {
 			return errors.New("directory byte total exceeds supported range")
@@ -175,7 +192,9 @@ func (s *Store) MeasureDirectory(ctx context.Context, path string) (DirectoryRep
 		var kind, dev, ino, skip, parentError, dirError string
 		var size, allocated, generation, observed, parentGeneration, checked int64
 		var parentComplete, dirComplete int
-		if err = rows.Scan(&p, &parent, &kind, &size, &allocated, &dev, &ino, &generation, &observed, &skip, &parentGeneration, &parentComplete, &parentError, &dirComplete, &checked, &dirError); err != nil {
+		var compactGeneration, compactLogical int64
+		var compactFiles, compactUnknown, compactSkipped int
+		if err = rows.Scan(&p, &parent, &kind, &size, &allocated, &dev, &ino, &generation, &observed, &skip, &parentGeneration, &parentComplete, &parentError, &dirComplete, &checked, &dirError, &compactGeneration, &compactLogical, &compactFiles, &compactUnknown, &compactSkipped); err != nil {
 			return r, err
 		}
 		r.EntriesExamined++
@@ -218,6 +237,37 @@ func (s *Store) MeasureDirectory(ctx context.Context, path string) (DirectoryRep
 				stale = true
 			}
 		}
+
+		if compactGeneration > 0 && kind == "directory" {
+			r.CompactedDirectories++
+			for _, pair := range []struct {
+				total *int
+				n     int
+			}{{&r.CompactedFiles, compactFiles}, {&r.FilePaths, compactFiles}, {&r.UnknownInodes, compactUnknown}, {&r.SkippedEntries, compactSkipped}} {
+				total := int64(*pair.total)
+				if err = addCompact(&total, int64(pair.n)); err != nil {
+					return r, err
+				}
+				*pair.total = int(total)
+			}
+			if compactUnknown > 0 {
+				allocatedKnown = false
+				partial = true
+			}
+			if compactSkipped > 0 {
+				partial = true
+			}
+			if err = add(&logicalBytes, compactLogical); err != nil {
+				return r, err
+			}
+			compactPaths = append(compactPaths, compactDirectory{append([]byte(nil), p...), compactGeneration})
+			if checked > 0 {
+				stamp := time.Unix(0, checked).UTC()
+				if r.NewestObservation == nil || stamp.After(*r.NewestObservation) {
+					r.NewestObservation = &stamp
+				}
+			}
+		}
 		if kind != "file" {
 			continue
 		}
@@ -251,6 +301,62 @@ func (s *Store) MeasureDirectory(ctx context.Context, path string) (DirectoryRep
 		return r, err
 	}
 	rows.Close()
+	for _, directory := range compactPaths {
+		inodeRows, e := tx.QueryContext(ctx, `SELECT i.device,i.inode,i.allocated,i.logical,i.paths,i.conflicting FROM compact_inodes i
+ WHERE i.root_id=? AND i.path=? AND i.generation=? ORDER BY i.device,i.inode LIMIT ?`, r.RootID, directory.path, directory.generation, DirectoryEntryLimit-r.InodeEntriesExamined+1)
+		if e != nil {
+			return r, e
+		}
+		for inodeRows.Next() {
+			if r.InodeEntriesExamined == DirectoryEntryLimit {
+				allocatedKnown = false
+				partial = true
+				break
+			}
+			var dev, ino string
+			var allocated, size int64
+			var paths int
+			var conflict bool
+			if e = inodeRows.Scan(&dev, &ino, &allocated, &size, &paths, &conflict); e != nil {
+				inodeRows.Close()
+				return r, e
+			}
+			r.InodeEntriesExamined++
+			r.RepeatedInodes += paths - 1
+			key := inodeKey{dev, ino}
+			prior, exists := inodes[key]
+			if exists {
+				r.RepeatedInodes++
+				if prior.allocated != allocated || prior.size != size {
+					stale = true
+				}
+			}
+			if conflict {
+				stale = true
+			}
+			if !exists || allocated > prior.allocated {
+				if e = add(&allocatedBytes, allocated-prior.allocated); e != nil {
+					inodeRows.Close()
+					return r, e
+				}
+				inodes[key] = inodeSize{allocated, size}
+			}
+		}
+		e = inodeRows.Err()
+		inodeRows.Close()
+		if e != nil {
+			return r, e
+		}
+		if !allocatedKnown {
+			break
+		}
+	}
+	if len(compactPaths) > 0 {
+		reason("Generated-tree files use compact directory totals; individual filenames are not retained. Allocated identity checks examine at most 10,000 compact records per report.")
+	}
+	if !allocatedKnown {
+		reason("Allocated size is unknown: compact identity evidence is missing or exceeds this report's 10,000-record budget. Logical size still includes saved compact totals.")
+	}
 	switch {
 	case r.EntriesExamined == 0:
 		r.Status = "unknown"
@@ -266,7 +372,9 @@ func (s *Store) MeasureDirectory(ctx context.Context, path string) (DirectoryRep
 	}
 	if r.EntriesExamined > 0 {
 		r.LogicalBytes = &logicalBytes
-		r.AllocatedBytes = &allocatedBytes
+		if allocatedKnown {
+			r.AllocatedBytes = &allocatedBytes
+		}
 	}
 	return r, tx.Commit()
 }
