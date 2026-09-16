@@ -163,6 +163,10 @@ Pages examine at most 1,000 saved entries and measure at most 20 candidates, eac
 
 P2-05a adds bounded first-match selection counts and saved-page coverage in human/JSON candidate reports. Counts cover only examined entries and preserve existing eligibility; missing or unconfirmed evidence is explained before age. Exhaustion of saved entries is never described as completion of the filesystem scan.
 
+### Scan continuation priority (P1-07a)
+
+Before generated-tree aggregation, fix restart scheduling: seed a root only when it has no pending or running inventory jobs, including delayed retries. Preserve interrupted inventory job priority across cancellation and crash recovery. A repeated manual scan finishes its saved queue; a later invocation with an empty queue starts a new pass. Expose resume/new-pass mode to humans and JSON clients. This avoids unnecessary completed-directory revisits without treating recent timestamps as evidence of an unchanged subtree. Directory enumeration still restarts within an interrupted directory; durable wide-directory continuation, adaptive refresh, stale-entry handling and explicit forced-refresh controls remain P1-07 work.
+
 ### Generated dependency trees: next storage priority
 
 The user requested avoiding a full per-file inventory inside `node_modules`. Treat supported generated trees as one logical inventory item, retaining path, project evidence, timestamps and aggregate size/freshness. Exact size still requires incremental metadata traversal; directory metadata alone cannot supply recursive size. Add a resumable measurement job with bounded cursor/working state and honest partial/stale accounting, including hardlinks and interrupted/mutated trees. Keep descendants out of ordinary largest-file and duplicate discovery by default once that measurement path is implemented. Skipping traversal entirely would leave size unknown; do not substitute zero or claim a constant-time exact measurement. This remains planned, not implemented by the manual scan command.

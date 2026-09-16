@@ -352,6 +352,9 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 				if errors.Is(result.err, context.Canceled) || errors.Is(result.err, context.DeadlineExceeded) {
 					lastError = ""
 					due = time.Now()
+					if active.Kind == state.ScanKind {
+						due = time.Unix(0, 1)
+					}
 				} else {
 					due = time.Now().Add(min(time.Second*time.Duration(1<<min(active.Attempts, 12)), time.Hour))
 				}

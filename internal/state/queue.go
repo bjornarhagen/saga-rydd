@@ -173,13 +173,16 @@ func finishJob(ctx context.Context, db executor, j Job, done bool, cursor []byte
 
 // RecoverJobs is called only after taking the exclusive writer lock. Recover all
 // running jobs even if a wall-clock lease has not expired: the former owner is
-// gone. Never steal an in-process task merely because the machine slept.
+// gone. Inventory keeps its existing priority so a partially enumerated parent
+// stays ahead of children it already queued. Never steal an in-process task
+// merely because the machine slept.
 func (s *Store) RecoverJobs(ctx context.Context, now time.Time) (int64, error) {
 	if s.readOnly || s.lock == nil {
 		return 0, errors.New("recovery requires the exclusive writer lock")
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE jobs SET status='pending',due_at_ns=?,lease_token='',lease_until_ns=0
- WHERE status='running'`, now.UnixNano())
+	result, err := s.db.ExecContext(ctx, `UPDATE jobs SET status='pending',
+ due_at_ns=CASE WHEN kind=? THEN due_at_ns ELSE ? END,lease_token='',lease_until_ns=0
+ WHERE status='running'`, ScanKind, now.UnixNano())
 	if err != nil {
 		return 0, err
 	}

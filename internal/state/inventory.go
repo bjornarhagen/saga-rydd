@@ -36,13 +36,17 @@ func validRelative(p []byte) bool {
 	return len(s) > 0 && len(s) <= 4096 && !strings.ContainsRune(s, 0) && !filepath.IsAbs(s) && filepath.Clean(s) == s && s != ".." && !strings.HasPrefix(s, "../")
 }
 
+// SeedInventory starts a new pass only for roots without unfinished inventory
+// work, including running jobs and delayed retries. The exclusive writer lock
+// serializes this decision with job commits.
 func (s *Store) SeedInventory(ctx context.Context) error {
 	if s.readOnly {
 		return errors.New("state is read-only")
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO jobs(root_id,kind,path,due_at_ns)
- SELECT id,?,X'2e',? FROM roots WHERE enabled=1
- ON CONFLICT(root_id,kind,path) DO NOTHING`, ScanKind, time.Now().UnixNano())
+ SELECT r.id,?,X'2e',? FROM roots r WHERE r.enabled=1
+ AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.root_id=r.id AND j.kind=?)
+ ON CONFLICT(root_id,kind,path) DO NOTHING`, ScanKind, time.Now().UnixNano(), ScanKind)
 	return err
 }
 

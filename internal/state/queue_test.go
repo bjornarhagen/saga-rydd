@@ -215,3 +215,35 @@ func TestUpgradeFromV1PreservesInventoryAndJobs(t *testing.T) {
 		t.Fatal(paused, err)
 	}
 }
+
+func TestInventoryRecoveryKeepsParentAheadOfChildren(t *testing.T) {
+	ctx := context.Background()
+	s, _ := queueStore(t)
+	now := time.Now()
+	if err := s.EnqueueJob(ctx, 1, ScanKind, []byte("."), time.Unix(0, 1)); err != nil {
+		t.Fatal(err)
+	}
+	parent, err := s.ClaimJob(ctx, []string{ScanKind}, now, time.Minute)
+	if err != nil || parent == nil {
+		t.Fatal(parent, err)
+	}
+	if err = s.EnqueueJob(ctx, 1, ScanKind, []byte("child"), now.Add(-time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	// Seeding while a parent is running must leave that root's queue alone,
+	// but still initialize another root that has no inventory work.
+	if err = s.SeedInventory(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.RecoverJobs(ctx, now); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ClaimJob(ctx, []string{ScanKind}, now.Add(time.Second), time.Minute)
+	if err != nil || got == nil || got.ID != parent.ID {
+		t.Fatal("child displaced interrupted parent", got, err)
+	}
+	var count int
+	if err = s.db.QueryRowContext(ctx, "SELECT count(*) FROM jobs WHERE root_id=2 AND kind=?", ScanKind).Scan(&count); err != nil || count != 1 {
+		t.Fatal(count, err)
+	}
+}

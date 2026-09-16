@@ -9,7 +9,7 @@ This file is the canonical implementation tracker. The architecture and full acc
 - **Confirmed:** Go, local SQLite, TOML configuration, macOS/Linux, low resource usage, developer clutter plus duplicates, opt-in automatic cleanup in v1.
 - **Development:** Docker first; do not require host Go or additional host development tooling.
 - **Implemented app behavior:** initialization, saved/live status, paginated largest-file and selected-directory size reports, worker controls and opt-in experimental metadata scanning; private TOML/SQLite state, exclusive writer lock, bounded batches, atomic inventory/job commits and directory reconciliation watermarks. Durable dispatch cadence/daily batch reservations, child-entry pacing with partial batches, live scanner accounting, WAL backpressure and versioned JSON commands are implemented. Fine-grained CPU/I/O/power enforcement, service installation and cleanup remain unavailable; the first review-required node_modules candidate report is available.
-- **Active task:** none. Missing-scan guidance and directory report readability follow-up completed; P2-02b aggregation remains next.
+- **Active task:** none. P1-07a restart scheduling is complete; P2-02b generated-tree aggregation remains next.
 - **Blockers:** none currently. Scanner resource targets and native service behavior remain unvalidated; the database experiment is not a scanner benchmark.
 
 ## Execution priority — read-only MVP first
@@ -57,6 +57,7 @@ The next milestone is: **Rydd shows useful cleanup candidates with enough eviden
   - [x] P1-06b2 — Pace child-entry inspections and preserve partial-batch progress across throttle waits; expose rate/wait diagnostics.
   - [ ] P1-06b — Meter metadata/content/CPU, enforce daily resource consumption and add low-priority/power/sleep controls.
 - [ ] P1-07 — Implement adaptive revisits, fair scheduling, large-directory continuation and stale/missing-entry handling.
+  - [x] P1-07a — Finish existing queued inventory work before root revisits; preserve interrupted directory priority across cancellation/recovery.
 - [ ] P1-08 — Implement paginated saved reports, coverage/freshness, diagnostics and bounded logs/state growth.
   - [x] P1-08a — Versioned JSON controls/status, stable machine errors and capability discovery for AI and scripts.
   - [x] P1-08b1 — paginated largest-observed-files report, saved-inventory coverage/freshness, human/JSON parity and offline availability.
@@ -179,9 +180,13 @@ The next milestone is: **Rydd shows useful cleanup candidates with enough eviden
 
 **Last updated:** 2026-09-16.
 
-**Completed this session:** P1-08c usability follow-up: missing folder-scan errors now explain the problem and suggest a shell-quoted scan command, preserving custom state selection and existing machine error codes. Human directory reports now group size, coverage, freshness and concise wrapped caveats; counts use thousands separators and zero identity counters are hidden. JSON report data remains unchanged. Docker checks and four-target builds passed. Native synthetic verification confirmed the layout, unchanged JSON data/error codes, human/JSON error parity and literal shell quoting. CLI installed atomically without requesting a worker restart. CI will run on push; results are not yet recorded for this presentation-only follow-up. No private trial measurements are published.
+**Completed this session:** P1-07a: manual and background scan startup only seed roots with no unfinished inventory jobs, including running jobs and delayed retries. Crash recovery preserves inventory priority; cooperative interruption prioritizes the interrupted directory. Manual output explains resume/new-pass behavior; JSON adds `scan.mode`. Completed roots start a fresh pass on the next invocation. No schema or dependency change. Updated README, CLI contract and PLAN.
 
-**Next action:** continue P2-02b generated-tree aggregation as previously prioritized. No scan should start implicitly from a report.
+**Validation:** `./scripts/dev check` and four-target `./scripts/dev build-all` passed. Docker-built test executables ran natively on macOS: all `TestManualScan*` tests and `TestInventoryRecoveryKeepsParentAheadOfChildren` passed, as did `scripts/manual-scan-smoke`. Regression fixtures cover pending/running/delayed work, no repeated completed-directory scans, interrupted parent priority and independent roots. Native CLI installed atomically; no running worker was restarted. Native Linux CI results for this change are not yet recorded.
+
+**Limits / blockers:** no blocker for this slice. An interrupted directory still re-enumerates from its beginning; existing redundant jobs from older versions are not discarded. Changes inside completed directories wait for a later pass, and delayed retries prevent a new pass until resolved. Exact wide-directory continuation, adaptive revisits, stale-entry lifecycle and forced-refresh controls remain open P1-07 work. This is scheduling progress, not proof of current whole-tree contents.
+
+**Next action:** P2-02b generated-tree aggregation. Design durable bounded measurement continuation before implementing it; do not describe the current per-directory replay as exact per-entry resume. No scan should start implicitly from a report.
 
 **Remaining decisions:** first automation-eligible cache category; supported minimum OS/libc versions; tuned resource/scan-root defaults; license. Go and naming are settled.
 

@@ -20,7 +20,7 @@ rydd report -d /path/to/project
 rydd report -d /path/to/project --candidates --json
 ```
 
-No initialization is needed for a manual scan. It runs in the foreground and saves a separate inventory per selected folder; your configured background roots remain unchanged. Ctrl+C stops it; rerun the command to revisit the folder and continue saved work. Filesystem protections and configured exclusions still apply. No file contents are read or deleted. `--now` can produce substantial metadata I/O. `-s` spaces child-entry inspections, not every filesystem operation.
+No initialization is needed for a manual scan. It runs in the foreground and saves a separate inventory per selected folder; your configured background roots remain unchanged. Ctrl+C stops it; rerun the same command to finish pending work before revisiting completed folders. Once the queue is empty, the next invocation starts a fresh pass. The interrupted directory itself restarts its listing. Filesystem protections and configured exclusions still apply. No file contents are read or deleted. `--now` can produce substantial metadata I/O. `-s` spaces child-entry inspections, not every filesystem operation.
 
 Reports select the manual inventory for that exact normalized path when present. Directory-size reports otherwise use the existing configured inventory. Scoped `--candidates` requires a manual scan of that exact folder. Relative paths and `~/` are accepted; use the same global `--data-dir` across commands when overriding it. Manual inventories are separate from default `status` and unscoped reports. See [manual scan semantics](docs/cli.md#foreground-manual-scans).
 

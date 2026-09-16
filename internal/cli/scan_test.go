@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bjornarhagen/saga-rydd/internal/config"
+	"github.com/bjornarhagen/saga-rydd/internal/inventory"
 	"github.com/bjornarhagen/saga-rydd/internal/state"
 )
 
@@ -119,5 +120,86 @@ func TestManualScanInvalidArguments(t *testing.T) {
 		if code != 2 || !bytes.Contains(out.Bytes(), []byte("invalid_arguments")) {
 			t.Fatal(code, out.String(), errout.String())
 		}
+	}
+}
+
+// Construct the durable state left between directory batches, without relying
+// on filesystem speed or sleeps to interrupt at a particular directory.
+func TestManualScanFinishesSavedPassBeforeRevisiting(t *testing.T) {
+	for _, pending := range []string{"pending", "running", "delayed"} {
+		t.Run(pending, func(t *testing.T) {
+			ctx := context.Background()
+			root := t.TempDir()
+			for _, name := range []string{"a", "b"} {
+				if err := os.Mkdir(filepath.Join(root, name), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			paths, err := config.ResolvePaths(filepath.Join(t.TempDir(), "state"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Let the CLI establish private parent directories and the first pass.
+			first, err := scan(ctx, []string{"-d", root, "--now"}, paths, &bytes.Buffer{})
+			if err != nil || first.Mode != "new_pass" {
+				t.Fatal(first, err)
+			}
+			w, err := state.OpenWriter(ctx, manualState(paths, root))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer w.Close()
+			if err = w.SeedInventory(ctx); err != nil {
+				t.Fatal(err)
+			}
+			scanner, err := inventory.New([]string{root}, nil, []string{paths.StateDir})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer scanner.Close()
+			// Complete the root and one child, leaving only the other child.
+			for completed := 0; completed < 2; {
+				j, err := w.ClaimJob(ctx, []string{state.ScanKind}, time.Now(), time.Minute)
+				if err != nil || j == nil {
+					t.Fatal(j, err)
+				}
+				b, err := scanner.Next(ctx, *j)
+				if err != nil {
+					t.Fatal(b, err)
+				}
+				if err = w.CommitScan(ctx, *j, b); err != nil {
+					t.Fatal(err)
+				}
+				if b.Complete {
+					completed++
+				}
+			}
+			if pending != "pending" {
+				j, err := w.ClaimJob(ctx, []string{state.ScanKind}, time.Now(), time.Minute)
+				if err != nil || j == nil {
+					t.Fatal(j, err)
+				}
+				if pending == "delayed" {
+					if err = w.FinishJob(ctx, *j, false, j.Cursor, time.Now().Add(time.Hour), "retry"); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if err = w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			r, err := scan(ctx, []string{"-d", root, "--now"}, paths, &out)
+			if err != nil || r.Mode != "resume" || !bytes.Contains(out.Bytes(), []byte("Resuming saved work")) {
+				t.Fatal(r, err, out.String())
+			}
+			if pending == "delayed" {
+				if r.Batches != 0 || r.Outcome != "pending_retry" || r.Inventory.PendingJobs != 1 {
+					t.Fatal(r)
+				}
+			} else if r.Batches != 1 || r.Outcome != "queue_drained" || r.Inventory.PendingJobs != 0 {
+				t.Fatal("completed directories were revisited", r)
+			}
+		})
 	}
 }

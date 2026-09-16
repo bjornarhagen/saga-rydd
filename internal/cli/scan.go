@@ -52,6 +52,7 @@ type ScanReport struct {
 	DirectoryBytes []byte        `json:"directory_bytes"`
 	StateDir       string        `json:"state_dir"`
 	SleepMS        int           `json:"sleep_ms"`
+	Mode           string        `json:"mode"`
 	Outcome        string        `json:"outcome"`
 	Batches        int           `json:"batches"`
 	Inventory      state.Summary `json:"inventory"`
@@ -128,10 +129,23 @@ func scan(ctx context.Context, args []string, paths config.Paths, progress io.Wr
 	if _, err = w.RecoverJobs(ctx, time.Now()); err != nil {
 		return r, err
 	}
+	due, err := w.NextJobDue(ctx, []string{state.ScanKind})
+	if err != nil {
+		return r, err
+	}
+	r.Mode = "new_pass"
+	if !due.IsZero() {
+		r.Mode = "resume"
+	}
 	if err = w.SeedInventory(ctx); err != nil {
 		return r, err
 	}
 	fmt.Fprintf(progress, "Scanning %q; entry delay %d ms. Ctrl+C stops; committed batches remain saved.\n", root, delay)
+	if r.Mode == "resume" {
+		fmt.Fprintln(progress, "Resuming saved work before revisiting completed folders.")
+	} else {
+		fmt.Fprintln(progress, "Starting a new pass.")
+	}
 	lastProgress := time.Now()
 	for {
 		if err = ctx.Err(); err != nil {
@@ -171,7 +185,7 @@ func scan(ctx context.Context, args []string, paths config.Paths, progress io.Wr
 		if e != nil {
 			// Preserve the queue for the next invocation, even on interrupt.
 			cleanup, done := context.WithTimeout(context.Background(), time.Second)
-			finishErr := w.FinishJob(cleanup, *j, false, j.Cursor, time.Now(), e.Error())
+			finishErr := w.FinishJob(cleanup, *j, false, j.Cursor, time.Unix(0, 1), e.Error())
 			done()
 			return r, errors.Join(e, finishErr)
 		}
