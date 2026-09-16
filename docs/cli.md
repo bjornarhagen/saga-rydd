@@ -160,3 +160,5 @@ Writers migrate to schema 5. Reports can still read schema 4 without migration, 
 Candidate reports lead with the number of candidates on the current page, followed by aligned selection counts. Nonempty pages use compact candidate entries with path, measured sizes/coverage, modification dates and reference ID. Shared qualifications appear once; complete rule, recognition, observation, diagnostic and measurement evidence remains in the unchanged `--json` report.
 
 The next-page command preserves the selected manual directory and any custom global state location, with literal shell quoting. Empty pages can still have more results; the human summary makes that continuation explicit.
+
+Empty human candidate pages display a boxed uppercase result. Real terminals use bold yellow unless `NO_COLOR` is set or `TERM=dumb`; redirected output and JSON contain no color escapes.

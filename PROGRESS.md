@@ -9,7 +9,7 @@ This file is the canonical implementation tracker. The architecture and full acc
 - **Confirmed:** Go, local SQLite, TOML configuration, macOS/Linux, low resource usage, developer clutter plus duplicates, opt-in automatic cleanup in v1.
 - **Development:** Docker first; do not require host Go or additional host development tooling.
 - **Implemented app behavior:** initialization, saved/live status, paginated largest-file and selected-directory size reports, worker controls and opt-in experimental metadata scanning; private TOML/SQLite state, exclusive writer lock, bounded batches, atomic inventory/job commits and directory reconciliation watermarks. Durable dispatch cadence/daily batch reservations, child-entry pacing with partial batches, live scanner accounting, WAL backpressure and versioned JSON commands are implemented. Fine-grained CPU/I/O/power enforcement, service installation and cleanup remain unavailable; the first review-required node_modules candidate report is available.
-- **Active task:** none. Candidate-report readability and scoped continuation follow-up complete; full P2-02b remains open.
+- **Active task:** none. Empty candidate results now have a prominent boxed headline; full P2-02b remains open.
 - **Blockers:** none currently. Scanner resource targets and native service behavior remain unvalidated; the database experiment is not a scanner benchmark.
 
 ## Execution priority — read-only MVP first
@@ -182,9 +182,9 @@ The next milestone is: **Rydd shows useful cleanup candidates with enough eviden
 
 **Last updated:** 2026-09-16.
 
-**Completed this session:** candidate-report readability follow-up. Human output leads with the current-page result, groups aligned selection counts, uses compact candidate entries and prints shared qualifications once. Full evidence/notes remain in JSON. Next-page commands now preserve the selected manual directory and custom state location with literal shell quoting; the previous hint omitted the directory and could select a different inventory. No schema or scan behavior change.
+**Completed this session:** empty candidate pages now lead with a boxed uppercase headline, bold yellow on real terminals. Redirected output, `NO_COLOR` and `TERM=dumb` retain the plain box without ANSI sequences. JSON is unchanged. Terminal detection reuses the existing pinned go-isatty dependency, promoted from indirect to direct; no new module or version was introduced.
 
-**Validation:** Docker formatting/vet/tests/build and four-target builds passed. Native candidate smoke passed with synthetic positive candidates. A disposable 1,001-file native fixture verified emitted next-page routing, literal paths containing spaces/apostrophes/shell metacharacters, human summary layout and JSON parity against the previously installed binary (excluding generation timestamps). Installed atomically without stopping the user's worker or modifying saved inventory. CI results for this presentation follow-up are not yet recorded. No private project measurements were published.
+**Validation:** Docker checks and four-target builds passed. Native macOS disposable-fixture checks verified terminal emphasis, plain redirected output, `NO_COLOR`, `TERM=dumb` and valid uncolored JSON. Installed atomically without touching saved state or restarting the user's worker. CI results are not yet recorded for this cosmetic follow-up.
 
 **Limits / blockers:** no external blocker. Full P2-02b is NOT complete: compact mode is manual and opt-in; allocated totals above the report identity budget remain unknown; directory coverage remains capped at 10,000 inventory entries. Historical disappeared directories retain explicitly stale contributions. Directory enumeration itself still restarts within the interrupted directory. This production layout and its indexes differ from the isolated prototype; do not claim the prototype's 90% storage saving for real scans. Large-scale state/WAL/retirement growth, process-kill compact fixtures and native Linux CI results still need evidence before default rollout.
 

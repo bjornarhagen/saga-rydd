@@ -13,6 +13,7 @@ import (
 
 	"github.com/bjornarhagen/saga-rydd/internal/config"
 	"github.com/bjornarhagen/saga-rydd/internal/state"
+	"github.com/mattn/go-isatty"
 )
 
 // Presentation context stays outside the serialized report contract.
@@ -314,10 +315,29 @@ func candidateReportCommand(paths config.Paths, directory string) string {
 	return command
 }
 
+// A real terminal gets emphasis; pipes, files, NO_COLOR and dumb terminals
+// retain a prominent plain-text box without escape sequences.
+func printResultBanner(out io.Writer, title string) {
+	color := false
+	if f, ok := out.(*os.File); ok {
+		_, noColor := os.LookupEnv("NO_COLOR")
+		color = !noColor && os.Getenv("TERM") != "dumb" && isatty.IsTerminal(f.Fd())
+	}
+	fmt.Fprintln(out)
+	if color {
+		fmt.Fprint(out, "\x1b[1;33m")
+	}
+	edge := strings.Repeat("─", len(title)+4)
+	fmt.Fprintf(out, "  ┌%s┐\n  │  %s  │\n  └%s┘\n", edge, title, edge)
+	if color {
+		fmt.Fprint(out, "\x1b[0m")
+	}
+}
+
 func printFindingReport(out io.Writer, r state.FindingReport, command string) {
 	fmt.Fprintln(out, "Saga — Rydd: node_modules review candidates")
 	if len(r.Findings) == 0 {
-		fmt.Fprintln(out, "\nNo candidates on this page.")
+		printResultBanner(out, "NO CANDIDATES ON THIS PAGE")
 	} else {
 		fmt.Fprintf(out, "\n%d candidate(s) on this page — review required.\n", len(r.Findings))
 	}
