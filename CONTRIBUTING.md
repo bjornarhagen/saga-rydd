@@ -39,7 +39,7 @@ dist/rydd-linux-arm64
 dist/rydd-linux-amd64
 ```
 
-Run the binary matching your host for native smoke tests, for example `./dist/rydd-darwin-arm64 --help` on Apple Silicon. Do not use the Linux container's `dist/rydd` on macOS. Use an explicit private directory for native fixture state, such as `./dist/rydd-darwin-arm64 --data-dir "$PWD/.local/native-demo" init --root "$PWD"`. The current CLI does not scan; later scanner/service tests must use selected disposable roots and explicit setup.
+Run the binary matching your host for native smoke tests, for example `./dist/rydd-darwin-arm64 --help` on Apple Silicon. Do not use the Linux container's `dist/rydd` on macOS. Use an explicit private directory for native fixture state, such as `./dist/rydd-darwin-arm64 --data-dir "$PWD/.local/native-demo" init --root "$PWD"`. Scanner tests must use selected disposable roots and explicit setup.
 
 GitHub Actions runs checks and race detection on native macOS/Linux runners, plus Docker workflow validation and four-target cross-builds on Linux. Native CI does not replace physical laptop battery/sleep testing or the read-only soak.
 
@@ -62,3 +62,5 @@ Required future coverage includes APFS/ext4 behavior, symlink/path changes, perm
 Keep feature work linked to the stable task IDs in `PROGRESS.md`. Update the checklist and handoff with implementation, validation and remaining work in the same commit. CI passing is necessary but is not proof that a phase's unimplemented acceptance gates are complete.
 
 The repository's working directory can have any name. The public identity is **Saga — Rydd**, the repository/module is `github.com/bjornarhagen/saga-rydd`, and the CLI is `rydd`.
+
+For reproducible production compact/detailed storage measurements and forced scan/maintenance recovery, see [the compact scale fixture](experiments/compactscale/README.md). It generates its own temporary tree and emits sanitized JSON; native Linux CI exercises 100,000 identities and repeated retirement.

@@ -16,7 +16,7 @@ case "$task" in
     race) exec go test -race ./... "$@" ;;
     run) exec go run ./cmd/rydd "$@" ;;
     check)
-        unformatted=$(gofmt -l cmd internal experiments/sqlite)
+        unformatted=$(gofmt -l cmd internal experiments)
         if [ -n "$unformatted" ]; then
             echo 'Run ./scripts/dev fmt to format these files:' >&2
             printf '%s\n' "$unformatted" >&2
