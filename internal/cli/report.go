@@ -188,6 +188,9 @@ func printDirectoryReport(out io.Writer, r state.DirectoryReport) {
 		row("Observed file size", humanBytes(*r.LogicalBytes))
 		if r.AllocatedBytes != nil {
 			row("Allocated on disk", humanBytes(*r.AllocatedBytes))
+			if r.AllocatedSizeSource == "cached_reduction" {
+				row("Allocation evidence", "cached saved inventory")
+			}
 		} else {
 			row("Allocated on disk", "unknown")
 		}
@@ -206,7 +209,7 @@ func printDirectoryReport(out io.Writer, r state.DirectoryReport) {
 		fmt.Fprintln(out, "  Complete in saved inventory; current contents are not verified.")
 	}
 	fmt.Fprintln(out, "\nSCAN COVERAGE")
-	row("Entries measured", fmt.Sprintf("%s (limit %s)", humanCount(r.EntriesExamined), humanCount(r.EntryLimit)))
+	row("Entries examined", fmt.Sprintf("%s (limit %s)", humanCount(r.EntriesExamined), humanCount(r.EntryLimit)))
 	row("Files observed", humanCount(r.FilePaths))
 	if r.CompactedDirectories > 0 {
 		row("Compact file records", humanCount(r.CompactedFiles))
@@ -216,6 +219,9 @@ func printDirectoryReport(out io.Writer, r state.DirectoryReport) {
 	row("Directory errors", humanCount(r.DirectoryErrors))
 	if r.UnconfirmedEntries > 0 {
 		row("Unconfirmed entries", humanCount(r.UnconfirmedEntries))
+	}
+	if r.ExcludedEntries > 0 {
+		row("Historical rows excluded", humanCount(r.ExcludedEntries))
 	}
 	if r.RepeatedInodes > 0 {
 		row("Repeated file identities", humanCount(r.RepeatedInodes))

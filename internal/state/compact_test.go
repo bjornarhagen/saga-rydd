@@ -54,6 +54,14 @@ func compactMeasure(t *testing.T, s *Store) DirectoryReport {
 	}
 	return r
 }
+
+func compactMaintenanceStep(ctx context.Context, s *Store) (bool, error) {
+	worked, err := s.RetireCompact(ctx)
+	if err != nil || worked {
+		return worked, err
+	}
+	return s.ReduceAllocations(ctx)
+}
 func TestCompactLegacyReplayAndRetirement(t *testing.T) {
 	ctx := context.Background()
 	s, dir := compactFixture(t, false)
@@ -97,7 +105,7 @@ func TestCompactLegacyReplayAndRetirement(t *testing.T) {
 		t.Fatal(r)
 	}
 	for i := 0; i < 20; i++ {
-		worked, err := s.RetireCompact(ctx)
+		worked, err := compactMaintenanceStep(ctx, s)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -124,7 +132,7 @@ func TestCompactLegacyReplayAndRetirement(t *testing.T) {
 	}
 	compactBatch(t, s, 4, true, compactFile("detail", "y", 30))
 	for {
-		worked, err := s.RetireCompact(ctx)
+		worked, err := compactMaintenanceStep(ctx, s)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -152,13 +160,17 @@ func TestCompactReportIdentityBudgetAndUnknown(t *testing.T) {
 	}
 	// Partial identity evidence must never masquerade as a measured zero.
 	for {
-		worked, err := s.RetireCompact(context.Background())
+		worked, err := compactMaintenanceStep(context.Background(), s)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !worked {
 			break
 		}
+	}
+	r = compactMeasure(t, s)
+	if r.AllocatedBytes == nil || *r.AllocatedBytes != 4096*(DirectoryEntryLimit+1) || r.AllocatedSizeSource != "cached_reduction" || r.InodeEntriesExamined != 0 || r.Status != "recorded_complete" {
+		t.Fatal("large scope did not gain a cached allocated total", r)
 	}
 	if err := s.SeedInventory(context.Background()); err != nil {
 		t.Fatal(err)
@@ -222,7 +234,7 @@ func TestCompactMigrationKeepsV4Readable(t *testing.T) {
 	if err = w.db.QueryRow("SELECT count(*) FROM roots").Scan(&root); err != nil || root != 1 {
 		t.Fatal(root, err)
 	}
-	if w.schema != 5 {
+	if w.schema != schemaVersion {
 		t.Fatal(w.schema)
 	}
 }
@@ -245,5 +257,142 @@ func TestCompactOverflowRollsBackLeaseAndEvidence(t *testing.T) {
 	}
 	if err = s.FinishJob(ctx, *j, false, nil, time.Now(), ""); err != nil {
 		t.Fatal("lease was not rolled back", err)
+	}
+}
+
+// Commit real leased batches so generation membership, compact evidence and
+// queued children have the same relationships as scanner-produced records.
+func compactTreePass(t *testing.T, s *Store, generation int64, tree map[string][]Entry) {
+	t.Helper()
+	ctx := context.Background()
+	for {
+		j, err := s.ClaimJob(ctx, []string{ScanKind}, time.Now(), time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if j == nil {
+			break
+		}
+		entries, ok := tree[string(j.Path)]
+		if !ok {
+			t.Fatalf("unexpected directory job %q", j.Path)
+		}
+		b := ScanBatch{Identity: "fixture", Generation: generation,
+			Directory: Entry{Path: j.Path, Kind: "directory", Device: "d", Inode: string(j.Path)},
+			Entries:   entries, Complete: true}
+		if err = s.CommitScan(ctx, *j, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for {
+		worked, err := compactMaintenanceStep(ctx, s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !worked {
+			return
+		}
+	}
+}
+
+func TestCompactCompletedMembershipExcludesHistoricalSubtrees(t *testing.T) {
+	ctx := context.Background()
+	directory := func(path string) Entry {
+		return Entry{Path: []byte(path), Kind: "directory", Device: "d", Inode: path}
+	}
+	for _, replacement := range []string{"absent", "file", "symlink"} {
+		t.Run(replacement, func(t *testing.T) {
+			s, dir := compactFixture(t, true)
+			compactTreePass(t, s, 1, map[string][]Entry{
+				".":           {directory("gone"), directory("gone2"), compactFile("keep", "shared", 5)},
+				"gone":        {directory("gone/nested"), compactFile("gone/link", "shared", 5)},
+				"gone/nested": {compactFile("gone/nested/old", "old", 90)},
+				"gone2":       {compactFile("gone2/file", "sibling", 7)},
+			})
+			before := compactMeasure(t, s)
+			if *before.LogicalBytes != 107 || before.RepeatedInodes != 1 {
+				t.Fatal(before)
+			}
+			if err := s.SeedInventory(ctx); err != nil {
+				t.Fatal(err)
+			}
+			entries := []Entry{directory("gone2"), compactFile("keep", "shared", 5)}
+			wantLogical, wantAllocated, wantFiles := int64(12), int64(8192), 2
+			wantExcluded := 2
+			switch replacement {
+			case "file":
+				entries = append(entries, compactFile("gone", "new", 3))
+				wantLogical, wantAllocated, wantFiles = 15, 12288, 3
+			case "symlink":
+				entries = append(entries, Entry{Path: []byte("gone"), Kind: "symlink", SkipReason: "symlink"})
+				wantExcluded = 1 // The replacement itself is still observed.
+			}
+			compactTreePass(t, s, 2, map[string][]Entry{
+				".": entries, "gone2": {compactFile("gone2/file", "sibling", 7)},
+			})
+			// Offline read-only reporting also survives closing/reopening the store.
+			if err := s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			r, err := OpenReader(ctx, dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer r.Close()
+			after := compactMeasure(t, r)
+			wantStatus := "recorded_complete"
+			if replacement == "symlink" {
+				wantStatus = "partial"
+			}
+			if after.Status != wantStatus || *after.LogicalBytes != wantLogical || *after.AllocatedBytes != wantAllocated ||
+				after.ExcludedEntries != wantExcluded || after.FilePaths != wantFiles || after.RepeatedInodes != 0 ||
+				after.InodeEntriesExamined != 0 || after.AllocatedSizeSource != "cached_reduction" || after.UnconfirmedEntries != 0 {
+				t.Fatalf("%+v", after)
+			}
+			for _, path := range []string{"gone", "gone/nested"} {
+				selected, err := r.MeasureDirectory(ctx, "/fixture/node_modules/"+path)
+				if err != nil || selected.Status != "unknown" || selected.LogicalBytes != nil || selected.AllocatedBytes != nil || selected.UnknownReason == "" {
+					t.Fatal(selected, err)
+				}
+			}
+			var saved int
+			if err := r.db.QueryRow("SELECT count(*) FROM compact_dirs").Scan(&saved); err != nil || saved != 4 {
+				t.Fatal("reports must retain historical evidence", saved, err)
+			}
+		})
+	}
+}
+
+func TestCompactIncompleteOrFailedMembershipRetainsEvidence(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		t.Run(fmt.Sprint("failed=", failed), func(t *testing.T) {
+			ctx := context.Background()
+			s, _ := compactFixture(t, true)
+			compactTreePass(t, s, 1, map[string][]Entry{
+				".":     {{Path: []byte("child"), Kind: "directory"}},
+				"child": {compactFile("child/old", "old", 50)},
+			})
+			if err := s.SeedInventory(ctx); err != nil {
+				t.Fatal(err)
+			}
+			j := compactBatch(t, s, 2, false)
+			if failed {
+				// A failure after an incomplete batch must not reconcile children.
+				pending, err := s.ClaimJob(ctx, []string{ScanKind}, time.Now(), time.Minute)
+				if err != nil || pending == nil || pending.ID != j.ID {
+					t.Fatal(pending, err)
+				}
+				if err = s.CommitScan(ctx, *pending, ScanBatch{Fault: "fixture read error"}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, path := range []string{"/fixture/node_modules", "/fixture/node_modules/child"} {
+				r, err := s.MeasureDirectory(ctx, path)
+				if err != nil || r.Status != "stale" || r.LogicalBytes == nil || *r.LogicalBytes != 50 ||
+					r.AllocatedBytes == nil || *r.AllocatedBytes != 4096 || r.ExcludedEntries != 0 {
+					t.Fatal(r, err)
+				}
+			}
+		})
 	}
 }

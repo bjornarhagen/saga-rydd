@@ -18,6 +18,7 @@ type DirectoryReport struct {
 	CompactedDirectories  int        `json:"compacted_directories"`
 	CompactedFiles        int        `json:"compacted_files"`
 	InodeEntriesExamined  int        `json:"compact_inode_entries_examined"`
+	AllocatedSizeSource   string     `json:"allocated_size_source"`
 	GeneratedAt           time.Time  `json:"generated_at"`
 	Source                string     `json:"source"`
 	CurrentStateVerified  bool       `json:"current_state_verified"`
@@ -35,6 +36,7 @@ type DirectoryReport struct {
 	EntryLimit            int        `json:"entry_limit"`
 	Truncated             bool       `json:"truncated"`
 	UnconfirmedEntries    int        `json:"unconfirmed_entries"`
+	ExcludedEntries       int        `json:"excluded_entries"`
 	IncompleteDirectories int        `json:"incomplete_directories"`
 	DirectoryErrors       int        `json:"directory_errors"`
 	SkippedEntries        int        `json:"skipped_entries"`
@@ -47,7 +49,7 @@ type DirectoryReport struct {
 // MeasureDirectory measures at most DirectoryEntryLimit stored entries in one
 // read snapshot. No filesystem calls or unbounded recursive CTEs are used.
 func (s *Store) MeasureDirectory(ctx context.Context, path string) (DirectoryReport, error) {
-	r := DirectoryReport{GeneratedAt: time.Now().UTC(), Source: "saved_inventory", Path: path, PathBytes: []byte(path), Status: "unknown", EntryLimit: DirectoryEntryLimit, Notes: []string{
+	r := DirectoryReport{GeneratedAt: time.Now().UTC(), Source: "saved_inventory", Path: path, PathBytes: []byte(path), Status: "unknown", AllocatedSizeSource: "unknown", EntryLimit: DirectoryEntryLimit, Notes: []string{
 		"Saved observations only; current filesystem state is not verified. Recorded completeness is not proof of current contents.",
 		"Logical bytes sum regular-file paths; allocated file bytes count each known device/inode once within the measured portion. Directory metadata, symlinks and other objects are excluded.",
 		"Hardlinks outside this folder, clones and snapshots can retain storage. These are not reclaimable-space estimates; overlapping folder reports must not be added together.",
@@ -128,6 +130,10 @@ func (s *Store) MeasureDirectory(ctx context.Context, path string) (DirectoryRep
 		if ancestor == "." {
 			break
 		}
+		if parentGeneration > 0 && complete != 0 && parentError == "" && generation != parentGeneration {
+			r.UnknownReason = "selected directory or ancestor is absent from its latest successful completed parent listing"
+			return r, tx.Commit()
+		}
 		if parentGeneration == 0 || complete == 0 {
 			partial = true
 			reason("A saved ancestor listing is incomplete or unknown.")
@@ -169,6 +175,10 @@ func (s *Store) MeasureDirectory(ctx context.Context, path string) (DirectoryRep
 	type inodeSize struct{ allocated, size int64 }
 	inodes := map[inodeKey]inodeSize{}
 	validDirectories := map[string]bool{}
+	// A successful completed listing can establish absence in saved inventory.
+	// Propagate it (and non-directory replacements) through bounded path-order
+	// traversal, without discarding evidence after incomplete or failed scans.
+	excludedDescendants := map[string]bool{}
 	type compactDirectory struct {
 		path       []byte
 		generation int64
@@ -198,6 +208,16 @@ func (s *Store) MeasureDirectory(ctx context.Context, path string) (DirectoryRep
 			return r, err
 		}
 		r.EntriesExamined++
+		if string(p) != relative && (excludedDescendants[string(parent)] ||
+			(parentGeneration > 0 && parentComplete != 0 && parentError == "" && generation != parentGeneration)) {
+			r.ExcludedEntries++
+			excludedDescendants[string(p)] = true
+			reason("Historical entries absent from a successful completed ancestor listing, or below a non-directory replacement, are excluded from sizes and file counts. Saved evidence is retained; excluded entries still consume the report entry budget.")
+			continue
+		}
+		if kind != "directory" {
+			excludedDescendants[string(p)] = true
+		}
 		observedAt := time.Unix(0, observed).UTC()
 		if r.OldestObservation == nil || observedAt.Before(*r.OldestObservation) {
 			v := observedAt
@@ -301,7 +321,28 @@ func (s *Store) MeasureDirectory(ctx context.Context, path string) (DirectoryRep
 		return r, err
 	}
 	rows.Close()
+	cached := false
+	if s.schema >= 6 && !r.Truncated && allocatedKnown && len(compactPaths) > 0 {
+		var allocated, repeated int64
+		var conflict bool
+		e := tx.QueryRowContext(ctx, `SELECT c.allocated,c.repeated,c.conflicting FROM allocation_cache c
+ JOIN allocation_revisions v ON v.root_id=c.root_id AND v.revision=c.revision
+ WHERE c.root_id=? AND c.path=? AND c.ready=1 AND c.unknown=0`, r.RootID, []byte(relative)).Scan(&allocated, &repeated, &conflict)
+		if e != nil && !errors.Is(e, sql.ErrNoRows) {
+			return r, e
+		}
+		if e == nil {
+			cached = true
+			allocatedBytes, r.RepeatedInodes = allocated, int(repeated)
+			stale = stale || conflict
+			r.AllocatedSizeSource = "cached_reduction"
+			reason("Allocated bytes use a completed scoped reduction matching the saved inventory revision. Shared identities are deduplicated across ordinary and compact files within this scope.")
+		}
+	}
 	for _, directory := range compactPaths {
+		if cached {
+			break
+		}
 		inodeRows, e := tx.QueryContext(ctx, `SELECT i.device,i.inode,i.allocated,i.logical,i.paths,i.conflicting FROM compact_inodes i
  WHERE i.root_id=? AND i.path=? AND i.generation=? ORDER BY i.device,i.inode LIMIT ?`, r.RootID, directory.path, directory.generation, DirectoryEntryLimit-r.InodeEntriesExamined+1)
 		if e != nil {
@@ -352,7 +393,7 @@ func (s *Store) MeasureDirectory(ctx context.Context, path string) (DirectoryRep
 		}
 	}
 	if len(compactPaths) > 0 {
-		reason("Generated-tree files use compact directory totals; individual filenames are not retained. Allocated identity checks examine at most 10,000 compact records per report.")
+		reason("Generated-tree files use compact directory totals; individual filenames are not retained. Without a matching scoped cache, allocated identity checks examine at most 10,000 compact records per report.")
 	}
 	if !allocatedKnown {
 		reason("Allocated size is unknown: compact identity evidence is missing or exceeds this report's 10,000-record budget. Logical size still includes saved compact totals.")
@@ -374,6 +415,11 @@ func (s *Store) MeasureDirectory(ctx context.Context, path string) (DirectoryRep
 		r.LogicalBytes = &logicalBytes
 		if allocatedKnown {
 			r.AllocatedBytes = &allocatedBytes
+			if !cached {
+				r.AllocatedSizeSource = "bounded_identity_check"
+			}
+		} else {
+			r.AllocatedSizeSource = "unknown"
 		}
 	}
 	return r, tx.Commit()

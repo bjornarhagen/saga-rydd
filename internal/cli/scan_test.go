@@ -224,11 +224,11 @@ func TestManualCompactScanAndDetailedOverride(t *testing.T) {
 		t.Fatal(err)
 	}
 	r, err := scan(ctx, []string{"-d", root, "--compact", "--now"}, paths, &bytes.Buffer{})
-	if err != nil || !r.Compact || r.Outcome != "queue_drained" {
+	if err != nil || !r.Compact || r.Outcome != "queue_drained" || r.AllocationBatches == 0 {
 		t.Fatal(r, err)
 	}
 	rep, err := report(ctx, []string{"-d", root}, paths)
-	if err != nil || rep.Directory == nil || *rep.Directory.LogicalBytes != 20 || rep.Directory.CompactedFiles != 2 || rep.Directory.RepeatedInodes != 1 {
+	if err != nil || rep.Directory == nil || *rep.Directory.LogicalBytes != 20 || rep.Directory.CompactedFiles != 2 || rep.Directory.RepeatedInodes != 1 || rep.Directory.AllocatedSizeSource != "cached_reduction" {
 		t.Fatal(rep, err)
 	}
 	var compactAllocated int64 = *rep.Directory.AllocatedBytes

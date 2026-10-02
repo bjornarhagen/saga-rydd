@@ -47,6 +47,8 @@ func (s *Store) SeedInventory(ctx context.Context) error {
  SELECT r.id,?,X'2e',? FROM roots r WHERE r.enabled=1
  AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.root_id=r.id AND j.kind=?)
  AND NOT EXISTS (SELECT 1 FROM compact_retirement c WHERE c.root_id=r.id)
+ AND NOT EXISTS (SELECT 1 FROM allocation_cache c JOIN allocation_revisions v ON v.root_id=c.root_id
+ WHERE c.root_id=r.id AND (c.revision!=v.revision OR c.phase!='done'))
  ON CONFLICT(root_id,kind,path) DO NOTHING`, ScanKind, time.Now().UnixNano(), ScanKind)
 	return err
 }
@@ -84,6 +86,9 @@ func (s *Store) CommitScan(ctx context.Context, j Job, b ScanBatch) error {
 		due = now.Add(time.Hour)
 	}
 	if err := finishJob(ctx, tx, j, b.Complete, b.Cursor, due, b.Fault); err != nil {
+		return err
+	}
+	if err := invalidateAllocations(ctx, tx, j); err != nil {
 		return err
 	}
 	if b.Fault != "" {

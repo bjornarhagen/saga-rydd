@@ -19,11 +19,73 @@ grep -q '"compact":true' "$fixture/compact.json"
 rydd report -d "$fixture/root" --json >"$fixture/compact-report.json"
 grep -q '"logical_file_bytes":9' "$fixture/compact-report.json"
 grep -q '"compacted_files":1' "$fixture/compact-report.json"
+grep -q '"allocated_size_source":"cached_reduction"' "$fixture/compact-report.json"
+grep -q '"compact_inode_entries_examined":0' "$fixture/compact-report.json"
 rydd report -d "$fixture/root" --candidates --json >"$fixture/compact-candidates.json"
 grep -q '"classification":"review_required"' "$fixture/compact-candidates.json"
+grep -q '"allocated_size_source":"cached_reduction"' "$fixture/compact-candidates.json"
 rydd scan -d "$fixture/root" -s 10 >"$fixture/scan.txt"
 grep -q 'Scan stopped: queue_drained' "$fixture/scan.txt"
 rydd report -d "$fixture/root" >"$fixture/report.txt"
 grep -q 'saved directory size' "$fixture/report.txt"
 test ! -e "$fixture/state/config.toml"
+
+# Exercise compact membership with real native metadata. Move only fixture
+# objects outside the selected root so original fixture data stays available.
+mkdir -p "$fixture/root/node_modules/gone/nested" "$fixture/root/node_modules/gone2"
+printf 'obsolete\n' >"$fixture/root/node_modules/gone/nested/file"
+printf 'keep\n' >"$fixture/root/node_modules/gone2/file"
+ln "$fixture/root/node_modules/file" "$fixture/root/node_modules/gone/link"
+rydd scan -d "$fixture/root" --now --json >"$fixture/before-move.json"
+rydd report -d "$fixture/root" --json >"$fixture/before-move-report.json"
+grep -q '"logical_file_bytes":29' "$fixture/before-move-report.json"
+grep -q '"repeated_inodes":1' "$fixture/before-move-report.json"
+mv "$fixture/root/node_modules/gone" "$fixture/removed-subtree"
+rydd scan -d "$fixture/root" --now --json >"$fixture/after-move.json"
+rydd report -d "$fixture/root" --json >"$fixture/after-move-report.json"
+grep -q '"logical_file_bytes":14' "$fixture/after-move-report.json"
+grep -q '"excluded_entries":2' "$fixture/after-move-report.json"
+grep -q '"status":"recorded_complete"' "$fixture/after-move-report.json"
+grep -q '"repeated_inodes":0' "$fixture/after-move-report.json"
+rydd report -d "$fixture/root" >"$fixture/after-move-report.txt"
+grep -q 'Historical rows excluded.*2' "$fixture/after-move-report.txt"
+
+# A regular file replacing a directory contributes its own size, never its
+# former descendants. This also crosses the ordinary/compact storage boundary.
+mv "$fixture/root/node_modules" "$fixture/removed-dependencies"
+printf 'new\n' >"$fixture/root/node_modules"
+rydd scan -d "$fixture/root" --now --json >"$fixture/replacement.json"
+rydd report -d "$fixture/root" --json >"$fixture/replacement-report.json"
+grep -q '"logical_file_bytes":7' "$fixture/replacement-report.json"
+grep -q '"excluded_entries":3' "$fixture/replacement-report.json"
+grep -q '"compacted_files":0' "$fixture/replacement-report.json"
+grep -q '"status":"recorded_complete"' "$fixture/replacement-report.json"
+
+mv "$fixture/root/node_modules" "$fixture/replacement-file"
+mv "$fixture/removed-dependencies" "$fixture/root/node_modules"
+rydd scan -d "$fixture/root" --now --json >"$fixture/restore.json"
+rydd report -d "$fixture/root" --json >"$fixture/restore-report.json"
+grep -q '"logical_file_bytes":14' "$fixture/restore-report.json"
+grep -q '"status":"recorded_complete"' "$fixture/restore-report.json"
+grep -q '"allocated_size_source":"cached_reduction"' "$fixture/restore-report.json"
+
+# A larger identity set exceeds the bounded report fallback. The manual root
+# and candidate scope should both use a completed reduction instead. Empty
+# regular files exercise zero allocation without consuming meaningful space.
+mkdir "$fixture/root/node_modules/wide"
+i=0
+while [ "$i" -lt 10001 ]; do
+    : >"$fixture/root/node_modules/wide/file-$i"
+    i=$((i + 1))
+done
+rydd scan -d "$fixture/root" --now --json >"$fixture/wide-scan.json"
+rydd report -d "$fixture/root" --json >"$fixture/wide-report.json"
+grep -q '"allocated_size_source":"cached_reduction"' "$fixture/wide-report.json"
+grep -q '"compact_inode_entries_examined":0' "$fixture/wide-report.json"
+grep -q '"status":"recorded_complete"' "$fixture/wide-report.json"
+grep -q '"compacted_files":10003' "$fixture/wide-report.json"
+if grep -q '"unique_inode_allocated_file_bytes":null' "$fixture/wide-report.json"; then
+    cat "$fixture/wide-report.json" >&2
+    exit 1
+fi
 printf 'Native manual scan smoke passed.\n'

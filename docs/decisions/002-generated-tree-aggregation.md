@@ -1,7 +1,7 @@
 # ADR 002 — Compact generated-tree measurements
 
 - Date: 2026-09-16
-- Status: storage direction selected; production integration pending (P2-02b)
+- Status: opt-in production storage and scoped reductions implemented; full default rollout pending (P2-02b)
 - Scope: initially `node_modules`; read-only metadata and saved reports
 
 ## Decision
@@ -52,4 +52,18 @@ An opt-in manual `--compact` mode now uses production-owned schema-5 tables; it 
 
 Reports retain the existing 10,000-entry coverage bound and inspect at most 10,000 additional compact inode records. They combine ordinary/compact identities for the measured scope. Above that identity budget, allocated size is unknown and the report is partial; logical totals remain useful. This deliberately postpones the full incremental allocated reduction described above rather than introducing a full-ledger report query.
 
-The detailed override is pass-pinned. Schema-4 readers remain supported by the new CLI, while writers migrate additively. Background compact mode is refused until its maintenance dispatch is implemented. Historical disappeared subtrees retain existing stale-report semantics; they are not yet removed from measured totals. Exact per-entry directory resume remains unsolved. These limitations keep the full P2-02b task and default enablement open.
+The detailed override is pass-pinned. Schema-4 readers remain supported by the new CLI, while writers migrate additively. Background compact mode is refused until its maintenance dispatch is implemented. Exact per-entry directory resume remains unsolved. These limitations keep the full P2-02b task and default enablement open.
+
+## Saved membership reconciliation (P2-02b3)
+
+Directory reports now exclude historical entries and descendant compact totals when a successful completed ancestor listing no longer contains them, or an ancestor is recorded as a non-directory. This uses the existing saved membership generations and bounded path-order traversal; no schema change, scan or database retirement occurs during reporting. Excluded rows still consume the report budget and are disclosed in human/JSON output. Selecting a directory absent from its completed ancestor listing returns unknown sizes. Incomplete/failed listings retain qualified stale evidence. Historical rows and compact inode records still require a separate durable retirement design; this report correction does not bound database growth or complete the production membership lifecycle.
+
+## Scoped allocated reductions (P2-02b4)
+
+Schema 6 adds root inventory revisions, scalar scope caches, durable entry/inode cursors, membership scratch and scoped identity scratch. Manual compact scans schedule the selected root plus each outermost `node_modules` scope. Every committed scan batch advances its root revision in the lease-fenced transaction, including faults and detailed passes. This deliberately conservative invalidation avoids stale cross-directory hardlink or ancestor-membership totals. No independent subtree totals are added together.
+
+After the root's inventory queue finishes, each maintenance transaction processes at most 128 inventory entries, compact inode contributions or scratch-cleanup rows. Entries are traversed in byte-path order with the same overlap suppression, membership exclusion and 10,000-entry coverage cap as reports. A disk-backed identity map tracks maximum allocated bytes, conflicts and repeat counts across ordinary and compact evidence. Cursor and total updates commit together; high-fanout identities do not require an unbounded `GROUP BY`. A truncated reduction is never published. Completed scoped totals can exceed the report's 10,000 compact-identity fallback budget, but never override directory coverage or unknown-identity qualifications.
+
+Reports read matching revision/scope caches from their existing snapshot. Other scopes and pending/invalidated caches use the bounded fallback. Cache scratch is retired in bounded resumable batches after publication; a revision change first retires old scratch before rebuilding. Switching to detailed mode drains and removes obsolete caches so background detailed scans cannot be blocked by abandoned maintenance. Schema-4/5 readers remain supported by the new CLI; older binaries reject schema 6.
+
+This does not eliminate O(identity-count) temporary storage: one active scope's identity map can grow in SQLite before being retired, and freed pages may be reused rather than shrinking the file. Native Linux evidence, larger state/WAL/backlog measurements, durable disappeared-subtree retirement and background/default integration remain open. The isolated prototype's storage ratio does not describe this implementation.

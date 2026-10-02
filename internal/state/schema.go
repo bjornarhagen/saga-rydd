@@ -3,7 +3,7 @@ package state
 // Migrations are append-only. Inventory tables are rebuildable, but the database
 // must never be deleted/recreated as a migration strategy: future action/restore
 // records will live in their own durable tables here.
-const schemaVersion = 5
+const schemaVersion = 6
 const applicationID = 0x52594444 // RYDD
 
 const migration1 = `
@@ -55,6 +55,7 @@ var migrations = []struct{ name, sql string }{
 	{"streaming-inventory", migration3},
 	{"durable-scan-dispatch", migration4},
 	{"compact-directory-inventory", migration5},
+	{"scoped-allocated-reductions", migration6},
 }
 
 const migration4 = `
@@ -92,4 +93,32 @@ CREATE TABLE compact_retirement (
  root_id INTEGER NOT NULL, path BLOB NOT NULL, generation INTEGER NOT NULL, PRIMARY KEY(root_id,path,generation)
 );
 CREATE INDEX entries_compact_retire ON entries(root_id,parent,id) WHERE kind='file';
+`
+
+const migration6 = `
+CREATE TABLE allocation_revisions (
+ root_id INTEGER PRIMARY KEY REFERENCES roots(id),
+ revision INTEGER NOT NULL CHECK(typeof(revision)='integer' AND revision>=0)
+);
+CREATE TABLE allocation_cache (
+ root_id INTEGER NOT NULL REFERENCES roots(id), path BLOB NOT NULL,
+ revision INTEGER NOT NULL DEFAULT -1,
+ phase TEXT NOT NULL DEFAULT 'reset' CHECK(phase IN ('reset','entries','inodes','cleanup','done')),
+ entry_cursor BLOB NOT NULL DEFAULT X'', inode_device TEXT NOT NULL DEFAULT '', inode_number TEXT NOT NULL DEFAULT '',
+ examined INTEGER NOT NULL DEFAULT 0, allocated INTEGER NOT NULL DEFAULT 0,
+ repeated INTEGER NOT NULL DEFAULT 0, unknown INTEGER NOT NULL DEFAULT 0, conflicting INTEGER NOT NULL DEFAULT 0,
+ ready INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(root_id,path)
+);
+CREATE TABLE allocation_members (
+ root_id INTEGER NOT NULL, scope BLOB NOT NULL, path BLOB NOT NULL,
+ excluded INTEGER NOT NULL, kind TEXT NOT NULL, generation INTEGER NOT NULL, done INTEGER NOT NULL DEFAULT 0,
+ PRIMARY KEY(root_id,scope,path)
+) WITHOUT ROWID;
+CREATE INDEX allocation_members_pending ON allocation_members(root_id,scope,done,path)
+ WHERE excluded=0 AND kind='directory' AND generation>0;
+CREATE TABLE allocation_identities (
+ root_id INTEGER NOT NULL, scope BLOB NOT NULL, device TEXT NOT NULL, inode TEXT NOT NULL,
+ allocated INTEGER NOT NULL, logical INTEGER NOT NULL,
+ PRIMARY KEY(root_id,scope,device,inode)
+) WITHOUT ROWID;
 `

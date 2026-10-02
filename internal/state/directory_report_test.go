@@ -73,7 +73,7 @@ func TestDirectoryScopeHardlinksAndCompleteness(t *testing.T) {
 		t.Fatal(err)
 	}
 	stale, err := s.MeasureDirectory(ctx, "/fixture/a")
-	if err != nil || stale.Status != "stale" {
+	if err != nil || stale.Status != "unknown" || stale.LogicalBytes != nil || stale.AllocatedBytes != nil || stale.UnknownReason == "" {
 		t.Fatal(stale, err)
 	}
 }
@@ -102,6 +102,35 @@ func TestDirectoryBoundAndOverflow(t *testing.T) {
 	}
 	if _, err = s.MeasureDirectory(ctx, "/fixture/a"); err == nil {
 		t.Fatal("overflow accepted")
+	}
+	// Historical rows consume the same entry budget even when excluded. Their
+	// obsolete sizes (including overflowing values) do not enter the aggregate.
+	if _, err = s.db.Exec("UPDATE directories SET generation=99 WHERE path=?", []byte(".")); err != nil {
+		t.Fatal(err)
+	}
+	r, err = s.MeasureDirectory(ctx, "/fixture")
+	if err != nil || r.Status != "partial" || !r.Truncated || r.EntriesExamined != DirectoryEntryLimit ||
+		r.ExcludedEntries != DirectoryEntryLimit-1 || r.LogicalBytes == nil || *r.LogicalBytes != 0 || r.FilePaths != 0 {
+		t.Fatal(r, err)
+	}
+}
+
+func TestDirectoryFailedReconciliationDoesNotEstablishAbsence(t *testing.T) {
+	s := directoryFixture(t)
+	ctx := context.Background()
+	// A retained completion marker with a later failure cannot establish
+	// absence. Both direct and enclosing reports must keep qualified evidence.
+	if _, err := s.db.Exec("UPDATE directories SET generation=99,last_error='unavailable' WHERE path=?", []byte(".")); err != nil {
+		t.Fatal(err)
+	}
+	for _, fixture := range []struct {
+		path string
+		size int64
+	}{{"/fixture", 1700}, {"/fixture/a", 1200}} {
+		r, err := s.MeasureDirectory(ctx, fixture.path)
+		if err != nil || r.Status != "stale" || r.ExcludedEntries != 0 || r.LogicalBytes == nil || *r.LogicalBytes != fixture.size {
+			t.Fatal(r, err)
+		}
 	}
 }
 

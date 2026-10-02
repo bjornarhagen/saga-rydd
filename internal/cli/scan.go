@@ -56,6 +56,7 @@ type ScanReport struct {
 	Mode              string        `json:"mode"`
 	Outcome           string        `json:"outcome"`
 	RetirementBatches int           `json:"retirement_batches"`
+	AllocationBatches int           `json:"allocation_batches"`
 	Batches           int           `json:"batches"`
 	Inventory         state.Summary `json:"inventory"`
 }
@@ -153,8 +154,12 @@ func scan(ctx context.Context, args []string, paths config.Paths, progress io.Wr
 	if err != nil {
 		return r, err
 	}
+	reducing, err := w.HasAllocationWork(ctx)
+	if err != nil {
+		return r, err
+	}
 	r.Mode = "new_pass"
-	if !due.IsZero() || retiring {
+	if !due.IsZero() || retiring || reducing {
 		r.Mode = "resume"
 	}
 	if err = w.SeedInventory(ctx); err != nil {
@@ -193,8 +198,18 @@ func scan(ctx context.Context, args []string, paths config.Paths, progress io.Wr
 			}
 			if worked {
 				r.RetirementBatches++
+			} else {
+				worked, cleanupErr = w.ReduceAllocations(ctx)
+				if cleanupErr != nil {
+					return r, cleanupErr
+				}
+				if worked {
+					r.AllocationBatches++
+				}
+			}
+			if worked {
 				if time.Since(lastProgress) >= time.Second {
-					fmt.Fprintf(progress, "Retiring old inventory records: %d batches.\n", r.RetirementBatches)
+					fmt.Fprintf(progress, "Saved size calculations: %d batches; retiring old inventory records: %d batches.\n", r.AllocationBatches, r.RetirementBatches)
 					lastProgress = time.Now()
 				}
 				timer := time.NewTimer(time.Duration(max(delay, 1)) * time.Millisecond)
