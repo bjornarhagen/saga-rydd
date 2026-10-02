@@ -38,6 +38,7 @@ func (s *Store) ConfigureCompact(ctx context.Context, requested *bool) (bool, er
 	}
 	var pending bool
 	if err = s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM jobs WHERE kind=?) OR EXISTS(SELECT 1 FROM compact_retirement)
+ OR EXISTS(SELECT 1 FROM subtree_reconcile) OR EXISTS(SELECT 1 FROM subtree_retirement)
  OR EXISTS(SELECT 1 FROM allocation_cache c JOIN allocation_revisions v ON v.root_id=c.root_id WHERE c.revision!=v.revision OR c.phase!='done')`, ScanKind).Scan(&pending); err != nil {
 		return false, err
 	}

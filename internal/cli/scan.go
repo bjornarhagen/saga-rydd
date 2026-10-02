@@ -48,17 +48,18 @@ func manualState(paths config.Paths, root string) string {
 }
 
 type ScanReport struct {
-	Directory         string        `json:"directory"`
-	DirectoryBytes    []byte        `json:"directory_bytes"`
-	StateDir          string        `json:"state_dir"`
-	Compact           bool          `json:"compact"`
-	SleepMS           int           `json:"sleep_ms"`
-	Mode              string        `json:"mode"`
-	Outcome           string        `json:"outcome"`
-	RetirementBatches int           `json:"retirement_batches"`
-	AllocationBatches int           `json:"allocation_batches"`
-	Batches           int           `json:"batches"`
-	Inventory         state.Summary `json:"inventory"`
+	Directory                string        `json:"directory"`
+	DirectoryBytes           []byte        `json:"directory_bytes"`
+	StateDir                 string        `json:"state_dir"`
+	Compact                  bool          `json:"compact"`
+	SleepMS                  int           `json:"sleep_ms"`
+	Mode                     string        `json:"mode"`
+	Outcome                  string        `json:"outcome"`
+	RetirementBatches        int           `json:"retirement_batches"`
+	AllocationBatches        int           `json:"allocation_batches"`
+	SubtreeRetirementBatches int           `json:"subtree_retirement_batches"`
+	Batches                  int           `json:"batches"`
+	Inventory                state.Summary `json:"inventory"`
 }
 
 func scan(ctx context.Context, args []string, paths config.Paths, progress io.Writer) (ScanReport, error) {
@@ -158,8 +159,12 @@ func scan(ctx context.Context, args []string, paths config.Paths, progress io.Wr
 	if err != nil {
 		return r, err
 	}
+	reconciling, err := w.HasSubtreeRetirement(ctx)
+	if err != nil {
+		return r, err
+	}
 	r.Mode = "new_pass"
-	if !due.IsZero() || retiring || reducing {
+	if !due.IsZero() || retiring || reducing || reconciling {
 		r.Mode = "resume"
 	}
 	if err = w.SeedInventory(ctx); err != nil {
@@ -199,6 +204,15 @@ func scan(ctx context.Context, args []string, paths config.Paths, progress io.Wr
 			if worked {
 				r.RetirementBatches++
 			} else {
+				worked, cleanupErr = w.RetireSubtrees(ctx)
+				if cleanupErr != nil {
+					return r, cleanupErr
+				}
+				if worked {
+					r.SubtreeRetirementBatches++
+				}
+			}
+			if !worked {
 				worked, cleanupErr = w.ReduceAllocations(ctx)
 				if cleanupErr != nil {
 					return r, cleanupErr
@@ -209,7 +223,7 @@ func scan(ctx context.Context, args []string, paths config.Paths, progress io.Wr
 			}
 			if worked {
 				if time.Since(lastProgress) >= time.Second {
-					fmt.Fprintf(progress, "Saved size calculations: %d batches; retiring old inventory records: %d batches.\n", r.AllocationBatches, r.RetirementBatches)
+					fmt.Fprintf(progress, "Saved size calculations: %d batches; retiring old inventory records: %d batches.\n", r.AllocationBatches, r.RetirementBatches+r.SubtreeRetirementBatches)
 					lastProgress = time.Now()
 				}
 				timer := time.NewTimer(time.Duration(max(delay, 1)) * time.Millisecond)

@@ -12,8 +12,8 @@ import (
 // and ancestor membership can cross directory boundaries. The revision shares
 // the scanner's transaction/lease fence, including failures and detailed passes.
 func invalidateAllocations(ctx context.Context, tx *sql.Tx, j Job) error {
-	if _, err := tx.ExecContext(ctx, `INSERT INTO allocation_revisions VALUES(?,1)
- ON CONFLICT(root_id) DO UPDATE SET revision=revision+1`, j.RootID); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO allocation_revisions(root_id,revision,scan_revision) VALUES(?,1,1)
+ ON CONFLICT(root_id) DO UPDATE SET revision=revision+1,scan_revision=scan_revision+1`, j.RootID); err != nil {
 		return err
 	}
 	var compact bool
@@ -76,6 +76,8 @@ func (s *Store) ReduceAllocations(ctx context.Context) (bool, error) {
  FROM allocation_cache c JOIN allocation_revisions v ON v.root_id=c.root_id JOIN roots r ON r.id=c.root_id
  WHERE r.enabled=1 AND (c.revision!=v.revision OR c.phase!='done')
  AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.root_id=c.root_id AND j.kind=?)
+ AND NOT EXISTS(SELECT 1 FROM subtree_reconcile t WHERE t.root_id=c.root_id)
+ AND NOT EXISTS(SELECT 1 FROM subtree_retirement t WHERE t.root_id=c.root_id)
  ORDER BY c.root_id,c.path LIMIT 1`, ScanKind).Scan(&w.root, &w.path, &w.revision, &w.phase, &w.cursor, &w.device, &w.inode,
 		&w.examined, &w.allocated, &w.repeated, &w.unknown, &w.conflicting, &w.ready, &current)
 	if errors.Is(err, sql.ErrNoRows) {

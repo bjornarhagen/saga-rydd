@@ -47,6 +47,8 @@ func (s *Store) SeedInventory(ctx context.Context) error {
  SELECT r.id,?,X'2e',? FROM roots r WHERE r.enabled=1
  AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.root_id=r.id AND j.kind=?)
  AND NOT EXISTS (SELECT 1 FROM compact_retirement c WHERE c.root_id=r.id)
+ AND NOT EXISTS (SELECT 1 FROM subtree_reconcile t WHERE t.root_id=r.id)
+ AND NOT EXISTS (SELECT 1 FROM subtree_retirement t WHERE t.root_id=r.id)
  AND NOT EXISTS (SELECT 1 FROM allocation_cache c JOIN allocation_revisions v ON v.root_id=c.root_id
  WHERE c.root_id=r.id AND (c.revision!=v.revision OR c.phase!='done'))
  ON CONFLICT(root_id,kind,path) DO NOTHING`, ScanKind, time.Now().UnixNano(), ScanKind)
@@ -155,6 +157,14 @@ func (s *Store) CommitScan(ctx context.Context, j Job, b ScanBatch) error {
 	}
 	if string(j.Path) == "." && b.Complete {
 		if _, err = tx.ExecContext(ctx, "UPDATE roots SET last_scan_ns=?,last_error='' WHERE id=?", now.UnixNano(), j.RootID); err != nil {
+			return err
+		}
+	}
+	if b.Complete {
+		_, err = tx.ExecContext(ctx, `INSERT INTO subtree_reconcile(root_id,path,generation)
+ SELECT ?,?,? WHERE EXISTS(SELECT 1 FROM settings WHERE key='inventory.compact' AND value=X'31')
+ ON CONFLICT(root_id,path) DO UPDATE SET generation=excluded.generation,cursor=X''`, j.RootID, j.Path, b.Generation)
+		if err != nil {
 			return err
 		}
 	}

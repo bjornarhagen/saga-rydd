@@ -44,11 +44,15 @@ mv "$fixture/root/node_modules/gone" "$fixture/removed-subtree"
 rydd scan -d "$fixture/root" --now --json >"$fixture/after-move.json"
 rydd report -d "$fixture/root" --json >"$fixture/after-move-report.json"
 grep -q '"logical_file_bytes":14' "$fixture/after-move-report.json"
-grep -q '"excluded_entries":2' "$fixture/after-move-report.json"
+grep -q '"excluded_entries":0' "$fixture/after-move-report.json"
 grep -q '"status":"recorded_complete"' "$fixture/after-move-report.json"
 grep -q '"repeated_inodes":0' "$fixture/after-move-report.json"
 rydd report -d "$fixture/root" >"$fixture/after-move-report.txt"
-grep -q 'Historical rows excluded.*2' "$fixture/after-move-report.txt"
+if grep -q 'Historical rows excluded' "$fixture/after-move-report.txt"; then
+    cat "$fixture/after-move-report.txt" >&2
+    exit 1
+fi
+test -f "$fixture/removed-subtree/nested/file"
 
 # A regular file replacing a directory contributes its own size, never its
 # former descendants. This also crosses the ordinary/compact storage boundary.
@@ -57,7 +61,7 @@ printf 'new\n' >"$fixture/root/node_modules"
 rydd scan -d "$fixture/root" --now --json >"$fixture/replacement.json"
 rydd report -d "$fixture/root" --json >"$fixture/replacement-report.json"
 grep -q '"logical_file_bytes":7' "$fixture/replacement-report.json"
-grep -q '"excluded_entries":3' "$fixture/replacement-report.json"
+grep -q '"excluded_entries":0' "$fixture/replacement-report.json"
 grep -q '"compacted_files":0' "$fixture/replacement-report.json"
 grep -q '"status":"recorded_complete"' "$fixture/replacement-report.json"
 
@@ -88,4 +92,12 @@ if grep -q '"unique_inode_allocated_file_bytes":null' "$fixture/wide-report.json
     cat "$fixture/wide-report.json" >&2
     exit 1
 fi
+mv "$fixture/root/node_modules/wide" "$fixture/removed-wide"
+rydd scan -d "$fixture/root" --now --json >"$fixture/wide-retired-scan.json"
+rydd report -d "$fixture/root" --json >"$fixture/wide-retired-report.json"
+grep -q '"compacted_files":2' "$fixture/wide-retired-report.json"
+grep -q '"logical_file_bytes":14' "$fixture/wide-retired-report.json"
+grep -q '"excluded_entries":0' "$fixture/wide-retired-report.json"
+grep -q '"status":"recorded_complete"' "$fixture/wide-retired-report.json"
+test -f "$fixture/removed-wide/file-10000"
 printf 'Native manual scan smoke passed.\n'

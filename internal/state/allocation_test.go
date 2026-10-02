@@ -88,7 +88,7 @@ func TestAllocationBatchRollbackResumeAndCleanup(t *testing.T) {
 	// Stop immediately after one committed reduction batch, then inject a
 	// failure at cursor commit to prove contributions and progress roll back.
 	for i := 0; i < 10; i++ {
-		if _, err := s.ReduceAllocations(ctx); err != nil {
+		if _, err := compactMaintenanceStep(ctx, s); err != nil {
 			t.Fatal(err)
 		}
 		var count int
@@ -161,9 +161,19 @@ func TestAllocationBatchRollbackResumeAndCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	compactBatch(t, s, 2, true, compactFile("replacement", "replacement", 2))
-	for i := 0; i < 4; i++ {
-		if _, err := s.ReduceAllocations(ctx); err != nil {
+	for i := 0; i < 100; i++ {
+		if _, err := compactMaintenanceStep(ctx, s); err != nil {
 			t.Fatal(err)
+		}
+		var identities int
+		if err := s.db.QueryRow("SELECT count(*) FROM allocation_identities").Scan(&identities); err != nil {
+			t.Fatal(err)
+		}
+		if identities > 0 {
+			break
+		}
+		if i == 99 {
+			t.Fatal("did not reach allocation scratch before re-invalidation")
 		}
 	}
 	if err := s.EnqueueJob(ctx, 1, ScanKind, []byte("."), time.Now()); err != nil {
@@ -222,7 +232,7 @@ func TestAllocationConflictsUnknownOverflowAndFanout(t *testing.T) {
 		a.Allocated = math.MaxInt64
 		compactBatch(t, s, 1, true, a, b)
 		for i := 0; i < 10; i++ {
-			_, err := s.ReduceAllocations(ctx)
+			_, err := compactMaintenanceStep(ctx, s)
 			if err != nil {
 				var count int
 				if e := s.db.QueryRow("SELECT count(*) FROM allocation_identities").Scan(&count); e != nil || count != 0 {
@@ -294,7 +304,7 @@ func TestAllocationCrashChild(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 10; i++ {
-		if _, err = s.ReduceAllocations(context.Background()); err != nil {
+		if _, err = compactMaintenanceStep(context.Background(), s); err != nil {
 			t.Fatal(err)
 		}
 		var count int
@@ -378,7 +388,7 @@ func TestAllocationMigrationV5RollbackAndReadability(t *testing.T) {
 				if err = w.db.QueryRow("SELECT logical FROM compact_dirs").Scan(&logical); err != nil || logical != 5 {
 					t.Fatal(logical, err)
 				}
-				if w.schema != 6 {
+				if w.schema != schemaVersion {
 					t.Fatal(w.schema)
 				}
 			}
@@ -404,7 +414,7 @@ func TestAllocationCoverageLimit(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := tx.Exec("INSERT INTO allocation_revisions VALUES(1,1)"); err != nil {
+	if _, err := tx.Exec("INSERT INTO allocation_revisions(root_id,revision) VALUES(1,1)"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := tx.Exec("INSERT INTO allocation_cache(root_id,path) VALUES(1,X'2e')"); err != nil {

@@ -89,7 +89,7 @@ func OpenReader(ctx context.Context, dir string) (*Store, error) {
 		s.Close()
 		return nil, err
 	}
-	if version != schemaVersion && version != 4 && version != 5 {
+	if version != schemaVersion && version != 4 && version != 5 && version != 6 {
 		s.Close()
 		return nil, fmt.Errorf("state schema %d requires migration; run rydd state init", version)
 	}

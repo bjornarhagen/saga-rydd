@@ -60,6 +60,10 @@ func compactMaintenanceStep(ctx context.Context, s *Store) (bool, error) {
 	if err != nil || worked {
 		return worked, err
 	}
+	worked, err = s.RetireSubtrees(ctx)
+	if err != nil || worked {
+		return worked, err
+	}
 	return s.ReduceAllocations(ctx)
 }
 func TestCompactLegacyReplayAndRetirement(t *testing.T) {
@@ -262,9 +266,10 @@ func TestCompactOverflowRollsBackLeaseAndEvidence(t *testing.T) {
 
 // Commit real leased batches so generation membership, compact evidence and
 // queued children have the same relationships as scanner-produced records.
-func compactTreePass(t *testing.T, s *Store, generation int64, tree map[string][]Entry) {
+func compactTreePass(t *testing.T, s *Store, generation int64, tree map[string][]Entry, maintain ...bool) {
 	t.Helper()
 	ctx := context.Background()
+	offsets := map[string]int{}
 	for {
 		j, err := s.ClaimJob(ctx, []string{ScanKind}, time.Now(), time.Minute)
 		if err != nil {
@@ -277,12 +282,18 @@ func compactTreePass(t *testing.T, s *Store, generation int64, tree map[string][
 		if !ok {
 			t.Fatalf("unexpected directory job %q", j.Path)
 		}
+		start := offsets[string(j.Path)]
+		end := min(start+MaxBatchEntries, len(entries))
+		offsets[string(j.Path)] = end
 		b := ScanBatch{Identity: "fixture", Generation: generation,
 			Directory: Entry{Path: j.Path, Kind: "directory", Device: "d", Inode: string(j.Path)},
-			Entries:   entries, Complete: true}
+			Entries:   entries[start:end], Complete: end == len(entries), Cursor: []byte("fixture")}
 		if err = s.CommitScan(ctx, *j, b); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if len(maintain) > 0 && !maintain[0] {
+		return
 	}
 	for {
 		worked, err := compactMaintenanceStep(ctx, s)
@@ -329,7 +340,7 @@ func TestCompactCompletedMembershipExcludesHistoricalSubtrees(t *testing.T) {
 			}
 			compactTreePass(t, s, 2, map[string][]Entry{
 				".": entries, "gone2": {compactFile("gone2/file", "sibling", 7)},
-			})
+			}, false)
 			// Offline read-only reporting also survives closing/reopening the store.
 			if err := s.Close(); err != nil {
 				t.Fatal(err)
@@ -346,7 +357,7 @@ func TestCompactCompletedMembershipExcludesHistoricalSubtrees(t *testing.T) {
 			}
 			if after.Status != wantStatus || *after.LogicalBytes != wantLogical || *after.AllocatedBytes != wantAllocated ||
 				after.ExcludedEntries != wantExcluded || after.FilePaths != wantFiles || after.RepeatedInodes != 0 ||
-				after.InodeEntriesExamined != 0 || after.AllocatedSizeSource != "cached_reduction" || after.UnconfirmedEntries != 0 {
+				after.InodeEntriesExamined != wantFiles || after.AllocatedSizeSource != "bounded_identity_check" || after.UnconfirmedEntries != 0 {
 				t.Fatalf("%+v", after)
 			}
 			for _, path := range []string{"gone", "gone/nested"} {
