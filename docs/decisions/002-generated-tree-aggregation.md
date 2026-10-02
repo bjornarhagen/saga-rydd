@@ -75,3 +75,17 @@ Schema 7 adds reconciliation and purge work plus a scan-only revision. Successfu
 Discovery processes at most 128 children per transaction. Purges use separate indexed descendant-range and exact-anchor seeks, removing at most 128 rows from one fixed rebuildable table per transaction. They cover compact inode/generation state, directory/entry observations, obsolete scope caches and scratch, and superseded maintenance work. Anchors are retained until payload and descendants are removed; no filesystem deletion or unbounded cascading delete is used. Any newer scan revision cancels the old proof before its next purge batch, preserving fresh reappearance observations. Payload removal advances the allocated revision, so cache coverage cannot silently outlive deleted rows; a separate scan revision keeps sibling proofs valid across retirement-only changes. Scope reductions start after retirement drains.
 
 Reports remain read-only and can disclose excluded historical rows during interrupted maintenance. General background/detailed-inventory reconciliation and retry starvation are outside this slice. Upgrading to schema 7 alone does not schedule a scan or retire source evidence; schemas 4–6 remain readable. Local fixture evidence covers bounded batches, restart/rollback/SIGKILL, disappearance/reappearance/replacement and a 10,001-identity storage fixture. Larger-scale state/WAL/backlog and native Linux evidence remain rollout gates; row retirement does not promise physical database shrinkage.
+
+## Production scale evidence (P2-02b6a)
+
+The [production CLI fixture](../../experiments/compactscale/README.md) now measures
+100,000 native file identities, three observed-phase SIGKILL recoveries, rescan,
+shrink/restore and two disappearance/reappearance cycles. Native macOS and Linux
+passed exact logical/allocated totals and drained-backlog assertions. Separate
+production detailed inventories provide the baseline: after repeated cycles,
+compact state was about 59% smaller on macOS and 63% smaller on Linux, with extra
+scan/maintenance latency. Maximum child RSS was about 30 MiB in these runs;
+sampled WAL peaks were about 4–5 MiB. This supersedes any use of the prototype's
+90% ratio as a production prediction. It does not establish scaling beyond this
+fixture, long-term growth, unattended budgets or real-project usefulness; keep
+compact mode manual and opt-in pending those gates.

@@ -84,3 +84,20 @@ Repeated-cycle database size plateaued at 13.11 MiB over these two cycles, about
 smaller). This is below the isolated prototype's savings, and compact full passes
 were slower because they also perform two scoped reductions and scratch cleanup.
 The scans are unpaced (`--now`); they do not establish background resource budgets.
+
+## Native Linux CI result (2026-10-02)
+
+[CI run 37067698111](https://github.com/bjornarhagen/saga-rydd/actions/runs/37067698111)
+ran commit `6034ffd` on linux/amd64. The 100,000-file fixture passed all assertions
+in 3m26s including setup/build. [Sanitized measurements](results/linux-amd64-100000.json)
+record each process and pre-kill snapshot.
+
+Compact database size settled at 11.70 MiB after rescan and stayed there through
+both disappearance/reappearance cycles, versus a 31.45 MiB detailed baseline
+(about 63% smaller). The final disappearance left 2,958 reusable pages. Every
+completed compact pass drained all work and scratch; report latency was 5–6 ms.
+Maximum child RSS was 29.63 MiB and sampled WAL peaked at 4.35 MiB across the run.
+Full compact passes took 25.1–27.1 s, versus 11.5 s for fresh detailed inventory.
+These results show the same storage/maintenance tradeoff as macOS; different
+hardware, filesystem identities and metadata mean the platforms' timings and
+file sizes are not a controlled head-to-head comparison.
