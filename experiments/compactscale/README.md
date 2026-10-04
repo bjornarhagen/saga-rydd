@@ -1,6 +1,6 @@
 # Production compact inventory scale fixture
 
-P2-02b6a runs the real Rydd CLI on newly generated disposable files. It uses the
+P2-02b6a/b6b run the real Rydd CLI on newly generated disposable files. It uses the
 root Go module and existing SQLite driver. It accepts a binary and fixture size,
 never an existing scan root. Fixtures remain in the OS temporary directory for
 inspection; the runner moves its own directories and does not delete originals.
@@ -64,9 +64,10 @@ records, not remaining file rows; final compact identities and scratch counts
 provide additional context. Each child has a ten-minute timeout. An intended
 interruption that is not observed is a failure, not silently skipped evidence.
 
-This does not validate a million-entry tree, a single huge directory, background
-scanning, memory scaling across sizes, physical disk reclamation, power/sleep,
-provider hydration or real-project usefulness. See PROGRESS.md for rollout gates.
+The recorded runs validate only their stated sizes and 100-package fixture
+shape. They do not validate a single million-entry directory, background
+scanning, physical disk reclamation, power/sleep, provider hydration or
+real-project usefulness. See PROGRESS.md for rollout gates.
 
 ## Native macOS result (2026-10-02)
 
@@ -107,3 +108,78 @@ Full compact passes took 25.1–27.1 s, versus 11.5 s for fresh detailed invento
 These results show the same storage/maintenance tradeoff as macOS; different
 hardware, filesystem identities and metadata mean the platforms' timings and
 file sizes are not a controlled head-to-head comparison.
+
+## Million-identity native macOS result (2026-10-04)
+
+P2-02b6b used `-files 1000000 -cycles 2` with the same production CLI
+implementation (unchanged since `69422da`). All exact-size, drained-work,
+observed-phase SIGKILL/resume and repeated-cycle assertions passed. The
+[sanitized measurements](results/macos-arm64-1000000.json) preserve all stages.
+
+| Metric | 100,000 files | 1,000,000 files |
+| --- | ---: | ---: |
+| Maximum CLI child RSS across all stages | 29.36 MiB | 32.83 MiB |
+| Compact database after rescan and both cycles | 13.11 MiB | 126.75 MiB |
+| Detailed baseline database | 31.89 MiB | 314.78 MiB |
+| Compact saved-state reduction | 59% | 60% |
+| Completed compact report latency | 9–13 ms | 8–15 ms |
+| Fresh recovery (excluding initial interrupted process) | 15.12 s | 185.35 s |
+| Unchanged-tree rescan | 16.41 s | 210.65 s |
+| Second disappearance | 1.88 s | 17.72 s |
+| Second reappearance | 16.91 s | 190.16 s |
+| Fresh detailed baseline | 5.92 s | 113.68 s |
+| Sampled peak WAL, compact stages | 5.02 MiB | 7.34 MiB |
+| Sampled peak WAL, detailed baseline | 4.13 MiB | 14.53 MiB |
+
+The million-file run's measured child processes totaled 20.43 minutes, excluding
+fixture creation, report commands and observer work between children. Its database
+grew from 105.06 MiB after fresh recovery to 126.75 MiB after rescan, then stayed at
+that size through shrink/restore and both full disappearance/reappearance cycles.
+Disappearance freed 32,412 reusable pages. All completed stages drained their
+queues and scratch, and all three interruption recoveries preserved exact totals.
+
+At this fixture shape, 10× the identities increased peak child RSS by about 12%
+and compact database size by about 9.7×; report latency remained small. Scan and
+maintenance times grew more than 10× in some comparisons. These runs occurred on
+different days without controlled cache state or background load. The 100-ms
+observer also counts larger SQLite tables at the larger size, so timings include
+size-dependent measurement overhead. Do not attribute the timing difference to a
+specific production bottleneck without separate profiling. No timeout, schema,
+resource default or product behavior was changed to make the test pass.
+
+## Million-identity native Linux result (2026-10-04)
+
+[Manual CI run 37211415803](https://github.com/bjornarhagen/saga-rydd/actions/runs/37211415803)
+passed for `f44a94c` with `scale_files=1000000`. All four jobs passed: native
+macOS checks, native Linux checks, Docker/cross-build checks and the million-file
+Linux fixture. [Sanitized measurements](results/linux-amd64-1000000.json) confirm
+the requested size, all three SIGKILL recoveries, exact sizes and empty queues and
+scratch after completed stages.
+
+| Metric | 100,000 files | 1,000,000 files |
+| --- | ---: | ---: |
+| Maximum CLI child RSS across all stages | 29.63 MiB | 29.83 MiB |
+| Compact database after rescan and both cycles | 11.70 MiB | 113.90 MiB |
+| Detailed baseline database | 31.45 MiB | 311.52 MiB |
+| Compact saved-state reduction | 63% | 63% |
+| Completed compact report latency | 5–6 ms | 5–7 ms |
+| Fresh recovery (excluding initial interrupted process) | 25.48 s | 252.78 s |
+| Unchanged-tree rescan | 27.11 s | 267.57 s |
+| Second disappearance | 2.00 s | 20.11 s |
+| Second reappearance | 25.07 s | 246.39 s |
+| Fresh detailed baseline | 11.54 s | 121.50 s |
+| Sampled peak WAL, compact stages | 4.23 MiB | 6.20 MiB |
+| Sampled peak WAL, detailed baseline | 4.35 MiB | 5.50 MiB |
+
+Measured child processes totaled 26.11 minutes. Compact state grew from
+93.14 MiB after fresh recovery to 113.90 MiB after rescan, then stayed at that
+size through the remaining cycles. Each full disappearance freed 29,121 reusable
+pages. Peak child RSS increased by less than 1% from the smaller Linux fixture;
+full-pass latency and database size grew roughly with the identity count.
+
+Both platforms passed the million-file lifecycle without a production fix or
+longer per-child timeout. This completes the bounded P2-02b6b measurement task.
+It does not close the parent compact-mode rollout gate: directory shape, active
+filesystem mutation, long-term growth, background budgets and owner feedback
+still need their own evidence. The next product step is a controlled read-only
+trial on an explicitly selected real folder, keeping project-derived data private.

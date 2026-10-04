@@ -89,3 +89,24 @@ sampled WAL peaks were about 4–5 MiB. This supersedes any use of the prototype
 90% ratio as a production prediction. It does not establish scaling beyond this
 fixture, long-term growth, unattended budgets or real-project usefulness; keep
 compact mode manual and opt-in pending those gates.
+
+## Million-identity validation (P2-02b6b)
+
+On 2026-10-04, the same production fixture passed with one million identities
+across 100 packages on native macOS and native Linux. It verified three forced
+interruptions and recovery, half-tree shrink/restore, two full disappearance and
+reappearance cycles, exact reports and drained maintenance. See the
+[measurements and comparison tables](../../experiments/compactscale/README.md).
+
+With 10× the files, peak CLI RSS rose from 29.36 to 32.83 MiB on macOS and from
+29.63 to 29.83 MiB on Linux. Reports remained 8–15 ms and 5–7 ms respectively.
+Compact database size after rescan was 126.75 MiB on macOS and 113.90 MiB on Linux,
+then stayed at those sizes through both repeated cycles. Those databases were
+about 60% and 63% smaller than their detailed baselines. Full compact passes took
+roughly 3.1–3.5 minutes on macOS and 4.1–4.5 minutes on Linux; detailed baselines
+took roughly two minutes. These are fixture measurements, not general budgets.
+
+No production change or longer per-process timeout was needed. The result
+supports proceeding to controlled owner feedback while compact mode remains
+manual and opt-in. It does not validate all directory shapes, changing real
+projects, background operation, physical reclamation or long-term resource use.
