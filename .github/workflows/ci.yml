@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      scale_files:
+        description: Number of generated files in the native Linux scale fixture
+        type: choice
+        default: '100000'
+        options: ['100000', '1000000']
 
 permissions:
   contents: read
@@ -52,7 +58,7 @@ jobs:
   compact-scale:
     name: Native Linux compact scale fixture
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: ${{ inputs.scale_files == '1000000' && 60 || 30 }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
@@ -60,11 +66,13 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Production CLI scan, crash recovery and repeated retirement
+        env:
+          SCALE_FILES: ${{ inputs.scale_files || '100000' }}
         run: |
           mkdir -p dist
           go build -trimpath -o dist/rydd ./cmd/rydd
           go build -trimpath -o dist/compactscale ./experiments/compactscale
-          ./dist/compactscale -binary ./dist/rydd -files 100000 -cycles 2 | tee dist/compactscale.json
+          ./dist/compactscale -binary ./dist/rydd -files "$SCALE_FILES" -cycles 2 | tee dist/compactscale.json
 
   docker:
     name: Docker workflow and cross-builds

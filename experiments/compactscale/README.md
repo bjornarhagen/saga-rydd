@@ -17,6 +17,12 @@ Native Linux CI builds and runs the same runner and CLI directly on its host.
 For a quick harness check, use `-files 1000 -cycles 1`. A Linux container run is
 useful validation but is not native Linux evidence.
 
+For the million-identity comparison, use `-files 1000000 -cycles 2`. The same
+100 packages then contain 10,000 files each. The CI workflow's manual
+`scale_files` choice accepts `100000` or `1000000`; push/PR runs remain at
+100,000. A manual million-file job has a 60-minute overall limit; each child
+still has the same ten-minute timeout, so slow or stuck phases remain failures.
+
 ## Method and assertions
 
 - Generate 100 packages with a total of 100,000 unique regular-file identities

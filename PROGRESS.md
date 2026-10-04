@@ -9,7 +9,7 @@ This file is the canonical implementation tracker. The architecture and full acc
 - **Confirmed:** Go, local SQLite, TOML configuration, macOS/Linux, low resource usage, developer clutter plus duplicates, opt-in automatic cleanup in v1.
 - **Development:** Docker first; do not require host Go or additional host development tooling.
 - **Implemented app behavior:** initialization, saved/live status, paginated largest-file and selected-directory size reports, worker controls and opt-in experimental metadata scanning; private TOML/SQLite state, exclusive writer lock, bounded batches, atomic inventory/job commits and directory reconciliation watermarks. Durable dispatch cadence/daily batch reservations, child-entry pacing with partial batches, live scanner accounting, WAL backpressure and versioned JSON commands are implemented. Fine-grained CPU/I/O/power enforcement, service installation and cleanup remain unavailable; the first review-required node_modules candidate report is available.
-- **Active task:** none. P2-02b6a passed native macOS/Linux 100,000-identity validation and full CI; implementation is published as `6034ffd`. Next is P2-02b6b larger-scale evidence plus owner feedback. Full P2-02b/default rollout remains open.
+- **Active task:** P2-02b6b — run the production fixture at one million identities on native macOS and Linux, compare memory/state/latency growth and verify interruption/backlog recovery. Native macOS is running; a manual CI size option adds reproducible Linux coverage while routine CI stays at 100,000 identities. Full P2-02b/default rollout and owner feedback remain open.
 - **Blockers:** none currently. Scanner resource targets and native service behavior remain unvalidated; the database experiment is not a scanner benchmark.
 
 ## Execution priority — read-only MVP first
@@ -217,15 +217,15 @@ The next milestone is: **Rydd shows useful cleanup candidates with enough eviden
 
 ## Handoff
 
-**Last updated:** 2026-10-02.
+**Last updated:** 2026-10-04.
 
-**Completed this session:** P2-02b6a production scale runner and native Linux CI job, committed/published as `6034ffd` alongside prior `22e0af0` and `69422da`. Native macOS/Linux 100,000-identity fresh/rescan/shrink/restore/repeated-cycle checks passed, including forced scan, subtree retirement and allocation interruption recovery. Sanitized measurements and a separate detailed baseline document both storage savings and extra maintenance latency. No product default changed.
+**In progress this session:** P2-02b6b native million-identity production fixture. Current binaries were cross-built with Docker; native macOS execution is running on a new owned disposable tree. Added a manual CI choice for one million files while routine push/PR runs stay at 100,000. The longer manual job retains the ten-minute per-child timeout. No production behavior, schema or dependency changed.
 
-**Validation:** Docker checks, native macOS 1,000/100,000-file runs and the Linux Docker 1,000-file runner under race detection passed. Full CI for `6034ffd` passed native Linux/macOS checks, race tests, SQLite comparisons, CLI smoke, Linux bind-mount checks, Docker checks/four-target builds and the native Linux 100,000-identity fixture. Shell syntax/diff checks passed. Reproduction instructions and sanitized results are in `experiments/compactscale`; raw CI logs and generated fixture paths are excluded from public records. No host toolchain, installed app, personal-root scan or dependency added.
+**Validation so far:** `./scripts/dev check` and `git diff --check` passed. Prior native macOS/Linux 100,000-file results remain the comparison baseline. The million-file test is not yet complete; do not infer success from fixture generation or a running process.
 
-**Limits / blockers:** no external blocker. Full P2-02b remains open. Compact mode is manual/opt-in; the 10,000-entry directory cap and bounded identity fallback remain. The fixture uses sparse files across 100 directories, not one huge directory or realistic dependency contents. Temporary identity maps grow on disk; compact maintenance trades extra latency for smaller saved state. Sampled WAL/backlog peaks are lower bounds; two cycles do not establish long-term stability. Native sleep/power/provider behavior, million-entry scaling and owner feedback remain unvalidated. Freed pages do not shrink the database.
+**Limits / blockers:** no external blocker. Full P2-02b remains open. Compact mode is manual/opt-in; directory coverage and fallback caps remain. Million-file memory/state/latency and recovery results, physical platform behavior and owner feedback remain unvalidated. Raw logs and fixture paths stay private.
 
-**Next action:** P2-02b6b: run `experiments/compactscale` with `-files 1000000 -cycles 2` on a disposable native fixture, comparing peak memory, scan/maintenance latency, state/WAL growth and recovery against the saved 100,000-identity results. Record any demonstrated bottleneck before changing the production design. In parallel with future fixture work, collect report/candidate feedback only for an explicitly selected real development folder, keeping raw project observations private. MVP-TRIAL and P2-02b6 remain open; keep background/default rollout and general service work out of scope.
+**Next action:** dispatch native Linux CI with `scale_files=1000000`, finish the native macOS run, then record sanitized measurements and compare against the 100,000-file baselines. Investigate any demonstrated failure before changing the design or timeouts. A real-project trial requires an explicitly selected folder; a request for that selection is pending. Keep background/default rollout and general service work out of scope.
 
 **Remaining decisions:** first automation-eligible cache category; supported minimum OS/libc versions; tuned resource/scan-root defaults; license. Go and naming are settled.
 
