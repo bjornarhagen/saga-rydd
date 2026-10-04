@@ -190,7 +190,7 @@ func capabilities() map[string]any {
 			{"init", true, "writes_configuration_and_state", []string{"--root PATH (repeatable)", "--exclude PATH (repeatable)"}},
 			{"config check", true, "read_only", []string{}}, {"state init", true, "writes_state", []string{}},
 			{"scan", true, "scans_metadata_and_writes_isolated_state", []string{"-d PATH / --directory PATH", "-s MS / --sleep MS (default 10)", "--now (no entry delay)", "--compact / --detailed (saved manual inventory mode)"}},
-			{"report", true, "read_only", []string{"--limit N (1–200)", "--cursor TOKEN", "-d PATH / --directory PATH (saved folder size; combine with --candidates for manual scan root)", "--candidates [--cursor TOKEN] (old node_modules review)"}},
+			{"report", true, "read_only", []string{"--limit N (1–200)", "--cursor TOKEN", "-d PATH / --directory PATH (saved folder size; combine with --candidates for manual scan root)", "--candidates [--min-age-days N] [--cursor TOKEN] (old node_modules review)"}},
 			{"status", true, "read_only", []string{}}, {"pause", true, "writes_state", []string{}}, {"resume", true, "writes_state", []string{}},
 			{"stop", true, "stops_worker", []string{}}, {"daemon", false, "runs_worker", []string{"--experimental-scan"}}, {"capabilities", true, "read_only", []string{}},
 		},

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bjornarhagen/saga-rydd/internal/config"
 	"github.com/bjornarhagen/saga-rydd/internal/state"
 )
 
@@ -86,10 +87,37 @@ func TestReportHumanAndJSONOffline(t *testing.T) {
 		t.Fatal(code, human, errOut)
 	}
 
-	for _, args := range [][]string{{"report", "--candidates", "--limit", "1", "--json"}, {"report", "--candidates", "--cursor", "bad", "--json"}, {"report", "--limit", "0", "--json"}, {"report", "--cursor", "bad", "--json"}, {"report", "--bad", "--json"}, {"report", "--directory", "", "--json"}, {"report", "--directory", "/offline-fixture", "--limit", "1", "--json"}} {
+	code, machine, errOut = run("report", "--candidates", "--min-age-days", "30", "--json")
+	if err = json.Unmarshal([]byte(machine), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 || errOut != "" || envelope.Report.Candidates.MinimumAgeDays != 30 {
+		t.Fatal(machine, errOut)
+	}
+	code, human, errOut = run("report", "--candidates", "--min-age-days", "30")
+	if code != 0 || errOut != "" || !strings.Contains(strings.Join(strings.Fields(human), " "), "at least 30 days old") {
+		t.Fatal(code, human, errOut)
+	}
+
+	for _, args := range [][]string{{"report", "--min-age-days", "30", "--json"}, {"report", "--candidates=false", "--min-age-days", "90", "--json"}, {"report", "--candidates", "--min-age-days", "0", "--json"}, {"report", "--candidates", "--min-age-days", "-1", "--json"}, {"report", "--candidates", "--min-age-days", "36501", "--json"}, {"report", "--candidates", "--min-age-days", "abc", "--json"}, {"report", "--candidates", "--limit", "1", "--json"}, {"report", "--candidates", "--cursor", "bad", "--json"}, {"report", "--limit", "0", "--json"}, {"report", "--cursor", "bad", "--json"}, {"report", "--bad", "--json"}, {"report", "--directory", "", "--json"}, {"report", "--directory", "/offline-fixture", "--limit", "1", "--json"}} {
 		code, out, stderr := run(args...)
 		if code != 2 || stderr != "" || !strings.Contains(out, `"invalid_arguments"`) {
 			t.Fatal(code, out, stderr)
 		}
+	}
+}
+
+func TestCandidateContinuationPreservesAgeAndScope(t *testing.T) {
+	paths := config.Paths{StateDir: "/private/state with 'quote"}
+	command := candidateReportCommand(paths, "/fixture/project", 30)
+	var out bytes.Buffer
+	printFindingReport(&out, state.FindingReport{MinimumAgeDays: 30, NextCursor: "nm2:30:1000"}, command)
+	for _, want := range []string{"--min-age-days 30", "-d '/fixture/project'", "--data-dir " + shellQuote(paths.StateDir), "--cursor 'nm2:30:1000'", "at least 30 days old"} {
+		if !strings.Contains(strings.Join(strings.Fields(out.String()), " "), want) {
+			t.Fatal(want, out.String())
+		}
+	}
+	if strings.Contains(candidateReportCommand(paths, "", 90), "--min-age-days") {
+		t.Fatal("default command changed")
 	}
 }

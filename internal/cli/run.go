@@ -30,7 +30,7 @@ Commands:
   daemon [--experimental-scan]                         Run the worker (scanning opt-in for fixtures)
   pause / resume                                       Persistently pause or resume work
   stop                                                 Request graceful worker shutdown
-  report --candidates [--cursor TOKEN] [--json]         Node modules review candidates
+  report --candidates [--min-age-days N] [--cursor TOKEN] [--json]         Node modules review candidates
   report -d PATH [--json]                             Saved directory size
   report [--limit N] [--cursor TOKEN] [--json]           Largest observed files
   capabilities [--json]                                Discover commands and supported features

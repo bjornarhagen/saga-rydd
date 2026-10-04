@@ -28,6 +28,7 @@ func report(ctx context.Context, args []string, paths config.Paths) (reportResul
 	f.SetOutput(io.Discard)
 	limit := f.Int("limit", 20, "files per page (1–200)")
 	cursor := f.String("cursor", "", "next page cursor")
+	minimumAge := f.Int("min-age-days", state.FindingAgeDays, "minimum candidate age in days (1–36500)")
 	candidates := f.Bool("candidates", false, "review old node_modules observations")
 	directory := f.String("directory", "", "measure a saved directory subtree")
 	f.StringVar(directory, "d", "", "directory alias")
@@ -37,9 +38,12 @@ func report(ctx context.Context, args []string, paths config.Paths) (reportResul
 	if f.NArg() != 0 || *limit < 1 || *limit > 200 {
 		return reportResult{}, usageError{errors.New("report accepts --limit 1–200 and --cursor TOKEN, or --directory ABSOLUTE_PATH")}
 	}
-	directorySet, pageSet, limitSet := false, false, false
+	directorySet, pageSet, limitSet, ageSet := false, false, false, false
 	directoryFlags := 0
 	f.Visit(func(v *flag.Flag) {
+		if v.Name == "min-age-days" {
+			ageSet = true
+		}
 		if v.Name == "limit" {
 			limitSet = true
 		}
@@ -51,6 +55,12 @@ func report(ctx context.Context, args []string, paths config.Paths) (reportResul
 			pageSet = true
 		}
 	})
+	if ageSet && !*candidates {
+		return reportResult{}, usageError{errors.New("--min-age-days requires --candidates")}
+	}
+	if *minimumAge < 1 || *minimumAge > state.MaxFindingAgeDays {
+		return reportResult{}, usageError{state.ErrFindingAge}
+	}
 	if directoryFlags > 1 {
 		return reportResult{}, usageError{errors.New("use only one of -d and --directory")}
 	}
@@ -86,11 +96,11 @@ func report(ctx context.Context, args []string, paths config.Paths) (reportResul
 	}
 	defer s.Close()
 	if *candidates {
-		c, err := s.NodeModulesFindings(ctx, *cursor)
+		c, err := s.NodeModulesFindings(ctx, *cursor, *minimumAge)
 		if errors.Is(err, state.ErrReportCursor) {
 			err = usageError{err}
 		}
-		return reportResult{FileReport: state.FileReport{Candidates: &c, GeneratedAt: c.GeneratedAt, Source: c.Source, Files: []state.ReportFile{}, Roots: []state.ReportRoot{}, Notes: c.Notes}, candidateCommand: candidateReportCommand(scanPaths, *directory)}, err
+		return reportResult{FileReport: state.FileReport{Candidates: &c, GeneratedAt: c.GeneratedAt, Source: c.Source, Files: []state.ReportFile{}, Roots: []state.ReportRoot{}, Notes: c.Notes}, candidateCommand: candidateReportCommand(scanPaths, *directory, *minimumAge)}, err
 	}
 	if directorySet {
 		d, err := s.MeasureDirectory(ctx, filepath.Clean(*directory))
@@ -308,13 +318,16 @@ func directoryStatusLabel(status string) string {
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
 
-func candidateReportCommand(paths config.Paths, directory string) string {
+func candidateReportCommand(paths config.Paths, directory string, minimumAge int) string {
 	command := "rydd"
 	defaults, err := config.ResolvePaths("")
 	if err != nil || paths.StateDir != defaults.StateDir {
 		command += " --data-dir " + shellQuote(paths.StateDir)
 	}
 	command += " report --candidates"
+	if minimumAge != state.FindingAgeDays {
+		command += fmt.Sprintf(" --min-age-days %d", minimumAge)
+	}
 	if directory != "" {
 		command += " -d " + shellQuote(directory)
 	}

@@ -23,7 +23,7 @@ func TestNodeModulesFindings(t *testing.T) {
 	put("a/node_modules/edit.txt", "a/node_modules", "file", time.Now().UnixNano())
 	// Fresh inner edits do not change the deliberately limited selection rule.
 	// Its evidence must explicitly disclose that modifications were not inspected.
-	r, err := s.NodeModulesFindings(ctx, "")
+	r, err := s.NodeModulesFindings(ctx, "", FindingAgeDays)
 	if err != nil || len(r.Findings) != 1 {
 		t.Fatal(r, err)
 	}
@@ -34,7 +34,7 @@ func TestNodeModulesFindings(t *testing.T) {
 	if !strings.Contains(strings.Join(r.Notes, " "), "dependency modifications have not been inspected") {
 		t.Fatal(r.Notes)
 	}
-	again, err := s.NodeModulesFindings(ctx, "")
+	again, err := s.NodeModulesFindings(ctx, "", FindingAgeDays)
 	if err != nil || again.Findings[0].ID != f.ID {
 		t.Fatal(again, err)
 	}
@@ -53,7 +53,7 @@ func TestNodeModulesFindings(t *testing.T) {
 		if _, err = s.db.Exec(change); err != nil {
 			t.Fatal(err)
 		}
-		got, err := s.NodeModulesFindings(ctx, "")
+		got, err := s.NodeModulesFindings(ctx, "", FindingAgeDays)
 		if err != nil || len(got.Findings) != 0 {
 			t.Fatal(change, got, err)
 		}
@@ -88,22 +88,38 @@ func TestFindingPagesAndNestedSuppression(t *testing.T) {
 	if err = tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	r, err := s.NodeModulesFindings(ctx, "")
+	r, err := s.NodeModulesFindings(ctx, "", FindingAgeDays)
 	if err != nil || r.EntriesExamined != FindingEntryLimit || r.PageCoverage != "more_saved_entries" || r.NextCursor == "" || len(r.Findings) != 0 {
 		t.Fatal(r, err)
 	}
-	next, err := s.NodeModulesFindings(ctx, r.NextCursor)
+	next, err := s.NodeModulesFindings(ctx, r.NextCursor, FindingAgeDays)
 	if err != nil || next.NextCursor == r.NextCursor || len(next.Findings) != 0 {
 		t.Fatal(next, err)
 	}
 	for _, token := range []string{"bad", "nm1:-1", "nm1:0", "nm1:99999999999999999999999"} {
-		if _, err = s.NodeModulesFindings(ctx, token); err != ErrReportCursor {
+		if _, err = s.NodeModulesFindings(ctx, token, FindingAgeDays); err != ErrReportCursor {
 			t.Fatal(token, err)
+		}
+	}
+	custom, err := s.NodeModulesFindings(ctx, "", 30)
+	if err != nil || custom.NextCursor == "" {
+		t.Fatal(custom, err)
+	}
+	continued, err := s.NodeModulesFindings(ctx, custom.NextCursor, 30)
+	if err != nil || continued.NextCursor == custom.NextCursor || continued.MinimumAgeDays != 30 {
+		t.Fatal(continued, err)
+	}
+	for _, tc := range []struct {
+		token string
+		days  int
+	}{{custom.NextCursor, 90}, {custom.NextCursor, 31}, {r.NextCursor, 30}, {"nm2:30:-1", 30}, {"nm2:30:0", 30}, {"nm2:30:1:2", 30}, {"nm2:30:99999999999999999999999", 30}} {
+		if _, err := s.NodeModulesFindings(ctx, tc.token, tc.days); err != ErrReportCursor {
+			t.Fatal(tc, err)
 		}
 	}
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
-	if _, err = s.NodeModulesFindings(canceled, ""); err == nil {
+	if _, err = s.NodeModulesFindings(canceled, "", FindingAgeDays); err == nil {
 		t.Fatal("cancellation ignored")
 	}
 }
@@ -125,11 +141,11 @@ func TestFindingCandidateCap(t *testing.T) {
 			}
 		}
 	}
-	r, err := s.NodeModulesFindings(ctx, "")
+	r, err := s.NodeModulesFindings(ctx, "", FindingAgeDays)
 	if err != nil || len(r.Findings) != 20 || r.PageCoverage != "more_saved_entries" || r.NextCursor == "" {
 		t.Fatal(r, err)
 	}
-	next, err := s.NodeModulesFindings(ctx, r.NextCursor)
+	next, err := s.NodeModulesFindings(ctx, r.NextCursor, FindingAgeDays)
 	if err != nil || len(next.Findings) != 1 || next.PageCoverage != "saved_entries_exhausted" || next.NextCursor != "" {
 		t.Fatal(next, err)
 	}
@@ -171,7 +187,7 @@ func TestSelectionDiagnosticReasons(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			r, err := s.NodeModulesFindings(context.Background(), "")
+			r, err := s.NodeModulesFindings(context.Background(), "", FindingAgeDays)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -190,5 +206,47 @@ func TestSelectionDiagnosticReasons(t *testing.T) {
 				t.Fatal(r)
 			}
 		})
+	}
+}
+
+func TestFindingAgeOverride(t *testing.T) {
+	s := directoryFixture(t)
+	ctx := context.Background()
+	old := time.Now().Add(-60 * 24 * time.Hour).UnixNano()
+	for _, e := range []struct{ path, kind string }{{"a/node_modules", "directory"}, {"a/package.json", "file"}} {
+		if _, err := s.db.Exec(`INSERT INTO entries(root_id,path,parent,kind,size,allocated,mtime_ns,ctime_ns,device,inode,generation,observed_at_ns) VALUES(1,?,X'61',?,0,0,?,1,'','',2,10)`, []byte(e.path), e.kind, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct{ days, want int }{{90, 0}, {30, 1}, {1, 1}, {MaxFindingAgeDays, 0}, {90, 0}} {
+		r, err := s.NodeModulesFindings(ctx, "", tc.days)
+		if err != nil || r.MinimumAgeDays != tc.days || len(r.Findings) != tc.want {
+			t.Fatal(tc, r, err)
+		}
+		for _, f := range r.Findings {
+			if f.Classification != "review_required" || len(f.Actions) != 0 || r.CurrentStateVerified {
+				t.Fatal(f)
+			}
+		}
+	}
+	for _, days := range []int{-1, 0, MaxFindingAgeDays + 1, int(^uint(0) >> 1)} {
+		if _, err := s.NodeModulesFindings(ctx, "", days); err != ErrFindingAge {
+			t.Fatal(days, err)
+		}
+	}
+	// Either timestamp must meet the override; unknown/future evidence is never eligible.
+	for _, path := range []string{"a/node_modules", "a/package.json"} {
+		for _, mt := range []int64{0, time.Now().Add(-29 * 24 * time.Hour).UnixNano(), time.Now().Add(24 * time.Hour).UnixNano()} {
+			if _, err := s.db.Exec(`UPDATE entries SET mtime_ns=? WHERE path=?`, mt, []byte(path)); err != nil {
+				t.Fatal(err)
+			}
+			r, err := s.NodeModulesFindings(ctx, "", 30)
+			if err != nil || len(r.Findings) != 0 {
+				t.Fatal(path, mt, r, err)
+			}
+		}
+		if _, err := s.db.Exec(`UPDATE entries SET mtime_ns=? WHERE path=?`, old, []byte(path)); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

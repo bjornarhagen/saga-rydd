@@ -2,6 +2,7 @@ package state
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strconv"
@@ -11,6 +12,11 @@ import (
 
 const FindingEntryLimit = 1000
 const FindingAgeDays = 90
+
+// MaxFindingAgeDays keeps duration arithmetic bounded to 100 years.
+const MaxFindingAgeDays = 36500
+
+var ErrFindingAge = errors.New("minimum candidate age must be 1–36500 days")
 
 type Finding struct {
 	ID                  string          `json:"id"`
@@ -74,8 +80,8 @@ type FindingReport struct {
 // NodeModulesFindings derives review candidates from durable observations. It
 // examines one bounded ID page, then measures at most 20 candidates separately.
 // Each measurement has its own snapshot; no multi-snapshot totals are offered.
-func (s *Store) NodeModulesFindings(ctx context.Context, token string) (FindingReport, error) {
-	r := FindingReport{Diagnostics: selectionDiagnostics(), PageCoverage: "saved_entries_exhausted", GeneratedAt: time.Now().UTC(), Source: "saved_inventory", Findings: []Finding{}, EntryLimit: FindingEntryLimit, MinimumAgeDays: FindingAgeDays, Notes: []string{
+func (s *Store) NodeModulesFindings(ctx context.Context, token string, minimumAgeDays int) (FindingReport, error) {
+	r := FindingReport{Diagnostics: selectionDiagnostics(), PageCoverage: "saved_entries_exhausted", GeneratedAt: time.Now().UTC(), Source: "saved_inventory", Findings: []Finding{}, EntryLimit: FindingEntryLimit, MinimumAgeDays: minimumAgeDays, Notes: []string{
 		"Review required. Old recorded directory and package.json modification times do not prove inactivity, continuous stability or safe deletion.",
 		"Project recognition uses a sibling regular-file package.json observation only. Manifest contents, lockfiles, source activity and dependency modifications have not been inspected.",
 		"Removing dependencies can break builds and applications or lose local edits. Regeneration may require the correct package manager, lockfile, credentials, network access and packages that remain available.",
@@ -84,13 +90,22 @@ func (s *Store) NodeModulesFindings(ctx context.Context, token string) (FindingR
 		"Nested node_modules paths are suppressed. Empty pages can still have a next cursor. Pages are not a frozen snapshot; concurrent updates can change results.",
 		"Findings are derived on demand, not persisted approvals. IDs are local inventory references, not action authorization; cleanup, dismissal and automatic policies are unavailable.",
 	}}
+	if minimumAgeDays < 1 || minimumAgeDays > MaxFindingAgeDays {
+		return r, ErrFindingAge
+	}
+	// Preserve existing default-age cursors. Custom-age cursors cannot be
+	// continued with a different threshold or silently fall back to the default.
+	prefix := "nm1:"
+	if minimumAgeDays != FindingAgeDays {
+		prefix = fmt.Sprintf("nm2:%d:", minimumAgeDays)
+	}
 	var after int64
 	if token != "" {
 		var err error
-		if !strings.HasPrefix(token, "nm1:") {
+		if !strings.HasPrefix(token, prefix) {
 			return r, ErrReportCursor
 		}
-		after, err = strconv.ParseInt(strings.TrimPrefix(token, "nm1:"), 10, 64)
+		after, err = strconv.ParseInt(strings.TrimPrefix(token, prefix), 10, 64)
 		if err != nil || after <= 0 {
 			return r, ErrReportCursor
 		}
@@ -107,10 +122,10 @@ func (s *Store) NodeModulesFindings(ctx context.Context, token string) (FindingR
 	if err != nil {
 		return r, err
 	}
-	cutoff := r.GeneratedAt.Add(-FindingAgeDays * 24 * time.Hour).UnixNano()
+	cutoff := r.GeneratedAt.Add(-time.Duration(minimumAgeDays) * 24 * time.Hour).UnixNano()
 	for rows.Next() {
 		if r.EntriesExamined == FindingEntryLimit || len(r.Findings) == 20 {
-			r.NextCursor = fmt.Sprintf("nm1:%d", after)
+			r.NextCursor = fmt.Sprintf("%s%d", prefix, after)
 			r.PageCoverage = "more_saved_entries"
 			break
 		}
