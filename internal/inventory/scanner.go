@@ -237,8 +237,7 @@ func (s *Scanner) open(ctx context.Context, j state.Job) (*os.File, string, stri
 	}
 	// Mount IDs are for live boundary checks, not persistent identity: they
 	// change when the same filesystem is mounted again or in another namespace.
-	fingerprint := sha256.Sum256([]byte(fmt.Sprintf("%x:%s:%d:%d", []byte(canonical), volume, st.Dev, st.Ino)))
-	identity := fmt.Sprintf("v1:%x", fingerprint)
+	identity := rootFingerprint(canonical, volume, st)
 	if j.RootIdentity != "" && j.RootIdentity != identity {
 		return fail(errors.New("root or volume identity changed; previous inventory retained"))
 	}
@@ -263,6 +262,11 @@ func (s *Scanner) open(ctx context.Context, j state.Job) (*os.File, string, stri
 		}
 	}
 	return f, identity, canonical, nil
+}
+
+func rootFingerprint(path, volume string, st unix.Stat_t) string {
+	fingerprint := sha256.Sum256([]byte(fmt.Sprintf("%x:%s:%d:%d", []byte(path), volume, st.Dev, st.Ino)))
+	return fmt.Sprintf("v1:%x", fingerprint)
 }
 
 // Next returns at most 128 child observations. A process restart or lost cursor

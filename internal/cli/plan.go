@@ -6,9 +6,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"time"
 
 	"github.com/bjornarhagen/saga-rydd/internal/config"
+	"github.com/bjornarhagen/saga-rydd/internal/inventory"
 	"github.com/bjornarhagen/saga-rydd/internal/plans"
 	"github.com/bjornarhagen/saga-rydd/internal/state"
 )
@@ -31,6 +33,12 @@ type CheckedPlan struct {
 	Check state.SelectionCheck `json:"check"`
 }
 
+type VerifiedPlan struct {
+	ID             string                `json:"id"`
+	InventoryCheck state.SelectionCheck  `json:"inventory_check"`
+	Live           *inventory.LiveReport `json:"live,omitempty"`
+}
+
 func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 	r := PlanPreview{}
 	f := flag.NewFlagSet("plan", flag.ContinueOnError)
@@ -39,6 +47,7 @@ func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 	save := f.Bool("save", false, "save an unapproved selection for later review")
 	show := f.String("show", "", "reopen a saved plan ID")
 	check := f.String("check", "", "compare a saved plan with its inventory")
+	verify := f.String("verify", "", "compare exact saved paths with live metadata; no contents or cleanup")
 	approve := f.String("approve", "", "record 24-hour review consent for an exact plan; cannot execute cleanup")
 	revoke := f.String("revoke", "", "revoke review consent for an exact plan")
 	projectReview := f.Bool("confirm-project-review", false, "owner reviewed project activity, local dependency edits and reinstall requirements")
@@ -53,7 +62,7 @@ func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 	ageSet := false
 	confirmationSet := false
 	f.Visit(func(v *flag.Flag) {
-		if v.Name == "preview" || v.Name == "save" || v.Name == "show" || v.Name == "check" || v.Name == "approve" || v.Name == "revoke" {
+		if v.Name == "preview" || v.Name == "save" || v.Name == "show" || v.Name == "check" || v.Name == "verify" || v.Name == "approve" || v.Name == "revoke" {
 			modes++
 		}
 		if v.Name == "confirm-project-review" || v.Name == "confirm-quarantine" {
@@ -67,7 +76,7 @@ func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 		}
 	})
 	if modes != 1 || aliases > 1 {
-		return r, usageError{errors.New("plan accepts exactly one of --preview, --save, --show, --check, --approve or --revoke; put options before IDs")}
+		return r, usageError{errors.New("plan accepts exactly one of --preview, --save, --show, --check, --verify, --approve or --revoke; put options before IDs")}
 	}
 	if confirmationSet && *approve == "" {
 		return r, usageError{errors.New("review confirmations are accepted only with --approve PLAN_ID")}
@@ -87,6 +96,9 @@ func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 		return plans.Revoke(ctx, paths.StateDir, *revoke)
 	}
 	selectedPlan := *check
+	if *verify != "" {
+		selectedPlan = *verify
+	}
 	if *approve != "" {
 		selectedPlan = *approve
 		if !*projectReview || !*quarantine {
@@ -95,7 +107,7 @@ func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 	}
 	if selectedPlan != "" {
 		if f.NArg() != 0 || ageSet || !plans.ValidID(selectedPlan) {
-			return r, usageError{errors.New("plan --check or --approve requires one full plan ID, an optional directory and no age or finding selection")}
+			return r, usageError{errors.New("plan --check, --verify or --approve requires one full plan ID, an optional directory and no age or finding selection")}
 		}
 	} else if (!*preview && !*save) || f.NArg() < 1 || f.NArg() > state.PreviewTargetLimit {
 		return r, usageError{errors.New("plan requires --preview or --save and 1–20 finding IDs; put options before IDs")}
@@ -104,17 +116,19 @@ func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 		return r, usageError{state.ErrFindingAge}
 	}
 	base := paths.StateDir
+	manualRoot := ""
 	if aliases == 1 {
 		root, err := directoryPath(*directory)
 		if err != nil {
 			return r, err
 		}
 		paths.StateDir = manualState(paths, root)
+		manualRoot = root
 	}
 	var saved plans.Saved
-	if *check != "" {
+	if *check != "" || *verify != "" {
 		var err error
-		saved, err = plans.Load(ctx, base, *check)
+		saved, err = plans.Load(ctx, base, selectedPlan)
 		if err != nil {
 			return r, err
 		}
@@ -124,6 +138,36 @@ func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 		return r, err
 	}
 	defer s.Close()
+	if *verify != "" {
+		check, targets, err := s.PrepareLiveSelection(ctx, saved.Record.Selection)
+		result := VerifiedPlan{ID: saved.ID, InventoryCheck: check}
+		if err != nil || check.Status != "matches_saved_inventory" {
+			return result, err
+		}
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return r, err
+		}
+		cfg, err := config.Load(paths.ConfigFile, home)
+		if err != nil && !(manualRoot != "" && errors.Is(err, os.ErrNotExist)) {
+			return r, err
+		}
+		roots := cfg.Roots
+		if manualRoot != "" {
+			roots = []string{manualRoot}
+		}
+		scanner, err := inventory.New(roots, cfg.Excludes, []string{base, paths.ConfigFile})
+		if err != nil {
+			return r, err
+		}
+		defer scanner.Close()
+		live, err := scanner.Verify(ctx, targets)
+		if err != nil {
+			return r, err
+		}
+		result.Live = &live
+		return result, nil
+	}
 	if *approve != "" {
 		return plans.Approve(ctx, base, *approve, s, plans.Confirmations{ProjectReview: *projectReview, Quarantine: *quarantine})
 	}
@@ -185,6 +229,26 @@ func printPlanPreview(out io.Writer, r PlanPreview) {
 
 func printPlan(out io.Writer, result any, paths config.Paths) {
 	switch r := result.(type) {
+	case VerifiedPlan:
+		printWrapped(out, "Saga — Rydd: live metadata check", "")
+		if r.Live == nil {
+			printResultBanner(out, "SAVED EVIDENCE BLOCKS LIVE CHECK")
+			for _, issue := range r.InventoryCheck.Issues {
+				printWrapped(out, issue.Message, "  ")
+			}
+		} else {
+			if r.Live.Status == "metadata_matches" {
+				printResultBanner(out, "SELECTED METADATA MATCHES - CLEANUP UNAVAILABLE")
+			} else {
+				printResultBanner(out, "LIVE METADATA CHECK BLOCKED - REVIEW REQUIRED")
+			}
+			for _, target := range r.Live.Targets {
+				printField(out, "Finding", target.FindingID)
+				printWrapped(out, target.Message, "  ")
+			}
+		}
+		fmt.Fprintf(out, "Plan: %s\n", r.ID)
+		printWrapped(out, "This checks selected path metadata only. Dependency contents and reinstall safety are not verified. Paths can change after this check. The result cannot authorize cleanup; no files or saved records were changed.", "")
 	case CheckedPlan:
 		printWrapped(out, "Saga — Rydd: saved selection check", "")
 		switch r.Check.Status {

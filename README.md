@@ -76,15 +76,18 @@ Replace the example ID with a finding ID from the candidate report for the same 
 rydd plan --save -d /path/to/project --min-age-days 30 node-modules-v1:1:42
 rydd plan --show PLAN_ID
 rydd plan --check PLAN_ID -d /path/to/project
+rydd plan --verify PLAN_ID -d /path/to/project
 ```
 
 Use an actual finding ID, then replace `PLAN_ID` with the returned saved plan ID. Keep the same global `--data-dir` if you override it. The saved record contains the exact selection and evidence from one inventory snapshot. Later scans cannot add targets to it. Reopening works while the source folder or its inventory is offline.
 
 `--check` compares the selection with its saved inventory and reports changed or incomplete evidence. Use the original manual scan directory, or omit `-d` for configured inventory. The check reads saved observations only: it can match while the source folder is offline. A match does not establish safe cleanup. Scanning again changes inventory revisions and requires a new selection for review.
 
+`--verify` also reads current metadata for the selected root, path ancestors, dependency directory and `package.json`. It blocks changed, missing, excluded or symlinked paths and descendant mount boundaries. Use a canonical scan path: root aliases accepted by scanning are rejected by this stricter check. It does not read dependency contents, inspect the whole subtree or establish that cleanup is safe. No files are moved, and the result cannot authorize a later move.
+
 Plans are private local records in a separate database under the global data directory. Saving does not approve cleanup, move files or free space. Review consent can be recorded separately as described below. Cleanup remains unavailable; Rydd does not verify project activity or regeneration safety. These commands are building blocks for the future guided select-and-confirm flow.
 
-Saving and checking require inventory schema 9. Reports and previews can still read schemas 4–8. Existing configured state can be migrated with `state init` while its worker is stopped; a manual inventory migrates on the next explicit scan, or with `measure` when it is compact and has no pending scan. No migration is performed by `--show`, `--check` or `--preview`.
+Saving, checking and live verification require inventory schema 9. Reports and previews can still read schemas 4–8. Existing configured state can be migrated with `state init` while its worker is stopped; a manual inventory migrates on the next explicit scan, or with `measure` when it is compact and has no pending scan. No migration is performed by `--show`, `--check`, `--verify` or `--preview`.
 
 ## Record or revoke review consent
 

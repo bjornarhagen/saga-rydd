@@ -2,6 +2,7 @@ package inventory
 
 import (
 	"context"
+	"github.com/bjornarhagen/saga-rydd/internal/state"
 	"os"
 	"path/filepath"
 	"testing"
@@ -14,6 +15,24 @@ import (
 func TestBindMountBoundary(t *testing.T) {
 	if os.Getenv("RYDD_TEST_MOUNTS") != "1" {
 		t.Skip("requires isolated mount namespace")
+	}
+	for _, kind := range []string{"directory", "manifest"} {
+		t.Run("live_"+kind, func(t *testing.T) {
+			s, target := liveFixture(t)
+			path := string(target.Finding.PathBytes)
+			if kind == "manifest" {
+				path = string(target.Finding.ManifestPathBytes)
+			}
+			// Bind the object to itself: device/inode stay equal, mount ID changes.
+			if err := unix.Mount(path, path, "", unix.MS_BIND, ""); err != nil {
+				t.Fatal(err)
+			}
+			defer unix.Unmount(path, 0)
+			r, err := s.Verify(context.Background(), []state.LiveTarget{target})
+			if err != nil || r.Status != "blocked" || r.Targets[0].Code != "mount_boundary" {
+				t.Fatal(r, err)
+			}
+		})
 	}
 	s, j, root := scannerFixture(t)
 	source := t.TempDir()

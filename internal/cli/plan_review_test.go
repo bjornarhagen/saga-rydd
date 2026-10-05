@@ -39,6 +39,14 @@ func reviewCLIFixture(t *testing.T, partial bool) reviewCLI {
 	if err := os.MkdirAll(modules, 0700); err != nil {
 		t.Fatal(err)
 	}
+	// Canonical fixture paths can also exercise stricter no-symlink live checks
+	// on macOS, where the default temporary path may begin with /var.
+	canonical, err := filepath.EvalSymlinks(f.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.root = canonical
+	modules = filepath.Join(f.root, "node_modules")
 	if partial {
 		if err := os.Mkdir(filepath.Join(modules, ".git"), 0700); err != nil {
 			t.Fatal(err)
