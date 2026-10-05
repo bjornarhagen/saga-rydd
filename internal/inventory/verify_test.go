@@ -14,6 +14,10 @@ import (
 )
 
 func liveFixture(t *testing.T) (*Scanner, state.LiveTarget) {
+	return liveFixtureWithSetup(t, nil)
+}
+
+func liveFixtureWithSetup(t *testing.T, setup func(root, target string)) (*Scanner, state.LiveTarget) {
 	t.Helper()
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -27,6 +31,9 @@ func liveFixture(t *testing.T) (*Scanner, state.LiveTarget) {
 		if err = os.WriteFile(p, []byte("original"), 0600); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if setup != nil {
+		setup(root, path)
 	}
 	s, err := New([]string{root}, nil, nil)
 	if err != nil {

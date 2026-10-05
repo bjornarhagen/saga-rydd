@@ -15,6 +15,8 @@ func dataless(s unix.Stat_t) bool { return s.Flags&0x40000000 != 0 }
 // the held parent directory's mount identity are checked by the caller.
 func verifyManifestMount(parent int, mount string) error { return nil }
 
+func verifyNamedMount(parent int, name, mount string) error { return nil }
+
 func (s *Scanner) filesystem(fd int) (string, string, error) {
 	var fs unix.Statfs_t
 	s.metrics.filesystem.Add(1)

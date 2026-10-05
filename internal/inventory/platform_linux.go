@@ -10,12 +10,16 @@ func timestamps(s *unix.Stat_t) (int64, int64) { return s.Mtim.Nano(), s.Ctim.Na
 func dataless(s unix.Stat_t) bool { return false }
 
 func verifyManifestMount(parent int, mount string) error {
+	return verifyNamedMount(parent, "package.json", mount)
+}
+
+func verifyNamedMount(parent int, name, mount string) error {
 	var st unix.Statx_t
-	if err := unix.Statx(parent, "package.json", unix.AT_SYMLINK_NOFOLLOW, unix.STATX_MNT_ID, &st); err != nil {
+	if err := unix.Statx(parent, name, unix.AT_SYMLINK_NOFOLLOW, unix.STATX_MNT_ID, &st); err != nil {
 		return err
 	}
 	if st.Mask&unix.STATX_MNT_ID == 0 || fmt.Sprint(st.Mnt_id) != mount {
-		return fmt.Errorf("manifest mount differs")
+		return fmt.Errorf("file mount differs")
 	}
 	return nil
 }

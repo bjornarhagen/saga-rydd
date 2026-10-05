@@ -1,4 +1,5 @@
-// Package inventory reads metadata only. It never opens ordinary file contents.
+// Package inventory scans metadata only. Explicit project-input inspection can
+// read bounded manifest/lock contents; scans never open ordinary file contents.
 // A single bounded directory stream is retained between committed batches.
 package inventory
 

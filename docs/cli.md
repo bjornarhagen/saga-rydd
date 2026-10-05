@@ -200,7 +200,7 @@ Directory and candidate measurements add `coverage_source`: `cached_reduction` u
 
 ## Read-only cleanup plan previews
 
-`rydd plan --preview [-d PATH] [--min-age-days N] FINDING_ID... [--json]` previews 1–20 explicitly selected, unique candidate references. Flags precede positional IDs (`--json` is accepted globally as usual). Use exactly one of `--preview`, `--save`, `--show`, `--check`, `--verify`, `--approve` or `--revoke`. Preview does not record consent or execute cleanup. `-d` / `--directory` selects an exact manual scan root; otherwise use the selected global `--data-dir` inventory. No default selection, wildcard or recursive expansion exists.
+`rydd plan --preview [-d PATH] [--min-age-days N] FINDING_ID... [--json]` previews 1–20 explicitly selected, unique candidate references. Flags precede positional IDs (`--json` is accepted globally as usual). Use exactly one of `--preview`, `--save`, `--show`, `--check`, `--verify`, `--inspect`, `--approve` or `--revoke`. Preview does not record consent or execute cleanup. `-d` / `--directory` selects an exact manual scan root; otherwise use the selected global `--data-dir` inventory. No default selection, wildcard or recursive expansion exists.
 
 IDs must have canonical `node-modules-v1:ROOT_ID:ENTRY_ID` syntax with positive decimal IDs. The command queries only those entries and applies the current saved candidate rule, including the selected age threshold (default 90 days). Missing, disabled, skipped or no-longer-eligible selections fail the whole request with `invalid_arguments`; duplicate/malformed IDs and more than 20 selections do too. Run a new candidate report to review changed evidence. ID reuse across rebuilt or different inventories is possible; a preview never establishes durable action identity.
 
@@ -292,3 +292,36 @@ The JSON `plan` contains `id`, `inventory_check` and, only when the saved check 
 `live.current_state_verified` and `live.executable` stay false: only the named path metadata was checked. This does not recursively inspect dependency contents, validate manifest contents or lockfiles, prove regeneration safety, or ensure later filesystem stability. Editing an existing file below `node_modules` can leave the selected directory metadata unchanged and produce a metadata match. Observed swaps are rejected, but the namespace is not locked; no descriptors or reusable permission are returned to a future executor.
 
 Work is bounded to 20 targets, 4096-byte paths, 256 absolute directory components per target and the existing saved-measurement limits. One target's handles are closed before checking the next; at most 258 descriptors are used for its traversal/recheck, apart from SQLite/runtime descriptors. No directory listings or file contents are read. Cancellation is checked between operations; a blocked kernel call can outlast the deadline. Provider hydration, physical remounts and hostile continuous namespace changes are not established safe by these tests. No plan/consent/inventory records change, though SQLite may maintain reader sidecars. Capabilities advertise `plan_live_checks: true`; cleanup remains false.
+
+
+## Project input inspection
+
+```sh
+rydd plan --inspect PLAN_ID [-d PATH] [--json]
+```
+
+Inspection explicitly reads project inputs. `--verify` retains its metadata-only contract. The saved selection, age threshold, inventory snapshot, current configuration, exclusion rules, canonical path requirements and five-second cooperative deadline are the same as live verification. Review consent is independent and never required for this read-only command. Mixed modes, finding IDs, age overrides and confirmation flags are invalid usage. Changed or incomplete saved evidence prevents any input read.
+
+After verifying the selected paths, inspection opens sibling `package.json` and `package-lock.json` through the held project directory. Inputs must be regular, supported local files with no symlinks, dataless flags, protected identities or mount boundaries. Files remain open until identities, size/mode/change times, named links and mounts are rechecked. Root/ancestor/target/manifest path checks also remain active. Observed mutations block the result. Paths and contents can change after the request; no permission or descriptors are returned for execution.
+
+The initial supported format is deliberately narrow:
+
+| Input rule | Supported observation |
+| --- | --- |
+| JSON | UTF-8 objects with no duplicate keys, including nested objects. |
+| npm lock | Version 2 or 3 with a `packages` object and its empty-key root entry. |
+| Root declarations | Manifest and lock root dependency maps match literally; declared direct entries exist, with an exception for explicitly optional peers. Name/version match when present in the manifest. |
+| Locked sources | Public `https://registry.npmjs.org` tarball locations, concrete versions and one canonical SHA-512 integrity value. No URL credentials, query or fragment. |
+| Restricted features | Workspace/local/git/URL/alias sources, links, bundles, overrides and lifecycle install hooks are unsupported. Ordinary test/build script declarations can be present. |
+
+This validates an input shape and a declaration comparison. It does not solve npm's dependency graph or semver ranges, authenticate package contents or prove that a lock matches the installed tree. Valid npm projects can be refused by this limited contract, including projects with missing optional lock entries. Unsupported does not mean broken or unsafe.
+
+The following project siblings block inspection by presence: `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, `bun.lock`, `bun.lockb`, `.npmrc`, `patches`, `.yarn`, `pnpm-workspace.yaml`, `lerna.json` and `binding.gyp`. Their contents are never read. In particular, `.npmrc` values and credentials are never printed. User/global configuration, ancestor configuration, environment variables, CLI flags, installed Node/npm versions and download availability remain unknown.
+
+The JSON `plan` has `id`, `inventory_check` and, only after matching saved evidence, `inspection`. Inspection has `source: "live_project_inputs"`, `checked_at`, `status` (`inputs_observed` or `blocked`) and one `targets` result per finding. Each target contains `finding_id`, `status`, `message` and optional `code`. A successful target has `inputs` with `lockfile_version`, `locked_packages` (excluding the root entry) and `files`: each file has a static `name`, `bytes` and exact-byte `sha256`. Raw manifest values, dependency names and URLs are not echoed. A blocked target has no partial input evidence and makes the overall status blocked.
+
+Input failure codes are `input_missing`, `input_invalid`, `input_unsupported`, `input_limit` and `input_changed_during_check`, in addition to the live path-check codes above. Exit 0 means the observation completed, including a block; inspect both inventory and inspection status. Invalid arguments/storage/configuration and cancellation retain the standard errors and exit codes.
+
+`current_state_verified`, `executable`, `regeneration_verified` and `dependency_contents_checked` remain false. `local_dependency_edits` remains `"unknown"`. The exact-byte digests describe this request only: existing plans contain no frozen lock-content baseline, and even a changed lock can fit the supported shape. No ordinary dependency files or hidden installed lock are opened, no recursive listing occurs, and no package manager or network request runs. Inspection changes no saved records or file contents; normal filesystem access times and SQLite reader sidecars may change.
+
+Bounds are 256 KiB for a manifest, 2 MiB for a lock, a combined 50,000 decoded JSON values and 64 nesting levels, plus the existing 20-target/4096-byte/256-directory limits. One target's handles are closed before the next; at most 260 descriptors are used, apart from SQLite/runtime handles. Reads use 8 KiB chunks and cancellation checks between operations; blocked kernel calls can exceed the cooperative deadline. Provider hydration, physical remounts and continuously hostile namespace changes remain unverified. Capabilities expose `plan_input_inspection: true`; cleanup remains false.

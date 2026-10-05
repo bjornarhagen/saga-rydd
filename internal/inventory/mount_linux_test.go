@@ -34,6 +34,18 @@ func TestBindMountBoundary(t *testing.T) {
 			}
 		})
 	}
+	t.Run("input_lock", func(t *testing.T) {
+		s, target := inspectionFixture(t, nil)
+		path := filepath.Join(filepath.Dir(string(target.Finding.PathBytes)), "package-lock.json")
+		if err := unix.Mount(path, path, "", unix.MS_BIND, ""); err != nil {
+			t.Fatal(err)
+		}
+		defer unix.Unmount(path, 0)
+		r, err := s.Inspect(context.Background(), []state.LiveTarget{target})
+		if err != nil || r.Status != "blocked" || r.Targets[0].Code != "mount_boundary" {
+			t.Fatal(r, err)
+		}
+	})
 	s, j, root := scannerFixture(t)
 	source := t.TempDir()
 	write(t, filepath.Join(source, "outside"))

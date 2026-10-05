@@ -39,6 +39,12 @@ type VerifiedPlan struct {
 	Live           *inventory.LiveReport `json:"live,omitempty"`
 }
 
+type InspectedPlan struct {
+	ID             string                      `json:"id"`
+	InventoryCheck state.SelectionCheck        `json:"inventory_check"`
+	Inspection     *inventory.InspectionReport `json:"inspection,omitempty"`
+}
+
 func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 	r := PlanPreview{}
 	f := flag.NewFlagSet("plan", flag.ContinueOnError)
@@ -48,6 +54,7 @@ func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 	show := f.String("show", "", "reopen a saved plan ID")
 	check := f.String("check", "", "compare a saved plan with its inventory")
 	verify := f.String("verify", "", "compare exact saved paths with live metadata; no contents or cleanup")
+	inspect := f.String("inspect", "", "read bounded npm project inputs for an exact saved selection; no cleanup")
 	approve := f.String("approve", "", "record 24-hour review consent for an exact plan; cannot execute cleanup")
 	revoke := f.String("revoke", "", "revoke review consent for an exact plan")
 	projectReview := f.Bool("confirm-project-review", false, "owner reviewed project activity, local dependency edits and reinstall requirements")
@@ -62,7 +69,7 @@ func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 	ageSet := false
 	confirmationSet := false
 	f.Visit(func(v *flag.Flag) {
-		if v.Name == "preview" || v.Name == "save" || v.Name == "show" || v.Name == "check" || v.Name == "verify" || v.Name == "approve" || v.Name == "revoke" {
+		if v.Name == "preview" || v.Name == "save" || v.Name == "show" || v.Name == "check" || v.Name == "verify" || v.Name == "inspect" || v.Name == "approve" || v.Name == "revoke" {
 			modes++
 		}
 		if v.Name == "confirm-project-review" || v.Name == "confirm-quarantine" {
@@ -76,7 +83,7 @@ func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 		}
 	})
 	if modes != 1 || aliases > 1 {
-		return r, usageError{errors.New("plan accepts exactly one of --preview, --save, --show, --check, --verify, --approve or --revoke; put options before IDs")}
+		return r, usageError{errors.New("plan accepts exactly one of --preview, --save, --show, --check, --verify, --inspect, --approve or --revoke; put options before IDs")}
 	}
 	if confirmationSet && *approve == "" {
 		return r, usageError{errors.New("review confirmations are accepted only with --approve PLAN_ID")}
@@ -99,6 +106,9 @@ func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 	if *verify != "" {
 		selectedPlan = *verify
 	}
+	if *inspect != "" {
+		selectedPlan = *inspect
+	}
 	if *approve != "" {
 		selectedPlan = *approve
 		if !*projectReview || !*quarantine {
@@ -107,7 +117,7 @@ func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 	}
 	if selectedPlan != "" {
 		if f.NArg() != 0 || ageSet || !plans.ValidID(selectedPlan) {
-			return r, usageError{errors.New("plan --check, --verify or --approve requires one full plan ID, an optional directory and no age or finding selection")}
+			return r, usageError{errors.New("plan --check, --verify, --inspect or --approve requires one full plan ID, an optional directory and no age or finding selection")}
 		}
 	} else if (!*preview && !*save) || f.NArg() < 1 || f.NArg() > state.PreviewTargetLimit {
 		return r, usageError{errors.New("plan requires --preview or --save and 1–20 finding IDs; put options before IDs")}
@@ -126,7 +136,7 @@ func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 		manualRoot = root
 	}
 	var saved plans.Saved
-	if *check != "" || *verify != "" {
+	if *check != "" || *verify != "" || *inspect != "" {
 		var err error
 		saved, err = plans.Load(ctx, base, selectedPlan)
 		if err != nil {
@@ -138,11 +148,13 @@ func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 		return r, err
 	}
 	defer s.Close()
-	if *verify != "" {
+	if *verify != "" || *inspect != "" {
 		check, targets, err := s.PrepareLiveSelection(ctx, saved.Record.Selection)
-		result := VerifiedPlan{ID: saved.ID, InventoryCheck: check}
 		if err != nil || check.Status != "matches_saved_inventory" {
-			return result, err
+			if *inspect != "" {
+				return InspectedPlan{ID: saved.ID, InventoryCheck: check}, err
+			}
+			return VerifiedPlan{ID: saved.ID, InventoryCheck: check}, err
 		}
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -161,12 +173,18 @@ func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 			return r, err
 		}
 		defer scanner.Close()
+		if *inspect != "" {
+			inspection, err := scanner.Inspect(ctx, targets)
+			if err != nil {
+				return r, err
+			}
+			return InspectedPlan{ID: saved.ID, InventoryCheck: check, Inspection: &inspection}, nil
+		}
 		live, err := scanner.Verify(ctx, targets)
 		if err != nil {
 			return r, err
 		}
-		result.Live = &live
-		return result, nil
+		return VerifiedPlan{ID: saved.ID, InventoryCheck: check, Live: &live}, nil
 	}
 	if *approve != "" {
 		return plans.Approve(ctx, base, *approve, s, plans.Confirmations{ProjectReview: *projectReview, Quarantine: *quarantine})
@@ -229,6 +247,37 @@ func printPlanPreview(out io.Writer, r PlanPreview) {
 
 func printPlan(out io.Writer, result any, paths config.Paths) {
 	switch r := result.(type) {
+	case InspectedPlan:
+		printWrapped(out, "Saga — Rydd: project input check", "")
+		if r.Inspection == nil {
+			printResultBanner(out, "SAVED EVIDENCE BLOCKS PROJECT INPUT CHECK")
+			for _, issue := range r.InventoryCheck.Issues {
+				printWrapped(out, issue.Message, "  ")
+			}
+		} else {
+			if r.Inspection.Status == "inputs_observed" {
+				printResultBanner(out, "INPUTS OBSERVED - REVIEW REQUIRED")
+			} else {
+				printResultBanner(out, "PROJECT INPUT CHECK BLOCKED - REVIEW REQUIRED")
+			}
+			for _, target := range r.Inspection.Targets {
+				printField(out, "Finding", target.FindingID)
+				printWrapped(out, target.Message, "  ")
+				if target.Inputs != nil {
+					printField(out, "Lockfile version", target.Inputs.LockfileVersion)
+					printField(out, "Locked packages", target.Inputs.LockedPackages)
+					for _, input := range target.Inputs.Files {
+						printField(out, "Input", fmt.Sprintf("%s (%d bytes)", input.Name, input.Bytes))
+					}
+				}
+			}
+		}
+		fmt.Fprintf(out, "Plan: %s\n", r.ID)
+		printWrapped(out, "This checks whether the observed package.json and package-lock.json inputs fit the supported npm format. It does not compare their contents with a saved baseline.", "")
+		fmt.Fprintln(out)
+		printWrapped(out, "Dependency contents are not checked. Local dependency edits and successful reinstall remain unknown.", "")
+		fmt.Fprintln(out)
+		printWrapped(out, "Project inputs and paths can change after this check. The result cannot authorize cleanup. No file contents or saved records were changed.", "")
 	case VerifiedPlan:
 		printWrapped(out, "Saga — Rydd: live metadata check", "")
 		if r.Live == nil {

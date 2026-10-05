@@ -73,6 +73,12 @@ type liveLink struct {
 }
 
 func (s *Scanner) verifyTarget(ctx context.Context, t state.LiveTarget, beforeRecheck func()) error {
+	return s.verifyTargetWithVisit(ctx, t, nil, nil, beforeRecheck)
+}
+
+// A visitor may inspect project inputs while the verified path handles remain
+// open. Its final check runs before these handles are released.
+func (s *Scanner) verifyTargetWithVisit(ctx context.Context, t state.LiveTarget, visit func(int, string) error, recheck func() error, beforeRecheck func()) error {
 	root, path := string(t.Root.PathBytes), string(t.Finding.PathBytes)
 	if !filepath.IsAbs(root) || filepath.Clean(root) != root || strings.ContainsRune(root, 0) || len(root) > 4096 || !filepath.IsAbs(path) || filepath.Clean(path) != path || strings.ContainsRune(path, 0) || len(path) > 4096 || !config.Within(path, root) || path == root || filepath.Base(path) != "node_modules" {
 		return blocked("scope_invalid", "The saved target is not an exact dependency directory inside its saved root.")
@@ -182,6 +188,11 @@ func (s *Scanner) verifyTarget(ctx context.Context, t state.LiveTarget, beforeRe
 	if err != nil {
 		return err
 	}
+	if visit != nil {
+		if err = visit(parent, mount); err != nil {
+			return err
+		}
+	}
 	if beforeRecheck != nil {
 		beforeRecheck()
 	}
@@ -219,6 +230,11 @@ func (s *Scanner) verifyTarget(ctx context.Context, t state.LiveTarget, beforeRe
 	}
 	if !sameStamp(manifest, after) {
 		return blocked("path_changed_during_check", "The manifest changed during validation.")
+	}
+	if recheck != nil {
+		if err = recheck(); err != nil {
+			return err
+		}
 	}
 	return ctx.Err()
 }
