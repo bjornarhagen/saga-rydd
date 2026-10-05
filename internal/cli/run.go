@@ -34,6 +34,10 @@ Commands:
   plan --save [options] FINDING_ID...                  Save an unapproved selection
   plan --show PLAN_ID                                 Reopen a saved selection
   plan --check PLAN_ID [-d PATH]                      Compare saved selection with inventory
+  plan --approve PLAN_ID [options]                   Record 24-hour review consent; no cleanup
+    --confirm-project-review                         Confirm activity, local edits and reinstall review
+    --confirm-quarantine                             Accept same-filesystem quarantine without purge
+  plan --revoke PLAN_ID                               Revoke review consent; no inventory needed
   report --candidates [--min-age-days N] [--cursor TOKEN] [--json]         Node modules review candidates
   measure -d PATH [--batches N] [--json]               Resume saved compact size calculations
   report -d PATH [--json]                             Saved directory size

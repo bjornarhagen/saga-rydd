@@ -117,7 +117,7 @@ func TestSavedPlanCheckCLI(t *testing.T) {
 	before, plansBefore := hash(db), hash(planDB)
 	check("matches_saved_inventory")
 	code, human := run("plan", "--check", id, "-d", root)
-	for _, want := range []string{"SAVED OBSERVATIONS MATCH - NOT APPROVED", "A match does not establish safe cleanup.", "plan --show " + id} {
+	for _, want := range []string{"SAVED OBSERVATIONS MATCH - NO EXECUTION AUTHORIZATION", "A match does not establish safe cleanup.", "plan --show " + id} {
 		if code != 0 || !strings.Contains(strings.Join(strings.Fields(human), " "), want) {
 			t.Fatal(code, human)
 		}

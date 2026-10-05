@@ -1,5 +1,5 @@
 // Package plans preserves review records separately from rebuildable inventory.
-// It cannot approve, execute, update or delete a plan.
+// Review consent is stored separately; no record can execute cleanup.
 package plans
 
 import (
@@ -44,8 +44,9 @@ type Record struct {
 }
 
 type Saved struct {
-	ID     string `json:"id"`
-	Record Record `json:"record"`
+	ID     string  `json:"id"`
+	Record Record  `json:"record"`
+	Review *Review `json:"review,omitempty"`
 }
 
 func ValidID(id string) bool {
@@ -97,9 +98,17 @@ func Load(ctx context.Context, base, id string) (Saved, error) {
 		return Saved{}, err
 	}
 	defer closeDB()
+	return load(ctx, db, id)
+}
+
+type queryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func load(ctx context.Context, db queryer, id string) (Saved, error) {
 	var payload []byte
 	// The SQL bound also protects readers from an oversized externally altered row.
-	err = db.QueryRowContext(ctx, "SELECT substr(payload,1,?) FROM plans WHERE id=?", MaxRecordBytes+1, id).Scan(&payload)
+	err := db.QueryRowContext(ctx, "SELECT substr(payload,1,?) FROM plans WHERE id=?", MaxRecordBytes+1, id).Scan(&payload)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Saved{}, fmt.Errorf("saved plan not found: %w", os.ErrNotExist)
 	}
@@ -272,8 +281,14 @@ PRAGMA application_id=0x5259504c; PRAGMA user_version=1;`)
 		if e = tx.Commit(); e != nil {
 			return fail(e)
 		}
-	} else if app != applicationID || version != 1 {
+		version = 1
+	} else if app != applicationID || (version != 1 && version != 2) {
 		return fail(errors.New("unsupported or unidentified plan database; left intact"))
+	}
+	if write && version == 1 {
+		if err = migrateReviews(ctx, db); err != nil {
+			return fail(err)
+		}
 	}
 	return db, closeDB, nil
 }

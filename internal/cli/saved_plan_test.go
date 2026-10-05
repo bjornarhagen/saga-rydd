@@ -127,7 +127,7 @@ func TestSavedPlanCLISelectionAndOfflineReopen(t *testing.T) {
 		t.Fatal(code, raw, err)
 	}
 	code, human := run("plan", "--show", saved.Plan.ID)
-	for _, want := range []string{"SAVED FOR REVIEW - NOT APPROVED", saved.Plan.ID, "Incomplete measurement", "Unconfirmed", "Approval and cleanup are not yet supported", "plan --show " + saved.Plan.ID} {
+	for _, want := range []string{"SAVED FOR REVIEW - NOT APPROVED", saved.Plan.ID, "Incomplete measurement", "Unconfirmed", "Review consent can be recorded", "plan --show " + saved.Plan.ID} {
 		if code != 0 || !strings.Contains(strings.Join(strings.Fields(human), " "), want) {
 			t.Fatal(code, human)
 		}

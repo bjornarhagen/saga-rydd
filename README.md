@@ -82,9 +82,23 @@ Use an actual finding ID, then replace `PLAN_ID` with the returned saved plan ID
 
 `--check` compares the selection with its saved inventory and reports changed or incomplete evidence. Use the original manual scan directory, or omit `-d` for configured inventory. The check reads saved observations only: it can match while the source folder is offline. A match does not establish safe cleanup. Scanning again changes inventory revisions and requires a new selection for review.
 
-Plans are private local records in a separate database under the global data directory. Saving does not approve cleanup, move files or free space. Approval and execution are still unavailable; project activity and regeneration safety remain unconfirmed. These commands are building blocks for the future guided select-and-confirm flow.
+Plans are private local records in a separate database under the global data directory. Saving does not approve cleanup, move files or free space. Review consent can be recorded separately as described below. Cleanup remains unavailable; Rydd does not verify project activity or regeneration safety. These commands are building blocks for the future guided select-and-confirm flow.
 
 Saving and checking require inventory schema 9. Reports and previews can still read schemas 4–8. Existing configured state can be migrated with `state init` while its worker is stopped; a manual inventory migrates on the next explicit scan, or with `measure` when it is compact and has no pending scan. No migration is performed by `--show`, `--check` or `--preview`.
+
+## Record or revoke review consent
+
+After reviewing the exact saved selection with the project owner:
+
+```sh
+rydd plan --approve PLAN_ID -d /path/to/project --confirm-project-review --confirm-quarantine
+rydd plan --show PLAN_ID
+rydd plan --revoke PLAN_ID
+```
+
+The two confirmations mean the owner reviewed project activity, local dependency edits and reinstall requirements, and accepts same-filesystem quarantine without permanent deletion. Consent lasts 24 hours. The saved inventory must still match; changed or incomplete evidence requires a new selection. Retrying keeps the same approval and expiry. Revocation works even when the source folder and inventory are offline.
+
+This version records **review consent only**. It cannot execute cleanup. A future cleanup command will require renewed approval after live checks and recovery are implemented. `--show` displays the review status separately from the original saved evidence. Revoked or expired approvals cannot be renewed for the same plan; save a new selection for another review.
 
 ## Project map
 
