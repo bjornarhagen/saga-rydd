@@ -75,6 +75,12 @@ func TestSavedPlanCLISelectionAndOfflineReopen(t *testing.T) {
 		t.Fatal(raw)
 	}
 	w.Close()
+	if code, raw := run("plan", "--check", saved.Plan.ID, "-d", root, "--json"); code != 0 || !strings.Contains(raw, `"status":"unverifiable"`) || !strings.Contains(raw, `"code":"target_evidence_unknown"`) {
+		t.Fatal(code, raw)
+	}
+	if code, human := run("plan", "--check", saved.Plan.ID, "-d", root); code != 0 || !strings.Contains(human, "SAVED EVIDENCE INCOMPLETE - REVIEW REQUIRED") {
+		t.Fatal(code, human)
+	}
 	for _, args := range [][]string{
 		{"plan", "--save", "--preview", "-d", root, id, "--json"},
 		{"plan", "--save=false", "-d", root, id, "--json"},

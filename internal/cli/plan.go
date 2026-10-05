@@ -26,6 +26,11 @@ type PlanPreview struct {
 	Notes                     []string            `json:"notes"`
 }
 
+type CheckedPlan struct {
+	ID    string               `json:"id"`
+	Check state.SelectionCheck `json:"check"`
+}
+
 func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 	r := PlanPreview{}
 	f := flag.NewFlagSet("plan", flag.ContinueOnError)
@@ -33,6 +38,7 @@ func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 	preview := f.Bool("preview", false, "show a read-only cleanup review preview")
 	save := f.Bool("save", false, "save an unapproved selection for later review")
 	show := f.String("show", "", "reopen a saved plan ID")
+	check := f.String("check", "", "compare a saved plan with its inventory")
 	directory := f.String("directory", "", "exact manual scan root")
 	f.StringVar(directory, "d", "", "directory alias")
 	days := f.Int("min-age-days", state.FindingAgeDays, "minimum saved candidate age (1–36500)")
@@ -42,7 +48,7 @@ func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 	aliases, modes := 0, 0
 	ageSet := false
 	f.Visit(func(v *flag.Flag) {
-		if v.Name == "preview" || v.Name == "save" || v.Name == "show" {
+		if v.Name == "preview" || v.Name == "save" || v.Name == "show" || v.Name == "check" {
 			modes++
 		}
 		if v.Name == "min-age-days" {
@@ -53,7 +59,7 @@ func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 		}
 	})
 	if modes != 1 || aliases > 1 {
-		return r, usageError{errors.New("plan accepts exactly one of --preview, --save or --show; put options before IDs")}
+		return r, usageError{errors.New("plan accepts exactly one of --preview, --save, --show or --check; put options before IDs")}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -63,7 +69,11 @@ func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 		}
 		return plans.Load(ctx, paths.StateDir, *show)
 	}
-	if (!*preview && !*save) || f.NArg() < 1 || f.NArg() > state.PreviewTargetLimit {
+	if *check != "" {
+		if f.NArg() != 0 || ageSet || !plans.ValidID(*check) {
+			return r, usageError{errors.New("plan --check requires one full plan ID, an optional directory and no age or finding selection")}
+		}
+	} else if (!*preview && !*save) || f.NArg() < 1 || f.NArg() > state.PreviewTargetLimit {
 		return r, usageError{errors.New("plan requires --preview or --save and 1–20 finding IDs; put options before IDs")}
 	}
 	if *days < 1 || *days > state.MaxFindingAgeDays {
@@ -77,11 +87,23 @@ func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 		}
 		paths.StateDir = manualState(paths, root)
 	}
+	var saved plans.Saved
+	if *check != "" {
+		var err error
+		saved, err = plans.Load(ctx, base, *check)
+		if err != nil {
+			return r, err
+		}
+	}
 	s, err := state.OpenReader(ctx, paths.StateDir)
 	if err != nil {
 		return r, err
 	}
 	defer s.Close()
+	if *check != "" {
+		result, err := s.CheckSelection(ctx, saved.Record.Selection)
+		return CheckedPlan{ID: saved.ID, Check: result}, err
+	}
 	if *save {
 		selection, err := s.SnapshotSelection(ctx, f.Args(), *days)
 		if err != nil {
@@ -136,6 +158,29 @@ func printPlanPreview(out io.Writer, r PlanPreview) {
 
 func printPlan(out io.Writer, result any, paths config.Paths) {
 	switch r := result.(type) {
+	case CheckedPlan:
+		printWrapped(out, "Saga — Rydd: saved selection check", "")
+		switch r.Check.Status {
+		case "matches_saved_inventory":
+			printResultBanner(out, "SAVED OBSERVATIONS MATCH - NOT APPROVED")
+		case "changed":
+			printResultBanner(out, "SAVED EVIDENCE CHANGED - REVIEW AGAIN")
+		default:
+			printResultBanner(out, "SAVED EVIDENCE INCOMPLETE - REVIEW REQUIRED")
+		}
+		fmt.Fprintf(out, "Plan: %s\n", r.ID)
+		printField(out, "Selected targets", r.Check.SelectedTargets)
+		lastFinding := ""
+		for _, issue := range r.Check.Issues {
+			if issue.FindingID != "" && issue.FindingID != lastFinding {
+				printField(out, "Finding", issue.FindingID)
+				lastFinding = issue.FindingID
+			}
+			printWrapped(out, issue.Message, "  ")
+		}
+		printWrapped(out, "This compares saved observations only. Current files, project activity and reinstall requirements have not been checked. A match does not establish safe cleanup.", "")
+		printWrapped(out, "Approval and cleanup are not yet supported. No files were moved or deleted. The saved selection is unchanged.", "")
+		fmt.Fprintf(out, "\nReopen this selection:\n  %s plan --show %s\n", commandPrefix(paths), r.ID)
 	case PlanPreview:
 		printPlanPreview(out, r)
 	case plans.Saved:

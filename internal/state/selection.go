@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 )
 
-var ErrPlanSchema = errors.New("saving a plan requires inventory schema 9; migrate configured state with state init, or finish a manual scan with scan -d PATH (compact inventories can use measure -d PATH)")
+var ErrPlanSchema = errors.New("saving or checking a plan requires inventory schema 9; migrate configured state with state init, or finish a manual scan with scan -d PATH (compact inventories can use measure -d PATH)")
 
 type RootBinding struct {
 	ID          int64  `json:"root_id"`

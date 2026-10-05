@@ -33,6 +33,7 @@ Commands:
   plan --preview [options] FINDING_ID...               Read-only exact-target cleanup preview
   plan --save [options] FINDING_ID...                  Save an unapproved selection
   plan --show PLAN_ID                                 Reopen a saved selection
+  plan --check PLAN_ID [-d PATH]                      Compare saved selection with inventory
   report --candidates [--min-age-days N] [--cursor TOKEN] [--json]         Node modules review candidates
   measure -d PATH [--batches N] [--json]               Resume saved compact size calculations
   report -d PATH [--json]                             Saved directory size

@@ -200,7 +200,7 @@ Directory and candidate measurements add `coverage_source`: `cached_reduction` u
 
 ## Read-only cleanup plan previews
 
-`rydd plan --preview [-d PATH] [--min-age-days N] FINDING_ID... [--json]` previews 1–20 explicitly selected, unique candidate references. Flags precede positional IDs (`--json` is accepted globally as usual). Use exactly one of `--preview`, `--save` or `--show`. No approval or execution form is implemented. `-d` / `--directory` selects an exact manual scan root; otherwise use the selected global `--data-dir` inventory. No default selection, wildcard or recursive expansion exists.
+`rydd plan --preview [-d PATH] [--min-age-days N] FINDING_ID... [--json]` previews 1–20 explicitly selected, unique candidate references. Flags precede positional IDs (`--json` is accepted globally as usual). Use exactly one of `--preview`, `--save`, `--show` or `--check`. No approval or execution form is implemented. `-d` / `--directory` selects an exact manual scan root; otherwise use the selected global `--data-dir` inventory. No default selection, wildcard or recursive expansion exists.
 
 IDs must have canonical `node-modules-v1:ROOT_ID:ENTRY_ID` syntax with positive decimal IDs. The command queries only those entries and applies the current saved candidate rule, including the selected age threshold (default 90 days). Missing, disabled, skipped or no-longer-eligible selections fail the whole request with `invalid_arguments`; duplicate/malformed IDs and more than 20 selections do too. Run a new candidate report to review changed evidence. ID reuse across rebuilt or different inventories is possible; a preview never establishes durable action identity.
 
@@ -229,3 +229,21 @@ Records are stored separately at `plans/plans.sqlite3` under the global state di
 Each record is bounded to 1 MiB. Its ID is `plan-v1-` followed by the lowercase SHA-256 digest of the exact stored JSON bytes. Loading verifies that digest, record version and unapproved/non-executable state. The application exposes no plan update or deletion; database triggers also reject updates/deletes. The digest is content binding for a future approval, not an approval token or protection against deliberate same-user modification. Unsupported databases, damaged records and changed digests fail closed. Per-record and per-request work are bounded; total saved history has no retention limit yet.
 
 Capabilities advertise `saved_plans: true`, `plan_approval: false` and `cleanup: false`; `plan` can now read evidence or write saved-plan storage depending on its mode. Existing preview JSON is unchanged. No source contents, cleanup action or approval are written. List/expiry/revocation, an interactive review flow, explicit approval, live revalidation, action journaling, quarantine and restoration remain later work. An interrupted save can have committed before its result was delivered; no automatic retry or execution follows.
+
+## Check a saved selection
+
+`rydd plan --check PLAN_ID [-d PATH] [--json]` compares the saved selection with one current inventory snapshot. Use the same global data directory and original manual scan directory as the save, or omit `-d` for configured inventory. The plan retains its exact targets and age threshold; new finding IDs, age overrides, duplicate directory aliases and mixed modes are rejected. Neither database is migrated or initialized. A missing store or plan is `not_found`; unsupported inventory schemas return migration guidance. Readers do not take the inventory writer lock.
+
+The JSON `plan` contains `id` and `check`. `check.status` has these meanings:
+
+| Status | Meaning |
+| --- | --- |
+| `matches_saved_inventory` | Recorded identity and evidence agree, with complete recorded measurements. Live files remain unchecked. |
+| `changed` | The inventory incarnation, exact selection, root binding/revision, target/manifest identity or recorded evidence differs. Review a new selection. |
+| `unverifiable` | No definite change was found, but identity or measurement evidence is incomplete, stale or unknown. This is not a match. |
+
+Exit 0 and `ok: true` mean the comparison completed, including `changed` and `unverifiable`. Consumers must inspect `check.status`; no result grants approval. Errors and cancellation use the standard envelope. `check` also contains `source: "saved_inventory"`, `selected_targets`, an `issues` array, and `current_state_verified`, `approval_available` and `executable`, all false. Each issue has `code`, `message` and an optional `finding_id`. Codes are `different_inventory`, `selection_unavailable`, `root_evidence_changed`, `root_evidence_unknown`, `target_identity_changed`, `finding_evidence_changed` and `target_evidence_unknown`. A definite change takes precedence over unknown evidence; the entire selection is checked, with no partial successful approval.
+
+Identity is checked before resolving numeric IDs in a different inventory. Within the original inventory, comparisons include authoritative path bytes, root fingerprints/revisions, device/inode/change-time/generation bindings, eligibility, observation/modification times and qualified measurement fields. Display strings, measurement generation time and explanatory notes are not identity evidence. A subsequent scan can invalidate the comparison through its root revision even if it found no changes to the selected folder. Unknown identities are not treated as usable equal evidence; incomplete measurements require renewed review. The existing 1–20 target, 1 MiB record, measurement and five-second limits apply.
+
+This command performs no source-folder traversal. It can match while the source is offline, or while unobserved changes exist. It does not check current configuration/exclusions, live identity, project activity, regeneration inputs or quarantine/recovery readiness. Plan and inventory records are unchanged; SQLite can maintain normal reader sidecars. Approval and action-time verification remain separate future steps. Capabilities advertise `saved_plan_checks: true`; `plan_approval` and `cleanup` remain false.
