@@ -23,6 +23,19 @@ Every JSON response has `api_version: 1`, `ok` and `command`. Success fields dep
 
 Control responses contain `acknowledged` and a worker snapshot. A stop acknowledgement means shutdown was requested; it does not guarantee process exit. Pause is durable and requests cancellation of the current cooperative batch; an active filesystem call can still be draining. Status reads saved inventory even without a worker. Paths may contain private information; treat reports as local data.
 
+## Human output
+
+Scan, measure, reports and previews use a shared presentation guide inspired by simplified technical English. This is a clarity preference, not formal ASD-STE100 compliance:
+
+- State the result first, explain its limits, then show the next available step. Use familiar words and consistent terms. Translate internal outcome codes into sentences; retain those codes in JSON.
+- Use `File size`, `Allocated on disk` and `Measurement` consistently. `Complete in saved scan` describes saved coverage only. Show incomplete, outdated and unknown evidence explicitly; unknown size is never displayed as zero. These sizes are not estimates of space that cleanup would free.
+- Put selected findings before selection diagnostics. Keep paths and reference IDs on separate lines. Explain preview limitations and the review needed from the owner; keep executor implementation requirements in the JSON evidence and design documentation.
+- Use aligned fields at normal widths and stacked fields below 60 columns. Wrap prose to the terminal width, capped at 100 columns for readability; use 78 columns when redirected or the width is unavailable. Unicode prose uses conservative width estimates, not a full grapheme layout engine. Individual long words, quoted paths, IDs and commands are not split or shortened and can exceed the width.
+- Use ASCII emphasis rules and text labels that work without color. Color is used only on a terminal and respects `NO_COLOR` (including an empty value) and `TERM=dumb`. Redirected output contains no color escape sequences. Quote paths and errors to display embedded control characters safely.
+- Suggested commands single-quote ordinary paths. Paths with control characters or invalid UTF-8 use Bash/Zsh ANSI-C byte escapes, preserving even trailing newlines without sending control characters to the terminal. Those exceptional commands require Bash or Zsh.
+
+Human wording and layout are not a scripting contract. Use `--json` for stable field names and full structured evidence. The presentation guide does not change JSON, exit codes, selection rules or action availability. Status/help formatting and a separate human detail mode are not part of this pass.
+
 ## Dispatch limits
 
 `scan.max_scan_chunks_per_day` defaults to 288. The worker reserves each inventory chunk before starting it; reservations and the next permitted dispatch time survive restart. Cancellation or a crash does not refund a reservation. UTC midnight replenishes the count; moving the clock backwards does not refill it. The count uses a single database row. Existing configurations inherit the default.

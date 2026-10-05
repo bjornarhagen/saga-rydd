@@ -88,30 +88,18 @@ func plan(ctx context.Context, args []string, paths config.Paths) (PlanPreview, 
 }
 
 func printPlanPreview(out io.Writer, r PlanPreview) {
-	fmt.Fprintln(out, "Saga — Rydd: cleanup plan preview")
-	printResultBanner(out, "PREVIEW ONLY — NO ACTIONS AVAILABLE")
-	fmt.Fprintf(out, "\n%d explicitly selected target(s); minimum age %d days.\nProject activity: unconfirmed. Current filesystem state: unverified.\n", len(r.Evidence.Findings), r.Evidence.MinimumAgeDays)
+	printWrapped(out, "Saga — Rydd: cleanup plan preview", "")
+	printResultBanner(out, "PREVIEW ONLY - NO ACTIONS AVAILABLE")
+	printField(out, "Selected targets", len(r.Evidence.Findings))
+	printField(out, "Minimum age", fmt.Sprintf("%d days", r.Evidence.MinimumAgeDays))
+	printField(out, "Project activity", "Unconfirmed")
+	printWrapped(out, "Current contents have not been checked. These sizes are not estimates of space you can free.", "")
 	for i, f := range r.Evidence.Findings {
-		m := f.Measurement
-		logical, allocated := "unknown", "unknown"
-		if m.LogicalBytes != nil {
-			logical = humanBytes(*m.LogicalBytes)
-		}
-		if m.AllocatedBytes != nil {
-			allocated = humanBytes(*m.AllocatedBytes)
-		}
-		fmt.Fprintf(out, "\n%d. %q\n   Reference: %s\n   Saved size: %s logical; %s allocated (%s)\n   Modified: folder %s; package.json %s\n", i+1, string(f.PathBytes), f.ID, logical, allocated, directoryStatusLabel(m.Status), f.DirectoryModifiedAt.Format("2006-01-02"), f.ManifestModifiedAt.Format("2006-01-02"))
-		if m.Truncated {
-			fmt.Fprintln(out, "   Entry limit reached; size covers only the measured portion.")
-		}
+		printFinding(out, i+1, f)
 	}
-	fmt.Fprintln(out, "\nProposed future action: same-filesystem quarantine. This frees no disk space.")
-	fmt.Fprintln(out, "\nBefore execution can be supported:")
-	for _, requirement := range r.Requirements {
-		printWrapped(out, requirement, "  • ")
-	}
-	for _, note := range r.Notes {
-		printWrapped(out, note, "  ")
-	}
-	fmt.Fprintln(out, "Full saved evidence and caveats: add --json.")
+	fmt.Fprintln(out, "\nREVIEW NEXT")
+	printWrapped(out, "Confirm whether these projects are still in use. Check for local dependency edits and whether you can reinstall the dependencies. Old timestamps alone do not establish safe deletion.", "  ")
+	fmt.Fprintln(out, "\nABOUT THIS PREVIEW")
+	printWrapped(out, "No files were moved or deleted. This preview is not saved as an approved plan and cannot authorize cleanup. Saved paths, IDs and measurements can change between reports.", "  ")
+	printWrapped(out, "A future quarantine would move files on the same filesystem for recovery. It frees no disk space. Quarantine and restore without overwriting are not yet supported. Permanent deletion would require separate approval and is not yet supported.", "  ")
 }

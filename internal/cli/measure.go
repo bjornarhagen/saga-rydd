@@ -133,11 +133,24 @@ func measure(ctx context.Context, args []string, paths config.Paths) (MeasureRep
 }
 
 func printMeasureReport(out io.Writer, r MeasureReport) {
-	fmt.Fprintf(out, "Saved size calculations for %q: %d batches; %s.\n", r.Directory, r.Batches, r.Outcome)
-	if !r.Complete {
-		// Reuse the configured parent location of the isolated manual store.
-		base := filepath.Dir(filepath.Dir(r.StateDir))
-		fmt.Fprintf(out, "Progress is saved. Continue: rydd --data-dir %s measure -d %s\n", shellQuote(base), shellQuote(r.Directory))
+	if r.Complete {
+		printWrapped(out, "Saved size calculations are complete.", "")
+	} else {
+		printWrapped(out, "More size calculations remain. Progress is saved.", "")
+		switch r.Outcome {
+		case "batch_limit":
+			printWrapped(out, "This run reached its work limit.", "")
+		case "time_limit":
+			printWrapped(out, "This run reached its time limit.", "")
+		case "wal_backpressure":
+			printWrapped(out, "The saved database needs to finish writing pending changes. Retry later.", "")
+		}
 	}
-	fmt.Fprintln(out, "No filesystem scan or file deletion performed. Use report to read saved sizes.")
+	fmt.Fprintf(out, "%q\n", r.Directory)
+	printWrapped(out, "Only saved scan data was used. Current contents have not been checked. No files were deleted.", "")
+	base := filepath.Dir(filepath.Dir(r.StateDir))
+	if !r.Complete {
+		fmt.Fprintf(out, "\nContinue the calculation:\n  rydd --data-dir %s measure -d %s\n", shellQuote(base), shellQuote(r.Directory))
+	}
+	fmt.Fprintf(out, "\nView the saved report:\n  rydd --data-dir %s report -d %s\n", shellQuote(base), shellQuote(r.Directory))
 }

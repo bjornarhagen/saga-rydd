@@ -78,7 +78,7 @@ func TestPlanPreviewHumanJSONReadOnly(t *testing.T) {
 		t.Fatal(r)
 	}
 	code, human := run("plan", "--preview", "-d", root, "--min-age-days", "30", id)
-	for _, want := range []string{"PREVIEW ONLY", id, "partial", "unconfirmed", "frees no disk space", "restore without overwriting"} {
+	for _, want := range []string{"PREVIEW ONLY", id, "Incomplete measurement", "Unconfirmed", "frees no disk space", "restore without overwriting"} {
 		if code != 0 || !strings.Contains(strings.Join(strings.Fields(human), " "), want) {
 			t.Fatal(want, code, human)
 		}

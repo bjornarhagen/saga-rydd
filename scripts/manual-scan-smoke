@@ -25,7 +25,7 @@ rydd report -d "$fixture/root" --candidates --json >"$fixture/compact-candidates
 grep -q '"classification":"review_required"' "$fixture/compact-candidates.json"
 grep -q '"allocated_size_source":"cached_reduction"' "$fixture/compact-candidates.json"
 rydd scan -d "$fixture/root" -s 10 >"$fixture/scan.txt"
-grep -q 'Scan stopped: queue_drained' "$fixture/scan.txt"
+grep -q 'Scan pass finished. Results are saved.' "$fixture/scan.txt"
 rydd report -d "$fixture/root" >"$fixture/report.txt"
 grep -q 'saved directory size' "$fixture/report.txt"
 test ! -e "$fixture/state/config.toml"

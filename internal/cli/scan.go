@@ -170,14 +170,15 @@ func scan(ctx context.Context, args []string, paths config.Paths, progress io.Wr
 	if err = w.SeedInventory(ctx); err != nil {
 		return r, err
 	}
-	fmt.Fprintf(progress, "Scanning %q; entry delay %d ms. Ctrl+C stops; committed batches remain saved.\n", root, delay)
+	fmt.Fprintf(progress, "Scanning folder:\n%q\n", root)
+	printWrapped(progress, fmt.Sprintf("Entry delay: %d ms. Press Ctrl+C to stop. Progress already saved is kept.", delay), "")
 	if r.Mode == "resume" {
-		fmt.Fprintln(progress, "Resuming saved work before revisiting completed folders.")
+		printWrapped(progress, "Resuming saved work before revisiting completed folders.", "")
 	} else {
 		fmt.Fprintln(progress, "Starting a new pass.")
 	}
 	if r.Compact {
-		fmt.Fprintln(progress, "Compact node_modules inventory enabled; file contents are not read.")
+		printWrapped(progress, "Compact node_modules inventory enabled. File contents are not read.", "")
 	}
 	lastProgress := time.Now()
 	for {
@@ -223,7 +224,7 @@ func scan(ctx context.Context, args []string, paths config.Paths, progress io.Wr
 			}
 			if worked {
 				if time.Since(lastProgress) >= time.Second {
-					fmt.Fprintf(progress, "Saved size calculations: %d batches; retiring old inventory records: %d batches.\n", r.AllocationBatches, r.RetirementBatches+r.SubtreeRetirementBatches)
+					printWrapped(progress, fmt.Sprintf("Saved size calculations: %d batches. Removing outdated database records: %d batches.", r.AllocationBatches, r.RetirementBatches+r.SubtreeRetirementBatches), "")
 					lastProgress = time.Now()
 				}
 				timer := time.NewTimer(time.Duration(max(delay, 1)) * time.Millisecond)
@@ -283,5 +284,27 @@ func scan(ctx context.Context, args []string, paths config.Paths, progress io.Wr
 }
 
 func printScanReport(out io.Writer, r ScanReport) {
-	fmt.Fprintf(out, "Scan stopped: %s. Saved observations: %d; pending jobs: %d; directory errors: %d; skipped: %d.\nState: %q\nView: rydd --data-dir %q report -d %q\nSaved observations are not verified current contents; use the report for size completeness.\n", r.Outcome, r.Inventory.Entries, r.Inventory.PendingJobs, r.Inventory.DirectoryErrors, r.Inventory.SkippedEntries, r.StateDir, r.StateDir, r.Directory)
+	switch r.Outcome {
+	case "queue_drained":
+		printWrapped(out, "Scan pass finished. Results are saved.", "")
+	case "pending_retry":
+		printWrapped(out, "Scan paused. Some folders still need another attempt.", "")
+	case "wal_backpressure":
+		printWrapped(out, "Scan paused. The saved database needs to finish writing pending changes before scanning can continue.", "")
+	default:
+		printWrapped(out, "Scan stopped. Check the saved results before continuing.", "")
+	}
+	fmt.Fprintf(out, "%q\n\n", r.Directory)
+	printField(out, "Saved entries", humanCount(r.Inventory.Entries))
+	printField(out, "Pending scan jobs", humanCount(r.Inventory.PendingJobs))
+	printField(out, "Running scan jobs", humanCount(r.Inventory.RunningJobs))
+	printField(out, "Directory errors", humanCount(r.Inventory.DirectoryErrors))
+	printField(out, "Skipped entries", humanCount(r.Inventory.SkippedEntries))
+	printWrapped(out, "Saved entries do not prove complete coverage or current contents. The report shows size and coverage limits.", "")
+	// StateDir is the per-root store; commands need its configured parent.
+	base := filepath.Dir(filepath.Dir(r.StateDir))
+	if r.Outcome == "pending_retry" || r.Outcome == "wal_backpressure" {
+		fmt.Fprintf(out, "\nProgress is saved. Retry later:\n  rydd --data-dir %s scan -d %s -s %d\n", shellQuote(base), shellQuote(r.Directory), r.SleepMS)
+	}
+	fmt.Fprintf(out, "\nView the saved report:\n  rydd --data-dir %s report -d %s\n", shellQuote(base), shellQuote(r.Directory))
 }

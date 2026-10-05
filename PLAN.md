@@ -314,6 +314,8 @@ rydd doctor                      Explain service, permission and state problems
 
 Start with readable tables, filters and prompts. A full-screen TUI can follow once scanning and cleanup are trustworthy. Reports must remain useful during partial scans and paginated for large inventories.
 
+P2-05d applies a shared human-output guide to scan, measure, reports and previews: state the result, explain its limits, then show the next available step. Use familiar, consistent terms inspired by simplified technical English, without claiming formal ASD-STE100 compliance. Keep partial/stale/unknown measurements and unavailable actions visible. Show findings before selection diagnostics; use aligned fields on ordinary terminals and stacked fields on narrow terminals. Wrap prose to terminal width, preserve full quoted paths and copyable commands, and never rely on color for meaning. Developer requirements remain in the JSON evidence and documentation; human previews explain review and recovery limits directly. This presentation-only slice does not change JSON, exit codes, scanning, approval or cleanup behavior. Status/help redesign and a separate detail mode remain later work.
+
 ## 10. Existing scripts: what to reuse
 
 Inspected, but did not execute:

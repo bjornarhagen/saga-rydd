@@ -44,6 +44,9 @@ func TestReportHumanAndJSONOffline(t *testing.T) {
 	if code != 0 || errOut != "" || !strings.Contains(human, "2.0 KiB") || !strings.Contains(human, `large\nfile`) {
 		t.Fatal(code, human, errOut)
 	}
+	if !strings.Contains(human, "rydd --data-dir "+shellQuote(dir)+" report --limit 1 --cursor '") {
+		t.Fatal("next page must preserve the selected state and page size", human)
+	}
 	code, machine, errOut := run("report", "--limit", "1", "--json")
 	var envelope struct {
 		Version int              `json:"api_version"`
