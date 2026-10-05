@@ -31,7 +31,16 @@ rydd report -d /path/to/project
 
 This opt-in mode stores `node_modules` file sizes and identities compactly instead of keeping each filename in ordinary inventory. It still traverses metadata to measure size; contents are not read. The mode is saved per manual inventory, so the same scan command without flags resumes it. Use `--detailed` after pending work finishes to switch back. Existing pending detailed scans must finish before switching modes.
 
-Logical sizes use saved directory totals. After scanning, the manual command calculates cached allocated totals for the selected root and each outermost `node_modules` tree, deduplicating hardlinks across the entire scope. These calculations resume in bounded batches after interruption and are invalidated by the next saved scan batch. Reports can use matching caches even above 10,000 compact identities. Other scopes, or caches still being calculated, fall back to checking at most 10,000 compact inode records; larger or unknown identity sets then show allocated size as unknown. Directory coverage still has a separate 10,000-entry cap, and old observations or exclusions can make reports partial or stale.
+Logical sizes use saved directory totals. After scanning, the manual command calculates cached allocated totals for the selected root and each outermost `node_modules` tree, deduplicating hardlinks across the entire scope. These calculations resume in bounded batches after interruption and are invalidated by the next saved scan batch. Reports can use matching caches even above 10,000 compact identities. Other scopes, or caches still being calculated, fall back to checking at most 10,000 compact inode records; larger or unknown identity sets then show allocated size as unknown. Completed scope calculations also cache full directory coverage and logical size. These reports can cover more than 10,000 entries; other scopes and unfinished calculations retain the synchronous cap. Old observations or exclusions can still make reports partial or stale.
+
+To finish saved calculations after an upgrade or interruption without rescanning:
+
+```sh
+rydd measure -d /path/to/project
+rydd report -d /path/to/project --candidates --min-age-days 30
+```
+
+`measure` requires an existing compact manual inventory. It runs at most 128 batches or five seconds per invocation; repeat until complete. Each batch processes at most 128 records. It writes derived database state only; source folders can be offline. Pending scans must finish first. Reports remain read-only.
 
 Old ordinary file records are hidden from totals immediately per measured directory, then retired in bounded batches. Cache calculations temporarily store a scoped identity map in SQLite and retire it after completion. [Production fixture measurements](experiments/compactscale/README.md) compare compact and detailed state, memory, latency and interruption recovery; they do not establish unattended resource budgets. SQLite may reuse freed pages rather than shrinking its file. Compact background scanning and default enablement remain pending.
 
@@ -51,7 +60,7 @@ rydd report --directory /absolute/path/to/folder --json
 rydd report --limit 10 --cursor TOKEN
 ```
 
-The report works while the worker is stopped and reads only saved inventory. It lists the largest observed regular files, sizes, timestamps, parent-pass freshness and saved root diagnostics. Use `--directory` to measure up to 10,000 saved entries in a selected subtree, with partial/stale/unknown labels and qualified hardlink accounting. `--candidates` selects old recorded `node_modules` and sibling `package.json` timestamps for review. It does not inspect manifest contents or establish inactivity or safe deletion. The default age filter is 90 days; `--min-age-days N` changes it for one report only. Candidate reports now explain selection outcomes (including age, missing evidence and incomplete listings) and whether more saved entries remain. Reports do not rescan paths or delete anything. Use the returned `next_cursor` for another page; keep global `--data-dir` before `report` if using a separate instance. See the [report contract](docs/cli.md#saved-file-reports).
+The report works while the worker is stopped and reads only saved inventory. It lists the largest observed regular files, sizes, timestamps, parent-pass freshness and saved root diagnostics. Use `--directory` to read a completed scope calculation or measure up to 10,000 saved entries in a selected subtree, with partial/stale/unknown labels and qualified hardlink accounting. `--candidates` selects old recorded `node_modules` and sibling `package.json` timestamps for review. It does not inspect manifest contents or establish inactivity or safe deletion. The default age filter is 90 days; `--min-age-days N` changes it for one report only. Candidate reports now explain selection outcomes (including age, missing evidence and incomplete listings) and whether more saved entries remain. Reports do not rescan paths or delete anything. Use the returned `next_cursor` for another page; keep global `--data-dir` before `report` if using a separate instance. See the [report contract](docs/cli.md#saved-file-reports).
 
 ## Project map
 

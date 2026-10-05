@@ -31,6 +31,7 @@ Commands:
   pause / resume                                       Persistently pause or resume work
   stop                                                 Request graceful worker shutdown
   report --candidates [--min-age-days N] [--cursor TOKEN] [--json]         Node modules review candidates
+  measure -d PATH [--batches N] [--json]               Resume saved compact size calculations
   report -d PATH [--json]                             Saved directory size
   report [--limit N] [--cursor TOKEN] [--json]           Largest observed files
   capabilities [--json]                                Discover commands and supported features
@@ -69,7 +70,7 @@ func runHuman(ctx context.Context, args []string, out, errOut io.Writer) int {
 		return 0
 	}
 	if remaining[0] == "capabilities" && len(remaining) == 1 {
-		fmt.Fprintln(out, "Rydd commands: init, config check, state init, status, scan, report, pause, resume, stop, capabilities.\nAdd --json for versioned machine output. daemon is foreground-only and uses text output.\nAll commands are noninteractive. Exit codes: 0 success, 1 operation failed, 2 invalid usage.\nScanning is experimental. Deletion, duplicate detection, and full resource controls are unavailable.")
+		fmt.Fprintln(out, "Rydd commands: init, config check, state init, status, scan, measure, report, pause, resume, stop, capabilities.\nAdd --json for versioned machine output. daemon is foreground-only and uses text output.\nAll commands are noninteractive. Exit codes: 0 success, 1 operation failed, 2 invalid usage.\nScanning is experimental. Deletion, duplicate detection, and full resource controls are unavailable.")
 		return 0
 	}
 	paths, err := config.ResolvePaths(*dataDir)
@@ -113,6 +114,12 @@ func runHuman(ctx context.Context, args []string, out, errOut io.Writer) int {
 		r, err = scan(ctx, remaining[1:], paths, out)
 		if err == nil {
 			printScanReport(out, r)
+		}
+	case "measure":
+		var r MeasureReport
+		r, err = measure(ctx, remaining[1:], paths)
+		if err == nil {
+			printMeasureReport(out, r)
 		}
 	case "report":
 		var r reportResult

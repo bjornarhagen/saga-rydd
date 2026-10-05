@@ -396,7 +396,7 @@ func TestAllocationMigrationV5RollbackAndReadability(t *testing.T) {
 	}
 }
 
-func TestAllocationCoverageLimit(t *testing.T) {
+func TestAllocationCoverageBeyondLimit(t *testing.T) {
 	s := directoryFixture(t)
 	ctx := context.Background()
 	on := true
@@ -426,11 +426,23 @@ func TestAllocationCoverageLimit(t *testing.T) {
 	drainAllocations(t, s)
 	var ready bool
 	var examined int
-	if err := s.db.QueryRow("SELECT ready,examined FROM allocation_cache").Scan(&ready, &examined); err != nil || ready || examined != DirectoryEntryLimit {
+	if err := s.db.QueryRow("SELECT ready,examined FROM allocation_cache").Scan(&ready, &examined); err != nil || !ready || examined != DirectoryEntryLimit+7 {
 		t.Fatal(ready, examined, err)
 	}
 	r, err := s.MeasureDirectory(ctx, "/fixture")
-	if err != nil || !r.Truncated || r.AllocatedSizeSource == "cached_reduction" {
+	if err != nil || r.Truncated || r.CoverageSource != "cached_reduction" || r.AllocatedSizeSource != "cached_reduction" || r.LogicalBytes == nil || *r.LogicalBytes != DirectoryEntryLimit+1700 || r.EntriesExamined != DirectoryEntryLimit+7 {
+		t.Fatal(r, err)
+	}
+	// Evidence beyond the old synchronous cap must still qualify the full size.
+	if _, err = s.db.Exec("UPDATE entries SET skip_reason='fixture' WHERE path=?", []byte(fmt.Sprintf("z%05d", DirectoryEntryLimit-1))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.db.Exec("UPDATE allocation_revisions SET revision=revision+1"); err != nil {
+		t.Fatal(err)
+	}
+	drainAllocations(t, s)
+	r, err = s.MeasureDirectory(ctx, "/fixture")
+	if err != nil || r.Truncated || r.Status != "partial" || r.SkippedEntries != 1 || r.CoverageSource != "cached_reduction" {
 		t.Fatal(r, err)
 	}
 }

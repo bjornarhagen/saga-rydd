@@ -3,6 +3,7 @@ package state
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -53,6 +54,7 @@ type allocationWork struct {
 	path, cursor                                  []byte
 	phase, device, inode                          string
 	unknown, conflicting, ready                   bool
+	coverage                                      scopeCoverage
 }
 
 // ReduceAllocations advances one saved scope in a short transaction. A step
@@ -71,20 +73,26 @@ func (s *Store) ReduceAllocations(ctx context.Context) (bool, error) {
 	defer tx.Rollback()
 	var w allocationWork
 	var current int64
+	var coverage []byte
 	err = tx.QueryRowContext(ctx, `SELECT c.root_id,c.path,c.revision,c.phase,c.entry_cursor,c.inode_device,c.inode_number,
- c.examined,c.allocated,c.repeated,c.unknown,c.conflicting,c.ready,v.revision
+ c.examined,c.allocated,c.repeated,c.unknown,c.conflicting,c.ready,v.revision,c.coverage
  FROM allocation_cache c JOIN allocation_revisions v ON v.root_id=c.root_id JOIN roots r ON r.id=c.root_id
  WHERE r.enabled=1 AND (c.revision!=v.revision OR c.phase!='done')
  AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.root_id=c.root_id AND j.kind=?)
  AND NOT EXISTS(SELECT 1 FROM subtree_reconcile t WHERE t.root_id=c.root_id)
  AND NOT EXISTS(SELECT 1 FROM subtree_retirement t WHERE t.root_id=c.root_id)
  ORDER BY c.root_id,c.path LIMIT 1`, ScanKind).Scan(&w.root, &w.path, &w.revision, &w.phase, &w.cursor, &w.device, &w.inode,
-		&w.examined, &w.allocated, &w.repeated, &w.unknown, &w.conflicting, &w.ready, &current)
+		&w.examined, &w.allocated, &w.repeated, &w.unknown, &w.conflicting, &w.ready, &current, &coverage)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
+	}
+	if len(coverage) > 0 {
+		if err := json.Unmarshal(coverage, &w.coverage); err != nil {
+			return false, err
+		}
 	}
 	if w.revision != current {
 		w = allocationWork{root: w.root, path: w.path, revision: current, phase: "reset", cursor: []byte{}}
@@ -142,9 +150,13 @@ func (s *Store) ReduceAllocations(ctx context.Context) (bool, error) {
 		}
 		return true, tx.Commit()
 	}
+	coverage, err = json.Marshal(w.coverage)
+	if err != nil {
+		return false, err
+	}
 	_, err = tx.ExecContext(ctx, `UPDATE allocation_cache SET revision=?,phase=?,entry_cursor=?,inode_device=?,inode_number=?,
- examined=?,allocated=?,repeated=?,unknown=?,conflicting=?,ready=? WHERE root_id=? AND path=?`,
-		w.revision, w.phase, w.cursor, w.device, w.inode, w.examined, w.allocated, w.repeated, w.unknown, w.conflicting, w.ready, w.root, w.path)
+ examined=?,allocated=?,repeated=?,unknown=?,conflicting=?,ready=?,coverage=? WHERE root_id=? AND path=?`,
+		w.revision, w.phase, w.cursor, w.device, w.inode, w.examined, w.allocated, w.repeated, w.unknown, w.conflicting, w.ready, coverage, w.root, w.path)
 	if err != nil {
 		return false, err
 	}
@@ -153,11 +165,14 @@ func (s *Store) ReduceAllocations(ctx context.Context) (bool, error) {
 
 func (w *allocationWork) entries(ctx context.Context, tx *sql.Tx) error {
 	// Keep selection and membership equivalent to MeasureDirectory, including
-	// legacy overlap suppression and the same total entry coverage cap.
+	// legacy overlap suppression. Total coverage is durable; each batch stays bounded.
 	q := `SELECT e.path,e.parent,e.kind,e.generation,e.device,e.inode,e.size,e.allocated,
- COALESCE(p.generation,0),COALESCE(p.complete,0),COALESCE(p.last_error,''),COALESCE(c.generation,0),COALESCE(c.unknown_inodes,0)
+ COALESCE(p.generation,0),COALESCE(p.complete,0),COALESCE(p.last_error,''),COALESCE(c.generation,0),COALESCE(c.unknown_inodes,0),
+ e.observed_at_ns,e.skip_reason,COALESCE(d.complete,0),COALESCE(d.checked_at_ns,0),COALESCE(d.last_error,''),
+ COALESCE(c.logical,0),COALESCE(c.files,0),COALESCE(c.skipped_files,0)
  FROM entries e LEFT JOIN directories p ON p.root_id=e.root_id AND p.path=e.parent
  LEFT JOIN compact_dirs c ON c.root_id=e.root_id AND c.path=e.path
+ LEFT JOIN directories d ON d.root_id=e.root_id AND d.path=e.path
  WHERE e.root_id=? AND e.path>? AND (e.kind!='file' OR NOT EXISTS
  (SELECT 1 FROM compact_dirs c WHERE c.root_id=e.root_id AND c.path=e.parent))`
 	args := []any{w.root, w.cursor}
@@ -171,17 +186,12 @@ func (w *allocationWork) entries(ctx context.Context, tx *sql.Tx) error {
 	if err != nil {
 		return err
 	}
-	type entry struct {
-		path, parent                                                              []byte
-		kind, dev, ino, parentError                                               string
-		generation, size, allocated, parentGeneration, compactGeneration, unknown int64
-		parentComplete                                                            bool
-	}
-	var batch []entry
+	var batch []coverageEntry
 	for rows.Next() {
-		var e entry
+		var e coverageEntry
 		if err = rows.Scan(&e.path, &e.parent, &e.kind, &e.generation, &e.dev, &e.ino, &e.size, &e.allocated,
-			&e.parentGeneration, &e.parentComplete, &e.parentError, &e.compactGeneration, &e.unknown); err != nil {
+			&e.parentGeneration, &e.parentComplete, &e.parentError, &e.compactGeneration, &e.unknown,
+			&e.observed, &e.skip, &e.dirComplete, &e.checked, &e.dirError, &e.compactLogical, &e.compactFiles, &e.compactSkipped); err != nil {
 			rows.Close()
 			return err
 		}
@@ -196,26 +206,29 @@ func (w *allocationWork) entries(ctx context.Context, tx *sql.Tx) error {
 		w.phase = "inodes"
 	}
 	for _, e := range batch {
-		if w.examined == DirectoryEntryLimit {
-			w.phase = "cleanup" // Never publish a cache of a truncated scope.
-			return nil
+		if err := addCompact(&w.examined, 1); err != nil {
+			return err
 		}
-		w.examined++
 		w.cursor = e.path
 		excluded := false
+		confirmed := true
 		if string(e.path) != string(w.path) {
-			var parentExcluded bool
+			var parentExcluded, parentConfirmed bool
 			var parentKind string
-			err := tx.QueryRowContext(ctx, `SELECT excluded,kind FROM allocation_members WHERE root_id=? AND scope=? AND path=?`,
-				w.root, w.path, e.parent).Scan(&parentExcluded, &parentKind)
+			err := tx.QueryRowContext(ctx, `SELECT excluded,kind,confirmed FROM allocation_members WHERE root_id=? AND scope=? AND path=?`,
+				w.root, w.path, e.parent).Scan(&parentExcluded, &parentKind, &parentConfirmed)
 			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return err
 			}
+			confirmed = err == nil && parentConfirmed && e.generation == e.parentGeneration
 			excluded = (err == nil && (parentExcluded || parentKind != "directory")) ||
 				(e.parentGeneration > 0 && e.parentComplete && e.parentError == "" && e.generation != e.parentGeneration)
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO allocation_members(root_id,scope,path,excluded,kind,generation) VALUES(?,?,?,?,?,?)`,
-			w.root, w.path, e.path, excluded, e.kind, e.compactGeneration); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO allocation_members(root_id,scope,path,excluded,kind,generation,confirmed) VALUES(?,?,?,?,?,?,?)`,
+			w.root, w.path, e.path, excluded, e.kind, e.compactGeneration, confirmed && e.skip == "" && e.kind == "directory"); err != nil {
+			return err
+		}
+		if err := w.coverage.add(e, string(e.path) == string(w.path), excluded, confirmed); err != nil {
 			return err
 		}
 		if excluded {

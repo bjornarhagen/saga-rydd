@@ -35,7 +35,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) int {
 			continue
 		}
 		filtered = append(filtered, a)
-		if (a == "--data-dir" || a == "--root" || a == "--exclude" || a == "--limit" || a == "--cursor" || a == "--directory" || a == "-d" || a == "-s" || a == "--sleep") && i+1 < len(args) {
+		if (a == "--data-dir" || a == "--root" || a == "--exclude" || a == "--limit" || a == "--cursor" || a == "--directory" || a == "-d" || a == "-s" || a == "--sleep" || a == "--min-age-days" || a == "--batches") && i+1 < len(args) {
 			i++
 			filtered = append(filtered, args[i])
 		}
@@ -120,7 +120,7 @@ func runMachine(ctx context.Context, args []string, out, errOut io.Writer) int {
 		if len(a) != 2 {
 			return invalid("unexpected arguments")
 		}
-	case "init", "report", "scan":
+	case "init", "report", "scan", "measure":
 	default:
 		return invalid("unknown command; use capabilities --json")
 	}
@@ -138,6 +138,10 @@ func runMachine(ctx context.Context, args []string, out, errOut io.Writer) int {
 		var r ScanReport
 		r, err = scan(ctx, a[1:], paths, io.Discard)
 		result["scan"] = r
+	case "measure":
+		var r MeasureReport
+		r, err = measure(ctx, a[1:], paths)
+		result["measure"] = r
 	case "report":
 		var r any
 		r, err = report(ctx, a[1:], paths)
@@ -190,6 +194,7 @@ func capabilities() map[string]any {
 			{"init", true, "writes_configuration_and_state", []string{"--root PATH (repeatable)", "--exclude PATH (repeatable)"}},
 			{"config check", true, "read_only", []string{}}, {"state init", true, "writes_state", []string{}},
 			{"scan", true, "scans_metadata_and_writes_isolated_state", []string{"-d PATH / --directory PATH", "-s MS / --sleep MS (default 10)", "--now (no entry delay)", "--compact / --detailed (saved manual inventory mode)"}},
+			{"measure", true, "writes_derived_state", []string{"-d PATH / --directory PATH (exact manual compact root)", "--batches N (1–1000; default 128; five-second budget)"}},
 			{"report", true, "read_only", []string{"--limit N (1–200)", "--cursor TOKEN", "-d PATH / --directory PATH (saved folder size; combine with --candidates for manual scan root)", "--candidates [--min-age-days N] [--cursor TOKEN] (old node_modules review)"}},
 			{"status", true, "read_only", []string{}}, {"pause", true, "writes_state", []string{}}, {"resume", true, "writes_state", []string{}},
 			{"stop", true, "stops_worker", []string{}}, {"daemon", false, "runs_worker", []string{"--experimental-scan"}}, {"capabilities", true, "read_only", []string{}},

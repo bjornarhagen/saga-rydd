@@ -219,7 +219,12 @@ func printDirectoryReport(out io.Writer, r state.DirectoryReport) {
 		fmt.Fprintln(out, "  Complete in saved inventory; current contents are not verified.")
 	}
 	fmt.Fprintln(out, "\nSCAN COVERAGE")
-	row("Entries examined", fmt.Sprintf("%s (limit %s)", humanCount(r.EntriesExamined), humanCount(r.EntryLimit)))
+	if r.CoverageSource == "cached_reduction" {
+		row("Entries covered", humanCount(r.EntriesExamined))
+		row("Coverage evidence", "completed saved calculation")
+	} else {
+		row("Entries examined", fmt.Sprintf("%s (limit %s)", humanCount(r.EntriesExamined), humanCount(r.EntryLimit)))
+	}
 	row("Files observed", humanCount(r.FilePaths))
 	if r.CompactedDirectories > 0 {
 		row("Compact file records", humanCount(r.CompactedFiles))

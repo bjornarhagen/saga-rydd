@@ -3,7 +3,7 @@ package state
 // Migrations are append-only. Inventory tables are rebuildable, but the database
 // must never be deleted/recreated as a migration strategy: future action/restore
 // records will live in their own durable tables here.
-const schemaVersion = 7
+const schemaVersion = 8
 const applicationID = 0x52594444 // RYDD
 
 const migration1 = `
@@ -57,6 +57,7 @@ var migrations = []struct{ name, sql string }{
 	{"compact-directory-inventory", migration5},
 	{"scoped-allocated-reductions", migration6},
 	{"absent-subtree-retirement", migration7},
+	{"complete-scope-coverage", migration8},
 }
 
 const migration4 = `
@@ -137,4 +138,10 @@ CREATE TABLE subtree_retirement (
  phase INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(root_id,path)
 );
 CREATE INDEX entries_membership ON entries(root_id,parent,path);
+`
+
+const migration8 = `
+ALTER TABLE allocation_cache ADD COLUMN coverage BLOB NOT NULL DEFAULT X'';
+ALTER TABLE allocation_members ADD COLUMN confirmed INTEGER NOT NULL DEFAULT 0;
+UPDATE allocation_cache SET revision=-1,ready=0;
 `

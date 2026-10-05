@@ -15,6 +15,7 @@ const DirectoryEntryLimit = 10000
 var ErrDirectoryScope = errors.New("directory must be inside an enabled saved root")
 
 type DirectoryReport struct {
+	CoverageSource        string     `json:"coverage_source"`
 	CompactedDirectories  int        `json:"compacted_directories"`
 	CompactedFiles        int        `json:"compacted_files"`
 	InodeEntriesExamined  int        `json:"compact_inode_entries_examined"`
@@ -46,10 +47,11 @@ type DirectoryReport struct {
 	Notes                 []string   `json:"notes"`
 }
 
-// MeasureDirectory measures at most DirectoryEntryLimit stored entries in one
-// read snapshot. No filesystem calls or unbounded recursive CTEs are used.
+// MeasureDirectory reads a matching scope summary or measures at most
+// DirectoryEntryLimit stored entries in one read snapshot. No filesystem calls
+// or unbounded recursive CTEs are used.
 func (s *Store) MeasureDirectory(ctx context.Context, path string) (DirectoryReport, error) {
-	r := DirectoryReport{GeneratedAt: time.Now().UTC(), Source: "saved_inventory", Path: path, PathBytes: []byte(path), Status: "unknown", AllocatedSizeSource: "unknown", EntryLimit: DirectoryEntryLimit, Notes: []string{
+	r := DirectoryReport{GeneratedAt: time.Now().UTC(), Source: "saved_inventory", CoverageSource: "bounded_entry_check", Path: path, PathBytes: []byte(path), Status: "unknown", AllocatedSizeSource: "unknown", EntryLimit: DirectoryEntryLimit, Notes: []string{
 		"Saved observations only; current filesystem state is not verified. Recorded completeness is not proof of current contents.",
 		"Logical bytes sum regular-file paths; allocated file bytes count each known device/inode once within the measured portion. Directory metadata, symlinks and other objects are excluded.",
 		"Hardlinks outside this folder, clones and snapshots can retain storage. These are not reclaimable-space estimates; overlapping folder reports must not be added together.",
@@ -143,6 +145,15 @@ func (s *Store) MeasureDirectory(ctx context.Context, path string) (DirectoryRep
 			reason("A directory is unconfirmed in its saved ancestor listing.")
 		}
 		ancestor = filepath.Dir(ancestor)
+	}
+	if s.schema >= 8 {
+		cached, ok, err := cachedScopeReport(ctx, tx, r, relative, stale, partial)
+		if err != nil {
+			return r, err
+		}
+		if ok {
+			return cached, tx.Commit()
+		}
 	}
 	compactSelect, compactJoin := ",0,0,0,0,0", ""
 	if s.schema >= 5 {
