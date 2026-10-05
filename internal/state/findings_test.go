@@ -149,6 +149,17 @@ func TestFindingCandidateCap(t *testing.T) {
 	if err != nil || len(next.Findings) != 1 || next.PageCoverage != "saved_entries_exhausted" || next.NextCursor != "" {
 		t.Fatal(next, err)
 	}
+	ids := []string{}
+	for _, f := range r.Findings {
+		ids = append(ids, f.ID)
+	}
+	preview, err := s.PreviewFindings(ctx, ids, FindingAgeDays)
+	if err != nil || len(preview.Findings) != 20 || preview.EntriesExamined != 20 || preview.NextCursor != "" {
+		t.Fatal(preview, err)
+	}
+	if _, err = s.PreviewFindings(ctx, append(ids, next.Findings[0].ID), FindingAgeDays); err != ErrFindingSelection {
+		t.Fatal(err)
+	}
 	if r.Findings[19].ID == next.Findings[0].ID {
 		t.Fatal("candidate repeated across pages")
 	}

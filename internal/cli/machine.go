@@ -120,7 +120,7 @@ func runMachine(ctx context.Context, args []string, out, errOut io.Writer) int {
 		if len(a) != 2 {
 			return invalid("unexpected arguments")
 		}
-	case "init", "report", "scan", "measure":
+	case "init", "report", "scan", "measure", "plan":
 	default:
 		return invalid("unknown command; use capabilities --json")
 	}
@@ -142,6 +142,10 @@ func runMachine(ctx context.Context, args []string, out, errOut io.Writer) int {
 		var r MeasureReport
 		r, err = measure(ctx, a[1:], paths)
 		result["measure"] = r
+	case "plan":
+		var r PlanPreview
+		r, err = plan(ctx, a[1:], paths)
+		result["plan"] = r
 	case "report":
 		var r any
 		r, err = report(ctx, a[1:], paths)
@@ -195,12 +199,13 @@ func capabilities() map[string]any {
 			{"config check", true, "read_only", []string{}}, {"state init", true, "writes_state", []string{}},
 			{"scan", true, "scans_metadata_and_writes_isolated_state", []string{"-d PATH / --directory PATH", "-s MS / --sleep MS (default 10)", "--now (no entry delay)", "--compact / --detailed (saved manual inventory mode)"}},
 			{"measure", true, "writes_derived_state", []string{"-d PATH / --directory PATH (exact manual compact root)", "--batches N (1–1000; default 128; five-second budget)"}},
+			{"plan", true, "read_only", []string{"--preview (required)", "-d PATH / --directory PATH (exact manual scan root)", "--min-age-days N (1–36500; default 90)", "FINDING_ID... (1–20 unique IDs; options first)"}},
 			{"report", true, "read_only", []string{"--limit N (1–200)", "--cursor TOKEN", "-d PATH / --directory PATH (saved folder size; combine with --candidates for manual scan root)", "--candidates [--min-age-days N] [--cursor TOKEN] (old node_modules review)"}},
 			{"status", true, "read_only", []string{}}, {"pause", true, "writes_state", []string{}}, {"resume", true, "writes_state", []string{}},
 			{"stop", true, "stops_worker", []string{}}, {"daemon", false, "runs_worker", []string{"--experimental-scan"}}, {"capabilities", true, "read_only", []string{}},
 		},
 		"exit_codes":  map[string]string{"0": "success", "1": "operation_failed", "2": "invalid_usage_or_output"},
 		"error_codes": []string{"invalid_arguments", "unsupported_output", "worker_not_running", "writer_busy", "not_found", "already_exists", "permission_denied", "canceled", "command_failed"},
-		"features":    map[string]bool{"compact_manual_scan": true, "manual_scan": true, "experimental_inventory": true, "durable_dispatch_limits": true, "wal_backpressure": true, "entry_rate_limit": true, "metadata_api_counters": true, "metadata_rate_limit": false, "cpu_limit": false, "power_controls": false, "file_reports": true, "directory_size_reports": true, "findings": true, "duplicates": false, "cleanup": false, "service_installation": false},
+		"features":    map[string]bool{"compact_manual_scan": true, "manual_scan": true, "experimental_inventory": true, "durable_dispatch_limits": true, "wal_backpressure": true, "entry_rate_limit": true, "metadata_api_counters": true, "metadata_rate_limit": false, "cpu_limit": false, "power_controls": false, "file_reports": true, "directory_size_reports": true, "findings": true, "plan_previews": true, "duplicates": false, "cleanup": false, "service_installation": false},
 	}
 }

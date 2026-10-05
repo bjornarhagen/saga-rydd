@@ -62,6 +62,14 @@ rydd report --limit 10 --cursor TOKEN
 
 The report works while the worker is stopped and reads only saved inventory. It lists the largest observed regular files, sizes, timestamps, parent-pass freshness and saved root diagnostics. Use `--directory` to read a completed scope calculation or measure up to 10,000 saved entries in a selected subtree, with partial/stale/unknown labels and qualified hardlink accounting. `--candidates` selects old recorded `node_modules` and sibling `package.json` timestamps for review. It does not inspect manifest contents or establish inactivity or safe deletion. The default age filter is 90 days; `--min-age-days N` changes it for one report only. Candidate reports now explain selection outcomes (including age, missing evidence and incomplete listings) and whether more saved entries remain. Reports do not rescan paths or delete anything. Use the returned `next_cursor` for another page; keep global `--data-dir` before `report` if using a separate instance. See the [report contract](docs/cli.md#saved-file-reports).
 
+## Preview an exact selection
+
+```sh
+rydd plan --preview -d /path/to/project --min-age-days 30 node-modules-v1:1:42
+```
+
+Replace the example ID with a finding ID from the candidate report for the same inventory. Select 1–20 unique IDs; put flags before IDs. The preview rechecks saved eligibility and shows exact targets, qualified sizes and the checks needed before a future quarantine action. Project activity remains unconfirmed. It is read-only, has no approval ID and cannot execute cleanup. Quarantine would support recovery but would not free disk space; purge requires a separate future approval.
+
 ## Project map
 
 - [PLAN.md](PLAN.md): architecture, safety requirements and acceptance gates.

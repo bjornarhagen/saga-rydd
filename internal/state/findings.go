@@ -81,6 +81,10 @@ type FindingReport struct {
 // examines one bounded ID page, then measures at most 20 candidates separately.
 // Each measurement has its own snapshot; no multi-snapshot totals are offered.
 func (s *Store) NodeModulesFindings(ctx context.Context, token string, minimumAgeDays int) (FindingReport, error) {
+	return s.nodeModulesFindings(ctx, token, minimumAgeDays, nil)
+}
+
+func (s *Store) nodeModulesFindings(ctx context.Context, token string, minimumAgeDays int, selected []findingReference) (FindingReport, error) {
 	r := FindingReport{Diagnostics: selectionDiagnostics(), PageCoverage: "saved_entries_exhausted", GeneratedAt: time.Now().UTC(), Source: "saved_inventory", Findings: []Finding{}, EntryLimit: FindingEntryLimit, MinimumAgeDays: minimumAgeDays, Notes: []string{
 		"Review required. Old recorded directory and package.json modification times do not prove inactivity, continuous stability or safe deletion.",
 		"Project recognition uses a sibling regular-file package.json observation only. Manifest contents, lockfiles, source activity and dependency modifications have not been inspected.",
@@ -112,13 +116,33 @@ func (s *Store) NodeModulesFindings(ctx context.Context, token string, minimumAg
 	}
 	// Walk by primary key rather than an unindexed basename search. Bound both
 	// query results and candidate measurements even when most entries are files.
-	rows, err := s.db.QueryContext(ctx, `SELECT e.id,e.root_id,e.path,r.path,e.kind,e.skip_reason,e.device,e.inode,e.mtime_ns,e.observed_at_ns,
+	query := `SELECT e.id,e.root_id,e.path,r.path,e.kind,e.skip_reason,e.device,e.inode,e.mtime_ns,e.observed_at_ns,
  COALESCE(m.kind,''),COALESCE(m.skip_reason,''),COALESCE(m.mtime_ns,0),COALESCE(m.observed_at_ns,0),
  e.generation,COALESCE(m.generation,0),COALESCE(p.generation,0),COALESCE(p.complete,0),COALESCE(p.last_error,'')
  FROM entries e JOIN roots r ON r.id=e.root_id
  LEFT JOIN entries m ON m.root_id=e.root_id AND m.path=CAST(CASE WHEN e.parent=X'2e' THEN 'package.json' ELSE CAST(e.parent AS TEXT)||'/package.json' END AS BLOB)
  LEFT JOIN directories p ON p.root_id=e.root_id AND p.path=e.parent
- WHERE e.id>? AND r.enabled=1 ORDER BY e.id LIMIT ?`, after, FindingEntryLimit+1)
+ WHERE r.enabled=1 AND `
+	args := []any{}
+	if len(selected) > 0 {
+		r.PageCoverage = "selected_entries_only"
+		r.EntryLimit = len(selected)
+		query += "("
+		for i, ref := range selected {
+			if i > 0 {
+				query += " OR "
+			}
+			query += "(e.id=? AND e.root_id=?)"
+			args = append(args, ref.entry, ref.root)
+		}
+		query += ")"
+	} else {
+		query += "e.id>?"
+		args = append(args, after)
+	}
+	query += " ORDER BY e.id LIMIT ?"
+	args = append(args, r.EntryLimit+1)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return r, err
 	}

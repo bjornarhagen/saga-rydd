@@ -232,6 +232,14 @@ Background discovery does not itself authorize deletion. The action executor req
 5. Journal intent durably, perform the operation, then record success/failure. On restart reconcile interrupted actions from both filesystem and journal evidence; never blindly repeat a deletion.
 6. Offer restoration with collision handling: never overwrite a newly created original path.
 
+### Read-only cleanup preview (P4-01a)
+
+`plan --preview [--directory PATH] [--min-age-days N] FINDING_ID...` accepts 1–20 unique canonical finding IDs, using the same saved eligibility rule as candidate reports. Explicit selection never expands to all findings. An optional directory selects an exact manual inventory. Missing, disabled or no-longer-eligible selections fail the whole request; invalid IDs and duplicates are errors. Reads are bounded by the selected IDs and the existing report deadline and measurement limits.
+
+The output is an ephemeral review preview, not an immutable plan or an approval token. It includes exact saved paths/identities, age threshold, timestamps, coverage, unconfirmed activity and the proposed future same-filesystem quarantine semantics. Reclaimable space remains unknown: quarantine itself frees no space. The preview exposes no available action, approval or execution support and performs no filesystem traversal or writes. No persistence, schema migration or cleanup implementation is included in this leaf.
+
+Before an executable plan is implemented, bind immutable evidence and exact targets to store/root identity and explicit approval; revalidate current identities, scope/exclusions, project activity and regeneration inputs; validate same-filesystem quarantine; journal intent/result durably; preserve original paths and restoration records; and restore without overwriting. Changed or uncertain targets stop. Purge is separately approved and remains out of scope.
+
 Default file action: move to a private, application-managed quarantine on the **same filesystem**, using rename where safe. If no suitable quarantine location exists, explain the limitation and leave the item untouched. Do not silently copy a large directory across filesystems or switch to permanent deletion.
 
 Quarantine supports recovery but **does not free disk space**. Report quarantined bytes separately; a separately approved purge releases eligible storage and is irreversible. Automatic purge is disabled unless explicitly included in an approved policy with a retention period. Native OS Trash integration can be added after cross-platform behavior is validated.
