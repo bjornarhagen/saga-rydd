@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bjornarhagen/saga-rydd/internal/config"
+	"github.com/bjornarhagen/saga-rydd/internal/plans"
 	"github.com/bjornarhagen/saga-rydd/internal/state"
 )
 
@@ -25,29 +26,50 @@ type PlanPreview struct {
 	Notes                     []string            `json:"notes"`
 }
 
-func plan(ctx context.Context, args []string, paths config.Paths) (PlanPreview, error) {
+func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 	r := PlanPreview{}
 	f := flag.NewFlagSet("plan", flag.ContinueOnError)
 	f.SetOutput(io.Discard)
 	preview := f.Bool("preview", false, "show a read-only cleanup review preview")
+	save := f.Bool("save", false, "save an unapproved selection for later review")
+	show := f.String("show", "", "reopen a saved plan ID")
 	directory := f.String("directory", "", "exact manual scan root")
 	f.StringVar(directory, "d", "", "directory alias")
 	days := f.Int("min-age-days", state.FindingAgeDays, "minimum saved candidate age (1–36500)")
 	if err := f.Parse(args); err != nil {
 		return r, usageError{err}
 	}
-	aliases := 0
+	aliases, modes := 0, 0
+	ageSet := false
 	f.Visit(func(v *flag.Flag) {
+		if v.Name == "preview" || v.Name == "save" || v.Name == "show" {
+			modes++
+		}
+		if v.Name == "min-age-days" {
+			ageSet = true
+		}
 		if v.Name == "directory" || v.Name == "d" {
 			aliases++
 		}
 	})
-	if !*preview || aliases > 1 || f.NArg() < 1 || f.NArg() > state.PreviewTargetLimit {
-		return r, usageError{errors.New("plan requires --preview and 1–20 finding IDs; put options before IDs")}
+	if modes != 1 || aliases > 1 {
+		return r, usageError{errors.New("plan accepts exactly one of --preview, --save or --show; put options before IDs")}
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if *show != "" {
+		if f.NArg() != 0 || aliases != 0 || ageSet || !plans.ValidID(*show) {
+			return r, usageError{errors.New("plan --show requires one full plan ID and no directory, age or finding selection")}
+		}
+		return plans.Load(ctx, paths.StateDir, *show)
+	}
+	if (!*preview && !*save) || f.NArg() < 1 || f.NArg() > state.PreviewTargetLimit {
+		return r, usageError{errors.New("plan requires --preview or --save and 1–20 finding IDs; put options before IDs")}
 	}
 	if *days < 1 || *days > state.MaxFindingAgeDays {
 		return r, usageError{state.ErrFindingAge}
 	}
+	base := paths.StateDir
 	if aliases == 1 {
 		root, err := directoryPath(*directory)
 		if err != nil {
@@ -55,13 +77,21 @@ func plan(ctx context.Context, args []string, paths config.Paths) (PlanPreview, 
 		}
 		paths.StateDir = manualState(paths, root)
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
 	s, err := state.OpenReader(ctx, paths.StateDir)
 	if err != nil {
 		return r, err
 	}
 	defer s.Close()
+	if *save {
+		selection, err := s.SnapshotSelection(ctx, f.Args(), *days)
+		if err != nil {
+			if errors.Is(err, state.ErrFindingSelection) || errors.Is(err, state.ErrFindingAge) {
+				err = usageError{err}
+			}
+			return r, err
+		}
+		return plans.Save(ctx, base, selection)
+	}
 	evidence, err := s.PreviewFindings(ctx, f.Args(), *days)
 	if err != nil {
 		if errors.Is(err, state.ErrFindingSelection) || errors.Is(err, state.ErrFindingAge) {
@@ -102,4 +132,27 @@ func printPlanPreview(out io.Writer, r PlanPreview) {
 	fmt.Fprintln(out, "\nABOUT THIS PREVIEW")
 	printWrapped(out, "No files were moved or deleted. This preview is not saved as an approved plan and cannot authorize cleanup. Saved paths, IDs and measurements can change between reports.", "  ")
 	printWrapped(out, "A future quarantine would move files on the same filesystem for recovery. It frees no disk space. Quarantine and restore without overwriting are not yet supported. Permanent deletion would require separate approval and is not yet supported.", "  ")
+}
+
+func printPlan(out io.Writer, result any, paths config.Paths) {
+	switch r := result.(type) {
+	case PlanPreview:
+		printPlanPreview(out, r)
+	case plans.Saved:
+		printWrapped(out, "Saga — Rydd: saved cleanup selection", "")
+		printResultBanner(out, "SAVED FOR REVIEW - NOT APPROVED")
+		fmt.Fprintf(out, "Plan: %s\n", r.ID)
+		printField(out, "Saved", r.Record.CreatedAt.Format(time.RFC3339))
+		printField(out, "Selected targets", len(r.Record.Selection.Evidence.Findings))
+		printField(out, "Minimum age", fmt.Sprintf("%d days", r.Record.Selection.Evidence.MinimumAgeDays))
+		printField(out, "Project activity", "Unconfirmed")
+		printWrapped(out, "This is the saved selection. Scanning cannot add targets to it. Current contents have not been checked.", "")
+		for i, f := range r.Record.Selection.Evidence.Findings {
+			printFinding(out, i+1, f)
+		}
+		fmt.Fprintln(out, "\nREVIEW NEXT")
+		printWrapped(out, "Confirm whether these projects are still in use. Check for local dependency edits and whether you can reinstall the dependencies. Saving does not approve cleanup.", "  ")
+		printWrapped(out, "Approval and cleanup are not yet supported. No files were moved or deleted. A future quarantine would support recovery but free no disk space. These sizes are not estimates of space you can free.", "  ")
+		fmt.Fprintf(out, "\nReopen this selection:\n  %s plan --show %s\n", commandPrefix(paths), r.ID)
+	}
 }

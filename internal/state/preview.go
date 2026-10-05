@@ -2,6 +2,7 @@ package state
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strconv"
@@ -17,6 +18,10 @@ type findingReference struct{ root, entry int64 }
 // PreviewFindings selects exact local references without scanning all candidate
 // pages. It never grants approval or treats an inventory ID as durable identity.
 func (s *Store) PreviewFindings(ctx context.Context, ids []string, minimumAgeDays int) (FindingReport, error) {
+	return s.previewFindings(ctx, ids, minimumAgeDays, nil)
+}
+
+func (s *Store) previewFindings(ctx context.Context, ids []string, minimumAgeDays int, tx *sql.Tx) (FindingReport, error) {
 	if len(ids) < 1 || len(ids) > PreviewTargetLimit {
 		return FindingReport{}, ErrFindingSelection
 	}
@@ -35,7 +40,7 @@ func (s *Store) PreviewFindings(ctx context.Context, ids []string, minimumAgeDay
 		refs = append(refs, findingReference{root, entry})
 		seen[id] = true
 	}
-	r, err := s.nodeModulesFindings(ctx, "", minimumAgeDays, refs)
+	r, err := s.nodeModulesFindingsSnapshot(ctx, "", minimumAgeDays, refs, tx)
 	if err != nil {
 		return FindingReport{}, err
 	}

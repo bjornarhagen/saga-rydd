@@ -31,6 +31,8 @@ Commands:
   pause / resume                                       Persistently pause or resume work
   stop                                                 Request graceful worker shutdown
   plan --preview [options] FINDING_ID...               Read-only exact-target cleanup preview
+  plan --save [options] FINDING_ID...                  Save an unapproved selection
+  plan --show PLAN_ID                                 Reopen a saved selection
   report --candidates [--min-age-days N] [--cursor TOKEN] [--json]         Node modules review candidates
   measure -d PATH [--batches N] [--json]               Resume saved compact size calculations
   report -d PATH [--json]                             Saved directory size
@@ -123,10 +125,10 @@ func runHuman(ctx context.Context, args []string, out, errOut io.Writer) int {
 			printMeasureReport(out, r)
 		}
 	case "plan":
-		var r PlanPreview
+		var r any
 		r, err = plan(ctx, remaining[1:], paths)
 		if err == nil {
-			printPlanPreview(out, r)
+			printPlan(out, r, paths)
 		}
 	case "report":
 		var r reportResult

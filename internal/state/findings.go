@@ -2,6 +2,7 @@ package state
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -85,13 +86,23 @@ func (s *Store) NodeModulesFindings(ctx context.Context, token string, minimumAg
 }
 
 func (s *Store) nodeModulesFindings(ctx context.Context, token string, minimumAgeDays int, selected []findingReference) (FindingReport, error) {
+	return s.nodeModulesFindingsSnapshot(ctx, token, minimumAgeDays, selected, nil)
+}
+
+func (s *Store) nodeModulesFindingsSnapshot(ctx context.Context, token string, minimumAgeDays int, selected []findingReference, tx *sql.Tx) (FindingReport, error) {
+	measurementNote := "Sizes are saved measurements, not reclaimable space. Each candidate is measured in a separate snapshot; partial/stale sizes may overestimate or underestimate current contents. Do not sum shared storage."
+	pageNote := "Nested node_modules paths are suppressed. Empty pages can still have a next cursor. Pages are not a frozen snapshot; concurrent updates can change results."
+	if tx != nil {
+		measurementNote = "Selection and sizes use one saved inventory snapshot. Partial/stale sizes may overestimate or underestimate current contents. Sizes are not reclaimable space; do not sum shared storage."
+		pageNote = "Nested node_modules paths are suppressed. This exact selection is frozen at capture time; it does not verify current filesystem contents."
+	}
 	r := FindingReport{Diagnostics: selectionDiagnostics(), PageCoverage: "saved_entries_exhausted", GeneratedAt: time.Now().UTC(), Source: "saved_inventory", Findings: []Finding{}, EntryLimit: FindingEntryLimit, MinimumAgeDays: minimumAgeDays, Notes: []string{
 		"Review required. Old recorded directory and package.json modification times do not prove inactivity, continuous stability or safe deletion.",
 		"Project recognition uses a sibling regular-file package.json observation only. Manifest contents, lockfiles, source activity and dependency modifications have not been inspected.",
 		"Removing dependencies can break builds and applications or lose local edits. Regeneration may require the correct package manager, lockfile, credentials, network access and packages that remain available.",
-		"Sizes are saved measurements, not reclaimable space. Each candidate is measured in a separate snapshot; partial/stale sizes may overestimate or underestimate current contents. Do not sum shared storage.",
+		measurementNote,
 		"Selection diagnostics count only this page, with one first-match outcome per examined entry in displayed order. Exhausted saved entries do not mean scanning is complete or the machine is clean.",
-		"Nested node_modules paths are suppressed. Empty pages can still have a next cursor. Pages are not a frozen snapshot; concurrent updates can change results.",
+		pageNote,
 		"Findings are derived on demand, not persisted approvals. IDs are local inventory references, not action authorization; cleanup, dismissal and automatic policies are unavailable.",
 	}}
 	if minimumAgeDays < 1 || minimumAgeDays > MaxFindingAgeDays {
@@ -142,7 +153,13 @@ func (s *Store) nodeModulesFindings(ctx context.Context, token string, minimumAg
 	}
 	query += " ORDER BY e.id LIMIT ?"
 	args = append(args, r.EntryLimit+1)
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	var reader interface {
+		QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	} = s.db
+	if tx != nil {
+		reader = tx
+	}
+	rows, err := reader.QueryContext(ctx, query, args...)
 	if err != nil {
 		return r, err
 	}
@@ -214,7 +231,11 @@ func (s *Store) nodeModulesFindings(ctx context.Context, token string, minimumAg
 		return r, err
 	}
 	for i := range r.Findings {
-		r.Findings[i].Measurement, err = s.MeasureDirectory(ctx, r.Findings[i].Path)
+		if tx == nil {
+			r.Findings[i].Measurement, err = s.MeasureDirectory(ctx, r.Findings[i].Path)
+		} else {
+			r.Findings[i].Measurement, err = s.measureDirectory(ctx, r.Findings[i].Path, tx)
+		}
 		if err != nil {
 			return r, err
 		}

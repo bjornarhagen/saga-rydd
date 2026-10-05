@@ -35,7 +35,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) int {
 			continue
 		}
 		filtered = append(filtered, a)
-		if (a == "--data-dir" || a == "--root" || a == "--exclude" || a == "--limit" || a == "--cursor" || a == "--directory" || a == "-d" || a == "-s" || a == "--sleep" || a == "--min-age-days" || a == "--batches") && i+1 < len(args) {
+		if (a == "--data-dir" || a == "--root" || a == "--exclude" || a == "--limit" || a == "--cursor" || a == "--directory" || a == "-d" || a == "-s" || a == "--sleep" || a == "--min-age-days" || a == "--batches" || a == "--show") && i+1 < len(args) {
 			i++
 			filtered = append(filtered, args[i])
 		}
@@ -143,7 +143,7 @@ func runMachine(ctx context.Context, args []string, out, errOut io.Writer) int {
 		r, err = measure(ctx, a[1:], paths)
 		result["measure"] = r
 	case "plan":
-		var r PlanPreview
+		var r any
 		r, err = plan(ctx, a[1:], paths)
 		result["plan"] = r
 	case "report":
@@ -199,13 +199,13 @@ func capabilities() map[string]any {
 			{"config check", true, "read_only", []string{}}, {"state init", true, "writes_state", []string{}},
 			{"scan", true, "scans_metadata_and_writes_isolated_state", []string{"-d PATH / --directory PATH", "-s MS / --sleep MS (default 10)", "--now (no entry delay)", "--compact / --detailed (saved manual inventory mode)"}},
 			{"measure", true, "writes_derived_state", []string{"-d PATH / --directory PATH (exact manual compact root)", "--batches N (1–1000; default 128; five-second budget)"}},
-			{"plan", true, "read_only", []string{"--preview (required)", "-d PATH / --directory PATH (exact manual scan root)", "--min-age-days N (1–36500; default 90)", "FINDING_ID... (1–20 unique IDs; options first)"}},
+			{"plan", true, "read_only_or_writes_saved_plan", []string{"--preview / --save (exactly one for a new selection)", "--show PLAN_ID (reopen without directory or selection options)", "-d PATH / --directory PATH (exact manual scan root)", "--min-age-days N (1–36500; default 90)", "FINDING_ID... (1–20 unique IDs; options first)"}},
 			{"report", true, "read_only", []string{"--limit N (1–200)", "--cursor TOKEN", "-d PATH / --directory PATH (saved folder size; combine with --candidates for manual scan root)", "--candidates [--min-age-days N] [--cursor TOKEN] (old node_modules review)"}},
 			{"status", true, "read_only", []string{}}, {"pause", true, "writes_state", []string{}}, {"resume", true, "writes_state", []string{}},
 			{"stop", true, "stops_worker", []string{}}, {"daemon", false, "runs_worker", []string{"--experimental-scan"}}, {"capabilities", true, "read_only", []string{}},
 		},
 		"exit_codes":  map[string]string{"0": "success", "1": "operation_failed", "2": "invalid_usage_or_output"},
 		"error_codes": []string{"invalid_arguments", "unsupported_output", "worker_not_running", "writer_busy", "not_found", "already_exists", "permission_denied", "canceled", "command_failed"},
-		"features":    map[string]bool{"compact_manual_scan": true, "manual_scan": true, "experimental_inventory": true, "durable_dispatch_limits": true, "wal_backpressure": true, "entry_rate_limit": true, "metadata_api_counters": true, "metadata_rate_limit": false, "cpu_limit": false, "power_controls": false, "file_reports": true, "directory_size_reports": true, "findings": true, "plan_previews": true, "duplicates": false, "cleanup": false, "service_installation": false},
+		"features":    map[string]bool{"compact_manual_scan": true, "manual_scan": true, "experimental_inventory": true, "durable_dispatch_limits": true, "wal_backpressure": true, "entry_rate_limit": true, "metadata_api_counters": true, "metadata_rate_limit": false, "cpu_limit": false, "power_controls": false, "file_reports": true, "directory_size_reports": true, "findings": true, "plan_previews": true, "saved_plans": true, "plan_approval": false, "duplicates": false, "cleanup": false, "service_installation": false},
 	}
 }

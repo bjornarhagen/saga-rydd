@@ -70,6 +70,19 @@ rydd plan --preview -d /path/to/project --min-age-days 30 node-modules-v1:1:42
 
 Replace the example ID with a finding ID from the candidate report for the same inventory. Select 1–20 unique IDs; put flags before IDs. The preview rechecks saved eligibility and shows exact targets, qualified sizes and the checks needed before a future quarantine action. Project activity remains unconfirmed. It is read-only, has no approval ID and cannot execute cleanup. Quarantine would support recovery but would not free disk space; purge requires a separate future approval.
 
+## Save a selection for later review
+
+```sh
+rydd plan --save -d /path/to/project --min-age-days 30 node-modules-v1:1:42
+rydd plan --show PLAN_ID
+```
+
+Use an actual finding ID, then replace `PLAN_ID` with the returned saved plan ID. Keep the same global `--data-dir` if you override it. The saved record contains the exact selection and evidence from one inventory snapshot. Later scans cannot add targets to it. Reopening works while the source folder or its inventory is offline.
+
+Plans are private local records in a separate database under the global data directory. Saving does not approve cleanup, move files or free space. Approval and execution are still unavailable; project activity and regeneration safety remain unconfirmed. These commands are building blocks for the future guided select-and-confirm flow.
+
+Saving requires inventory schema 9. Reports and previews can still read schemas 4–8. Existing configured state can be migrated with `state init` while its worker is stopped; a manual inventory migrates on the next explicit scan, or with `measure` when it is compact and has no pending scan. No migration is performed by `--show` or `--preview`.
+
 ## Project map
 
 - [PLAN.md](PLAN.md): architecture, safety requirements and acceptance gates.

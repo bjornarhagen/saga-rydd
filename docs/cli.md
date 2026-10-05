@@ -178,15 +178,15 @@ Generation changes replace one directory's partial totals; stale inode generatio
 
 Incomplete or failed listings do not authorize retirement. Delayed scan retries can postpone maintenance; historical evidence remains available until a later successful reconciliation. General background/detailed-inventory stale cleanup, huge-directory continuation, arbitrary-scope caches and large-scale resource validation remain unfinished. Freed database pages are reusable; retiring rows does not promise the SQLite file will shrink.
 
-Writers migrate additively to schema 8. Reports still read schemas 4–7 without migration and use bounded identity checks when caches are unavailable. Stop a worker before explicitly migrating its state; manual inventories are separate stores. Older binaries cannot read schema-8 stores. Existing allocation caches are invalidated once for coverage recalculation. No application database is deleted or rebuilt by this migration, and upgrading alone does not scan, populate caches or schedule subtree retirement.
+Schema 8 introduced full saved scope coverage. Writers now migrate additively to schema 9; reports still read schemas 4–8 without migration and use bounded identity checks when caches are unavailable. Stop a worker before explicitly migrating its state; manual inventories are separate stores. Older binaries cannot read schema-9 stores. Existing allocation caches are invalidated once for coverage recalculation. No application database is deleted or rebuilt by this migration, and upgrading alone does not scan, populate caches or schedule subtree retirement.
 
 ### Human candidate output
 
-Candidate reports lead with the number of candidates on the current page, followed by aligned selection counts. Nonempty pages use compact candidate entries with path, measured sizes/coverage, modification dates and reference ID. Shared qualifications appear once; complete rule, recognition, observation, diagnostic and measurement evidence remains in the unchanged `--json` report.
+Candidate reports lead with the number of candidates on the current page, followed by candidate entries and then aligned selection counts. Nonempty pages use compact candidate entries with path, measured sizes/coverage, modification dates and reference ID. Shared qualifications appear once; complete rule, recognition, observation, diagnostic and measurement evidence remains in the unchanged `--json` report.
 
 The next-page command preserves the selected manual directory and any custom global state location, with literal shell quoting. Empty pages can still have more results; the human summary makes that continuation explicit.
 
-Empty human candidate pages display a boxed uppercase result. Real terminals use bold yellow unless `NO_COLOR` is set or `TERM=dumb`; redirected output and JSON contain no color escapes.
+Empty human candidate pages display an uppercase result with an ASCII emphasis rule. Real terminals use bold yellow unless `NO_COLOR` is set or `TERM=dumb`; redirected output and JSON contain no color escapes.
 
 ### Complete saved size calculations
 
@@ -200,7 +200,7 @@ Directory and candidate measurements add `coverage_source`: `cached_reduction` u
 
 ## Read-only cleanup plan previews
 
-`rydd plan --preview [-d PATH] [--min-age-days N] FINDING_ID... [--json]` previews 1–20 explicitly selected, unique candidate references. Flags precede positional IDs (`--json` is accepted globally as usual). `--preview` is required; no approval or execution form is implemented. `-d` / `--directory` selects an exact manual scan root; otherwise use the selected global `--data-dir` inventory. No default selection, wildcard or recursive expansion exists.
+`rydd plan --preview [-d PATH] [--min-age-days N] FINDING_ID... [--json]` previews 1–20 explicitly selected, unique candidate references. Flags precede positional IDs (`--json` is accepted globally as usual). Use exactly one of `--preview`, `--save` or `--show`. No approval or execution form is implemented. `-d` / `--directory` selects an exact manual scan root; otherwise use the selected global `--data-dir` inventory. No default selection, wildcard or recursive expansion exists.
 
 IDs must have canonical `node-modules-v1:ROOT_ID:ENTRY_ID` syntax with positive decimal IDs. The command queries only those entries and applies the current saved candidate rule, including the selected age threshold (default 90 days). Missing, disabled, skipped or no-longer-eligible selections fail the whole request with `invalid_arguments`; duplicate/malformed IDs and more than 20 selections do too. Run a new candidate report to review changed evidence. ID reuse across rebuilt or different inventories is possible; a preview never establishes durable action identity.
 
@@ -208,4 +208,24 @@ The five-second report deadline and per-target measurement rules still apply. Pa
 
 JSON `plan` has `mode: "preview"`, `executable: false`, `approval_available: false`, `project_activity: "unconfirmed"`, `proposed_future_action: "same_filesystem_quarantine"`, `quarantine_reclaims_space: false` and `estimated_reclaimable_bytes: null`. `evidence` contains the full findings, effective age filter, timestamps, identity/path bytes and measurements. Its `page_coverage` is `selected_entries_only`; `entry_limit` equals the explicit selection count and no continuation is returned. `requirements_before_execution` and `notes` explain activity/regeneration review, immutable approvals, action-time identity/scope checks, safe quarantine, durable journaling and collision-safe restoration. Finding `available_actions` stays empty; capabilities expose `plan_previews: true` and `cleanup: false`.
 
-The preview saves no plan and changes no inventory or action records. It performs no migration or source-folder traversal and generates no plan ID. SQLite may maintain its normal reader sidecars. Redirected output can contain private paths and inventory; keep it private. Immutable plans, approval binding, quarantine, restore and purge remain future work. Quarantine itself does not reclaim storage, and a later purge needs separate explicit approval.
+The preview saves no plan and changes no inventory or action records. It performs no migration or source-folder traversal and generates no plan ID. SQLite may maintain its normal reader sidecars. Redirected output can contain private paths and inventory; keep it private. Saved unapproved selections are available separately as described below. Approval, quarantine, restore and purge remain future work. Quarantine itself does not reclaim storage, and a later purge needs separate explicit approval.
+
+
+## Saved cleanup selections
+
+```sh
+rydd plan --save [-d PATH] [--min-age-days N] FINDING_ID... [--json]
+rydd plan --show PLAN_ID [--json]
+```
+
+`--save` rechecks 1–20 unique explicit finding IDs using the same eligibility rule as previews. Invalid, duplicate, disabled, missing or ineligible selections fail the whole save. Flags precede IDs. A five-second context bounds inventory capture and persistence. `--show` accepts only the full returned plan ID: directory, age and finding arguments are rejected. It uses the selected global data directory, not a manual inventory directory.
+
+The saved JSON `plan` object contains `id` and `record`. Record version 1 includes creation time, `status: "unapproved"`, proposed future same-filesystem quarantine, `project_activity: "unconfirmed"`, `executable: false`, `approval_available: false`, `quarantine_reclaims_space: false`, a null reclaimable-size estimate and `selection`. Selection includes the inventory incarnation ID, saved root paths/fingerprints/revisions, target and manifest device/inode/change-time/generation bindings, and the full qualified finding report. `path_bytes` remains authoritative for arbitrary Unix filenames. Eligibility, measurement and bindings all come from one SQLite read snapshot; capture does not acquire the scanner's writer lock or traverse source folders. Historical identity fields can be unknown; none prove safe deletion or replace action-time validation.
+
+Schema 9 adds a durable random inventory identity. Reader commands do not migrate existing stores. Saving from schemas 4–8 fails with migration guidance; reports and previews remain available. A migration does not itself scan source folders. Configured state uses `state init` with its worker stopped. Manual stores migrate on an explicit scan, or on `measure` for an existing compact store. A freshly created inventory has a different identity even when numeric finding IDs repeat.
+
+Records are stored separately at `plans/plans.sqlite3` under the global state directory. Directories are private (0700); database and sidecar files must be private (0600), owned regular files with one link. The plan store uses a separate writer lock, its own application/schema identity, WAL and FULL-synchronous transactions. `--show` opens it read-only and does not initialize missing storage; SQLite may maintain normal reader sidecars. Inventory replacement or source-folder unavailability does not remove saved plans. Preserve the plans directory when rebuilding inventory.
+
+Each record is bounded to 1 MiB. Its ID is `plan-v1-` followed by the lowercase SHA-256 digest of the exact stored JSON bytes. Loading verifies that digest, record version and unapproved/non-executable state. The application exposes no plan update or deletion; database triggers also reject updates/deletes. The digest is content binding for a future approval, not an approval token or protection against deliberate same-user modification. Unsupported databases, damaged records and changed digests fail closed. Per-record and per-request work are bounded; total saved history has no retention limit yet.
+
+Capabilities advertise `saved_plans: true`, `plan_approval: false` and `cleanup: false`; `plan` can now read evidence or write saved-plan storage depending on its mode. Existing preview JSON is unchanged. No source contents, cleanup action or approval are written. List/expiry/revocation, an interactive review flow, explicit approval, live revalidation, action journaling, quarantine and restoration remain later work. An interrupted save can have committed before its result was delivered; no automatic retry or execution follows.

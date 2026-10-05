@@ -2,8 +2,9 @@ package state
 
 // Migrations are append-only. Inventory tables are rebuildable, but the database
 // must never be deleted/recreated as a migration strategy: future action/restore
-// records will live in their own durable tables here.
-const schemaVersion = 8
+// records must stay separate from rebuildable inventory. Saved selections use
+// their own database; this inventory has a durable incarnation identity.
+const schemaVersion = 9
 const applicationID = 0x52594444 // RYDD
 
 const migration1 = `
@@ -58,6 +59,7 @@ var migrations = []struct{ name, sql string }{
 	{"scoped-allocated-reductions", migration6},
 	{"absent-subtree-retirement", migration7},
 	{"complete-scope-coverage", migration8},
+	{"inventory-incarnation", migration9},
 }
 
 const migration4 = `
@@ -144,4 +146,16 @@ const migration8 = `
 ALTER TABLE allocation_cache ADD COLUMN coverage BLOB NOT NULL DEFAULT X'';
 ALTER TABLE allocation_members ADD COLUMN confirmed INTEGER NOT NULL DEFAULT 0;
 UPDATE allocation_cache SET revision=-1,ready=0;
+`
+
+const migration9 = `
+CREATE TABLE inventory_identity (
+ singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+ token TEXT NOT NULL CHECK(length(token)=64)
+);
+INSERT INTO inventory_identity VALUES(1,lower(hex(randomblob(32))));
+CREATE TRIGGER inventory_identity_no_update BEFORE UPDATE ON inventory_identity
+ BEGIN SELECT RAISE(ABORT,'inventory identity is immutable'); END;
+CREATE TRIGGER inventory_identity_no_delete BEFORE DELETE ON inventory_identity
+ BEGIN SELECT RAISE(ABORT,'inventory identity is immutable'); END;
 `

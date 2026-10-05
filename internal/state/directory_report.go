@@ -51,6 +51,20 @@ type DirectoryReport struct {
 // DirectoryEntryLimit stored entries in one read snapshot. No filesystem calls
 // or unbounded recursive CTEs are used.
 func (s *Store) MeasureDirectory(ctx context.Context, path string) (DirectoryReport, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return DirectoryReport{}, err
+	}
+	defer tx.Rollback()
+	r, err := s.measureDirectory(ctx, path, tx)
+	if err != nil {
+		return r, err
+	}
+	return r, tx.Commit()
+}
+
+// measureDirectory also serves immutable selections inside their single snapshot.
+func (s *Store) measureDirectory(ctx context.Context, path string, tx *sql.Tx) (DirectoryReport, error) {
 	r := DirectoryReport{GeneratedAt: time.Now().UTC(), Source: "saved_inventory", CoverageSource: "bounded_entry_check", Path: path, PathBytes: []byte(path), Status: "unknown", AllocatedSizeSource: "unknown", EntryLimit: DirectoryEntryLimit, Notes: []string{
 		"Saved observations only; current filesystem state is not verified. Recorded completeness is not proof of current contents.",
 		"Logical bytes sum regular-file paths; allocated file bytes count each known device/inode once within the measured portion. Directory metadata, symlinks and other objects are excluded.",
@@ -60,13 +74,8 @@ func (s *Store) MeasureDirectory(ctx context.Context, path string) (DirectoryRep
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path || strings.ContainsRune(path, 0) || len(path) > 4096 {
 		return r, ErrDirectoryScope
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return r, err
-	}
-	defer tx.Rollback()
 	var root []byte
-	err = tx.QueryRowContext(ctx, `SELECT id,path,last_error FROM roots WHERE enabled=1 AND
+	err := tx.QueryRowContext(ctx, `SELECT id,path,last_error FROM roots WHERE enabled=1 AND
  (path=? OR (substr(?,1,length(path))=path AND (substr(?,length(path)+1,1)=X'2f' OR path=X'2f')))
  ORDER BY length(path) DESC LIMIT 1`, []byte(path), []byte(path), []byte(path)).Scan(&r.RootID, &root, &r.RootError)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -106,14 +115,14 @@ func (s *Store) MeasureDirectory(ctx context.Context, path string) (DirectoryRep
  WHERE e.root_id=? AND e.path=?`, r.RootID, []byte(ancestor)).Scan(&kind, &skip, &generation, &parentGeneration, &complete, &parentError, &observed, &checked)
 		if errors.Is(err, sql.ErrNoRows) {
 			r.UnknownReason = "selected directory or ancestor has no saved observation"
-			return r, tx.Commit()
+			return r, nil
 		}
 		if err != nil {
 			return r, err
 		}
 		if kind != "directory" {
 			r.UnknownReason = "selected path or ancestor was not recorded as a directory"
-			return r, tx.Commit()
+			return r, nil
 		}
 		if skip != "" || parentError != "" {
 			partial = true
@@ -134,7 +143,7 @@ func (s *Store) MeasureDirectory(ctx context.Context, path string) (DirectoryRep
 		}
 		if parentGeneration > 0 && complete != 0 && parentError == "" && generation != parentGeneration {
 			r.UnknownReason = "selected directory or ancestor is absent from its latest successful completed parent listing"
-			return r, tx.Commit()
+			return r, nil
 		}
 		if parentGeneration == 0 || complete == 0 {
 			partial = true
@@ -152,7 +161,7 @@ func (s *Store) MeasureDirectory(ctx context.Context, path string) (DirectoryRep
 			return r, err
 		}
 		if ok {
-			return cached, tx.Commit()
+			return cached, nil
 		}
 	}
 	compactSelect, compactJoin := ",0,0,0,0,0", ""
@@ -433,5 +442,5 @@ func (s *Store) MeasureDirectory(ctx context.Context, path string) (DirectoryRep
 			r.AllocatedSizeSource = "unknown"
 		}
 	}
-	return r, tx.Commit()
+	return r, nil
 }
