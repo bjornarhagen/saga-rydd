@@ -101,6 +101,15 @@ Plans are private local records in a separate database under the global data dir
 
 Saving, checking, live verification, inspection, capture and comparison require inventory schema 9. Reports and previews can still read schemas 4–8. Existing configured state can be migrated with `state init` while its worker is stopped; a manual inventory migrates on the next explicit scan, or with `measure` when it is compact and has no pending scan. Writer commands can migrate plan-store schemas 1/2 to schema 3; capture publishes its observation atomically, with existing plans and consent unchanged. Read-only `--show`, `--check`, `--verify`, `--inspect`, `--compare` and `--preview` do not migrate storage.
 
+## Read a saved recovery record
+
+```sh
+rydd journal --show INTENT_ID
+rydd journal --show INTENT_ID --json
+```
+
+This reads a preparation record and its recorded history without inspecting either filesystem location. The journal foundation is available for development fixtures; there is no CLI command to prepare or execute a move. Saved outcomes are caller-supplied records, not proof of current state. Missing results remain unknown and cannot permit retry. Quarantine, restoration and purge remain unavailable. See the [journal contract](docs/cli.md#saved-recovery-journal).
+
 ## Record or revoke review consent
 
 After reviewing the exact saved selection with the project owner:

@@ -39,6 +39,8 @@ jobs:
             experiments/sqlite/go.sum
       - run: ./scripts/tasks check
       - run: ./scripts/tasks race
+      - name: Native no-overwrite rename and directory-sync probe
+        run: go test ./experiments/rename -count=1 -v
       - name: Isolated Linux bind-mount boundary
         if: runner.os == 'Linux'
         run: |

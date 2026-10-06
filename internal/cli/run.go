@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bjornarhagen/saga-rydd/internal/config"
+	"github.com/bjornarhagen/saga-rydd/internal/plans"
 	"github.com/bjornarhagen/saga-rydd/internal/state"
 	"github.com/bjornarhagen/saga-rydd/internal/worker"
 )
@@ -43,6 +44,7 @@ Commands:
     --confirm-project-review                         Confirm activity, local edits and reinstall review
     --confirm-quarantine                             Accept same-filesystem quarantine without purge
   plan --revoke PLAN_ID                               Revoke review consent; no inventory needed
+  journal --show INTENT_ID [--json]                 Read saved preparation/history; no operations
   report --candidates [--min-age-days N] [--cursor TOKEN] [--json]         Node modules review candidates
   measure -d PATH [--batches N] [--json]               Resume saved compact size calculations
   report -d PATH [--json]                             Saved directory size
@@ -83,7 +85,7 @@ func runHuman(ctx context.Context, args []string, out, errOut io.Writer) int {
 		return 0
 	}
 	if remaining[0] == "capabilities" && len(remaining) == 1 {
-		fmt.Fprintln(out, "Rydd commands: init, config check, state init, status, scan, measure, report, plan, pause, resume, stop, capabilities.\nAdd --json for versioned machine output. daemon is foreground-only and uses text output.\nAll commands are noninteractive. Exit codes: 0 success, 1 operation failed, 2 invalid usage.\nScanning is experimental. Deletion, duplicate detection, and full resource controls are unavailable.")
+		fmt.Fprintln(out, "Rydd commands: init, config check, state init, status, scan, measure, report, plan, journal, pause, resume, stop, capabilities.\nAdd --json for versioned machine output. daemon is foreground-only and uses text output.\nAll commands are noninteractive. Exit codes: 0 success, 1 operation failed, 2 invalid usage.\nScanning is experimental. Deletion, duplicate detection, and full resource controls are unavailable.")
 		return 0
 	}
 	paths, err := config.ResolvePaths(*dataDir)
@@ -139,6 +141,12 @@ func runHuman(ctx context.Context, args []string, out, errOut io.Writer) int {
 		r, err = plan(ctx, remaining[1:], paths)
 		if err == nil {
 			printPlan(out, r, paths)
+		}
+	case "journal":
+		var r plans.JournalSnapshot
+		r, err = journal(ctx, remaining[1:], paths)
+		if err == nil {
+			printJournal(out, r)
 		}
 	case "report":
 		var r reportResult
