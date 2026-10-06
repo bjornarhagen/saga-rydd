@@ -6,7 +6,7 @@ Only general product lessons are published here. Project-derived measurements, p
 
 An empty candidate page should explain whether dependency folders failed the age rule, lacked supported project evidence, were skipped, or had incomplete parent observations. It should also distinguish an exhausted saved inventory from a page with more results to inspect.
 
-P2-05a now provides bounded per-page selection diagnostics in human and JSON output, using mutually exclusive reason counts and explicit coverage. It preserves nested dependency suppression, the existing age rule and review-required classification. The next step is owner feedback on report usefulness; do not change thresholds merely to produce findings.
+P2-05a now provides bounded per-page selection diagnostics in human and JSON output, using mutually exclusive reason counts and explicit coverage. It preserves nested dependency suppression, the existing age rule and review-required classification. Owner feedback has now calibrated known used/unused examples in the controlled scope. Do not change thresholds merely to produce findings.
 
 ## Other lessons
 
@@ -16,7 +16,10 @@ P2-05a now provides bounded per-page selection diagnostics in human and JSON out
 - Keep trial state and raw reports separate from public documentation. Publishing general lessons does not authorize disclosure of measurements or project details.
 - Guided review needs the same empty-page explanation as finite candidate reports. Keep the exact folder, private state, age and current-page cursor in any suggested command; a generic command can open a different inventory or page. P4-01e shares the bounded rejection summary on empty guided pages while preserving frozen nonempty selection evidence.
 - Separate exhausted saved report pages, a drained scan queue and completed saved size calculations. A bounded trial can inspect every saved page while filesystem work remains. Foreground interruption retains partial evidence and pending progress; resume the same saved work before assessing completed coverage. Report and navigation commands must not start another pass.
+- A completed permitted pass can still have partial broader size coverage because protected/excluded folders were deliberately left unlisted. Explain that distinction rather than equating every partial size with queued work.
+- A lower exploratory age cutoff can agree with known unused examples, while a very short cutoff can also include known used projects. These examples calibrate the filter; they do not estimate accuracy, prove dependency contents unmodified or authorize cleanup. Keep the default unchanged pending broader evidence.
+- Bounded work must also seek unfinished database records. The completed trial exposed a pending allocation lookup that revisited completed prefixes; explicitly using the existing pending index preserved progress and avoided that work. Synthetic bundled-driver/native seek and restart checks cover the correction.
 
 ## Remaining acceptance work
 
-MVP-TRIAL remains open for owner feedback and a review of candidate diagnostics. A controlled scan does not establish unattended-operation safety, resource targets or release-soak readiness.
+MVP-TRIAL is complete for the controlled metadata-only scope, saved-report diagnostics and limited owner-labelled comparison. An exact private sample-read proposal is prepared for a separate content-reading trial; it requires explicit approval. A controlled scan does not establish current contents, cleanup suitability, unattended-operation safety, resource targets or release-soak readiness.

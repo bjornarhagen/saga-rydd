@@ -237,6 +237,12 @@ Process targets sequentially. Hold every no-follow directory descriptor and one 
 
 This leaf adds no CLI, persistence, worker, configuration, full hash, writes to file contents, source renames or removal. It does not claim enforcement of stored daily byte/rate settings. Cancellation discards observations; persistent consumption accounting needs its own reservation/return contract before production integration. A later content-reading trial requires explicit selected read scope; metadata-only trial selection does not authorize samples. Full hashing and durable fair continuation remain P3-02/P3-03 work.
 
+### Next full-hash leaf (P3-02b1)
+
+Start with one ordinary-file session and opaque in-memory continuation on disposable fixtures. Deep-copy the exact selection evidence into shared private session state; wrapper copies must not create competing hash state. Retain no descriptors between steps. Each step reads at most 1 MiB in chunks of at most 32 KiB, with a cooperative five-second deadline and time reserved for final checks. Reopen and validate the complete held path, file identity/timestamps, named links and mounts every step. Publish partial progress only after those checks; cancellation preserves the previous checked offset and returns attempted/read byte usage. Changed or uncertain bindings invalidate the session. Publish ordinary SHA-256 of all file bytes only after completion, without duplicate, current-state, execution or savings claims.
+
+Verify independent known digests, SHA block boundaries, tiny/irregular allowances, concurrent calls, cancellation accounting, changes between slices and native path/mount races. Alternate large and small sessions to verify continuation mechanics; this does not establish production scheduler fairness. No CLI, schema, durable checkpoint or real-target full hash belongs in this leaf. P3-03 must separately bind store-owned, bounded, versioned checkpoints to selection and reservation identities, reject incompatible/corrupt state, and conservatively charge uncertain crash attempts. Serialized SHA state can contain buffered source bytes; block-aligned checkpoints and a tested serializer are required before claiming digest-only persistence. Approval of a bounded sample trial does not authorize full hashing.
+
 ## 7. Review, cleanup and recovery
 
 Background discovery does not itself authorize deletion. The action executor requires an approved plan or a matching, explicitly enabled automatic policy.
