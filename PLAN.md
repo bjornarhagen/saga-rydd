@@ -286,6 +286,12 @@ Stream 128 names at a time and retain only bounded metadata records plus the dir
 
 Report counts excluding the selected root and a versioned SHA-256 fingerprint over sorted relative path bytes, device/inode, mode, size, link count, ctime/mtime and symlink text, including the root boundary record. Exclude access time and file bodies. The digest is an observation with no frozen saved-tree baseline or reusable action permission. All content/local-edit/regeneration flags remain unverified, and namespace changes after an object's observation remain possible. Immutable evidence capture, renewed executable consent and quarantine/restore recovery still precede any move.
 
+### Immutable observation baseline (next slice: P4-02b3)
+
+Capture a separate bounded, immutable observation record only after all selected targets pass input/tree inspection. Bind its digests and summaries to the exact plan bytes, plan-store identity, inventory incarnation, ordered findings and versioned inspection contract. Preserve existing plan-v1 and review-v1 records; do not store raw input bodies or descendant filename listings. A later comparison reloads that exact baseline and repeats the same checks without saving records. Matching observations do not prove pristine package contents, detect edits that predate capture, establish reinstall safety or authorize execution.
+
+Validate atomic publication with no baseline on a block, migration/rollback, corruption and size bounds, incorrect bindings, changed input bytes/tree metadata, unsupported paths and cancellation. Executable consent remains a separate later contract.
+
 Default file action: move to a private, application-managed quarantine on the **same filesystem**, using rename where safe. If no suitable quarantine location exists, explain the limitation and leave the item untouched. Do not silently copy a large directory across filesystems or switch to permanent deletion.
 
 Quarantine supports recovery but **does not free disk space**. Report quarantined bytes separately; a separately approved purge releases eligible storage and is irreversible. Automatic purge is disabled unless explicitly included in an approved policy with a retention period. Native OS Trash integration can be added after cross-platform behavior is validated.
