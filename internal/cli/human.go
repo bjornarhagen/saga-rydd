@@ -31,6 +31,9 @@ func shellQuote(s string) string {
 // Human formatting stays outside the versioned JSON contract. Paths, IDs and
 // commands are printed separately: wrapping or truncating them can change meaning.
 func outputWidth(out io.Writer) int {
+	if guarded, ok := out.(*reviewOutput); ok {
+		out = guarded.writer
+	}
 	if f, ok := out.(*os.File); ok {
 		if size, err := unix.IoctlGetWinsize(int(f.Fd()), unix.TIOCGWINSZ); err == nil && size.Col > 0 {
 			return min(int(size.Col), 100)
@@ -94,7 +97,11 @@ func writeField(out io.Writer, label, value string, width int) {
 
 func printResultBanner(out io.Writer, title string) {
 	color := false
-	if f, ok := out.(*os.File); ok {
+	terminal := out
+	if guarded, ok := out.(*reviewOutput); ok {
+		terminal = guarded.writer
+	}
+	if f, ok := terminal.(*os.File); ok {
 		_, noColor := os.LookupEnv("NO_COLOR")
 		color = !noColor && os.Getenv("TERM") != "dumb" && isatty.IsTerminal(f.Fd())
 	}

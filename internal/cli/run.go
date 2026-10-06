@@ -47,6 +47,7 @@ Commands:
   journal --observe INTENT_ID [--json]              Observe recovery locations; no operations
   report --candidates [--min-age-days N] [--cursor TOKEN] [--json]         Node modules review candidates
   measure -d PATH [--batches N] [--json]               Resume saved compact size calculations
+  review -d PATH [--min-age-days N]                   Choose a numbered subset; save unapproved evidence
   report -d PATH [--json]                             Saved directory size
   report [--limit N] [--cursor TOKEN] [--json]           Largest observed files
   capabilities [--json]                                Discover commands and supported features
@@ -63,7 +64,7 @@ type pathsFlag []string
 func (p *pathsFlag) String() string         { return fmt.Sprint([]string(*p)) }
 func (p *pathsFlag) Set(value string) error { *p = append(*p, value); return nil }
 
-func runHuman(ctx context.Context, args []string, out, errOut io.Writer) int {
+func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer) int {
 	flags := flag.NewFlagSet("rydd", flag.ContinueOnError)
 	flags.SetOutput(errOut)
 	dataDir := flags.String("data-dir", "", "private directory for both config and state")
@@ -85,7 +86,7 @@ func runHuman(ctx context.Context, args []string, out, errOut io.Writer) int {
 		return 0
 	}
 	if remaining[0] == "capabilities" && len(remaining) == 1 {
-		fmt.Fprintln(out, "Rydd commands: init, config check, state init, status, scan, measure, report, plan, journal, pause, resume, stop, capabilities.\nAdd --json for versioned machine output. daemon is foreground-only and uses text output.\nAll commands are noninteractive. Exit codes: 0 success, 1 operation failed, 2 invalid usage.\nScanning is experimental. Deletion, duplicate detection, and full resource controls are unavailable.")
+		fmt.Fprintln(out, "Rydd commands: init, config check, state init, status, scan, measure, report, review, plan, journal, pause, resume, stop, capabilities.\nAdd --json for versioned machine output on finite commands. review prompts in text mode; daemon uses foreground text output.\nOther commands are noninteractive. Exit codes: 0 success, 1 operation failed, 2 invalid usage.\nScanning is experimental. Deletion, duplicate detection, and full resource controls are unavailable.")
 		return 0
 	}
 	paths, err := config.ResolvePaths(*dataDir)
@@ -142,6 +143,8 @@ func runHuman(ctx context.Context, args []string, out, errOut io.Writer) int {
 		if err == nil {
 			printPlan(out, r, paths)
 		}
+	case "review":
+		err = review(ctx, remaining[1:], paths, in, out)
 	case "journal":
 		var r any
 		r, err = journal(ctx, remaining[1:], paths)

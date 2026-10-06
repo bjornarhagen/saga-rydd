@@ -143,11 +143,11 @@ func TestHumanScanContinuationUsesParentState(t *testing.T) {
 				t.Fatal(args)
 			}
 		}
-		wantCommands := 2
+		wantCommands := 3
 		if tc.outcome == "queue_drained" {
-			wantCommands = 1
+			wantCommands = 2
 		}
-		if commands != wantCommands || strings.Contains(out.String(), tc.outcome) {
+		if commands != wantCommands || strings.Contains(out.String(), tc.outcome) || !strings.Contains(out.String(), " review -d ") {
 			t.Fatal(out.String())
 		}
 	}

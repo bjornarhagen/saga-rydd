@@ -307,4 +307,5 @@ func printScanReport(out io.Writer, r ScanReport) {
 		fmt.Fprintf(out, "\nProgress is saved. Retry later:\n  rydd --data-dir %s scan -d %s -s %d\n", shellQuote(base), shellQuote(r.Directory), r.SleepMS)
 	}
 	fmt.Fprintf(out, "\nView the saved report:\n  rydd --data-dir %s report -d %s\n", shellQuote(base), shellQuote(r.Directory))
+	fmt.Fprintf(out, "\nReview saved node_modules candidates:\n  rydd --data-dir %s review -d %s\n", shellQuote(base), shellQuote(r.Directory))
 }

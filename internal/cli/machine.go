@@ -23,6 +23,12 @@ type usageError struct{ error }
 // JSON is accepted before/after the command without consuming flag values or
 // tokens after --. Both output modes share operation implementations.
 func Run(ctx context.Context, args []string, out, errOut io.Writer) int {
+	return runWithInput(ctx, args, os.Stdin, out, errOut)
+}
+
+// Input injection is private: non-file test readers must not block. Native
+// stdin uses a cancellable descriptor reader in the guided review command.
+func runWithInput(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer) int {
 	filtered := make([]string, 0, len(args))
 	machine := false
 	for i := 0; i < len(args); i++ {
@@ -42,7 +48,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) int {
 		}
 	}
 	if !machine {
-		return runHuman(ctx, args, out, errOut)
+		return runHuman(ctx, args, in, out, errOut)
 	}
 	return runMachine(ctx, filtered, out, errOut)
 }
@@ -125,6 +131,9 @@ func runMachine(ctx context.Context, args []string, out, errOut io.Writer) int {
 	}
 	if command == "daemon" {
 		return machineFailure(out, errOut, command, "unsupported_output", "daemon is a foreground text command; use status --json for observations", 2)
+	}
+	if command == "review" {
+		return machineFailure(out, errOut, command, "unsupported_output", "review prompts in text mode; use report --candidates --json and plan commands for machine output", 2)
 	}
 	switch command {
 	case "status", "pause", "resume", "stop":
@@ -213,12 +222,14 @@ func capabilities() map[string]any {
 	}
 	return map[string]any{
 		"api_version": APIVersion, "ok": true, "command": "capabilities", "noninteractive": true,
-		"review_contract": map[string]any{"name": plans.ReviewContract, "validity_hours": 24, "scope": "review_consent_only", "executable": false, "renewed_approval_required_for_execution": true},
+		"interactive_text_commands": []string{"review"},
+		"review_contract":           map[string]any{"name": plans.ReviewContract, "validity_hours": 24, "scope": "review_consent_only", "executable": false, "renewed_approval_required_for_execution": true},
 		"commands": []command{
 			{"init", true, "writes_configuration_and_state", []string{"--root PATH (repeatable)", "--exclude PATH (repeatable)"}},
 			{"config check", true, "read_only", []string{}}, {"state init", true, "writes_state", []string{}},
 			{"scan", true, "scans_metadata_and_writes_isolated_state", []string{"-d PATH / --directory PATH", "-s MS / --sleep MS (default 10)", "--now (no entry delay)", "--compact / --detailed (saved manual inventory mode)"}},
 			{"measure", true, "writes_derived_state", []string{"-d PATH / --directory PATH (exact manual compact root)", "--batches N (1–1000; default 128; five-second budget)"}},
+			{"review", false, "prompts_and_writes_unapproved_selection", []string{"-d PATH / --directory PATH (exact manual scan root)", "--min-age-days N (1–36500; default 90)", "numbered subset then explicit save; no cleanup"}},
 			{"plan", true, "read_only_or_writes_saved_plan", []string{"--preview / --save (exactly one for a new selection)", "--show PLAN_ID (reopen without directory or selection options)", "--check PLAN_ID [-d PATH] (compare with saved inventory; no approval)", "--verify PLAN_ID [-d PATH] (read selected live metadata; no contents or cleanup)", "--inspect PLAN_ID [--tree] [-d PATH] (read bounded npm project inputs; optional tree metadata listings, no ordinary dependency contents; reinstall remains unverified)", "--capture PLAN_ID [-d PATH] (save one immutable input/tree observation; no approval)", "--compare OBSERVATION_ID [-d PATH] (read-only input/tree comparison with captured baseline; local edits remain unknown)", "--approve PLAN_ID [-d PATH] --confirm-project-review --confirm-quarantine (24-hour review consent only; cannot execute cleanup)", "--revoke PLAN_ID (revoke review consent without inventory)", "-d PATH / --directory PATH (exact manual scan root)", "--min-age-days N (1–36500; default 90)", "FINDING_ID... (1–20 unique IDs; options first)"}},
 			{"journal", true, "read_only", []string{"--show INTENT_ID (saved preparation/history only; no source operations)", "--observe INTENT_ID (current recovery-location metadata; no operations or saved changes)"}},
 			{"report", true, "read_only", []string{"--limit N (1–200)", "--cursor TOKEN", "-d PATH / --directory PATH (saved folder size; combine with --candidates for manual scan root)", "--candidates [--min-age-days N] [--cursor TOKEN] (old node_modules review)"}},
@@ -227,6 +238,6 @@ func capabilities() map[string]any {
 		},
 		"exit_codes":  map[string]string{"0": "success", "1": "operation_failed", "2": "invalid_usage_or_output"},
 		"error_codes": []string{"invalid_arguments", "unsupported_output", "worker_not_running", "writer_busy", "not_found", "already_exists", "permission_denied", "canceled", "command_failed", "review_evidence_changed", "review_unavailable", "review_invalid", "observation_conflict", "observation_invalid", "observation_unavailable", "journal_outcome_unknown"},
-		"features":    map[string]bool{"compact_manual_scan": true, "manual_scan": true, "experimental_inventory": true, "durable_dispatch_limits": true, "wal_backpressure": true, "entry_rate_limit": true, "metadata_api_counters": true, "metadata_rate_limit": false, "cpu_limit": false, "power_controls": false, "file_reports": true, "directory_size_reports": true, "findings": true, "plan_previews": true, "saved_plans": true, "saved_plan_checks": true, "plan_live_checks": true, "plan_input_inspection": true, "plan_tree_inspection": true, "plan_observation_capture": true, "plan_observation_comparison": true, "plan_approval": true, "journal_records": true, "journal_location_observations": true, "duplicates": false, "cleanup": false, "service_installation": false},
+		"features":    map[string]bool{"compact_manual_scan": true, "manual_scan": true, "experimental_inventory": true, "durable_dispatch_limits": true, "wal_backpressure": true, "entry_rate_limit": true, "metadata_api_counters": true, "metadata_rate_limit": false, "cpu_limit": false, "power_controls": false, "file_reports": true, "directory_size_reports": true, "findings": true, "plan_previews": true, "saved_plans": true, "guided_review": true, "saved_plan_checks": true, "plan_live_checks": true, "plan_input_inspection": true, "plan_tree_inspection": true, "plan_observation_capture": true, "plan_observation_comparison": true, "plan_approval": true, "journal_records": true, "journal_location_observations": true, "duplicates": false, "cleanup": false, "service_installation": false},
 	}
 }

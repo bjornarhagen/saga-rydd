@@ -72,6 +72,20 @@ Replace the example ID with a finding ID from the candidate report for the same 
 
 ## Save a selection for later review
 
+For a guided text review of an existing manual scan:
+
+```sh
+rydd review -d /path/to/project --min-age-days 30
+```
+
+1. Read the numbered candidates and their saved size qualifications.
+2. Enter unique row numbers, such as `1,3`. Check the selected paths shown again.
+3. Type `save` to preserve that exact unapproved selection, or `back` or `quit`.
+
+Each page has at most 20 candidates. `next` replaces it with a later page; `refresh` returns to the first page. Numbers reset, and selections do not carry between pages. Unselected folders stay unchanged. This does not save a keep decision or hide candidates from later reports. EOF or Ctrl+C before saving ends review without publishing a plan.
+
+The page is frozen before input. If the selected inventory evidence changes before saving, review refuses it and asks you to start again. Incomplete but unchanged evidence can be saved as a qualified historical record. Saving never records cleanup consent, moves files or verifies current source contents. Afterward, start another scan explicitly when needed. `review` prompts in text mode; use the finite report and plan commands for JSON workflows.
+
 ```sh
 rydd plan --save -d /path/to/project --min-age-days 30 node-modules-v1:1:42
 rydd plan --show PLAN_ID
@@ -97,7 +111,7 @@ Add `--tree` to also inspect up to 10,000 installed entries through recursive me
 
 Use the returned `OBSERVATION_ID` with `--compare` to repeat the same checks and report a match, changed evidence or a block. Comparison writes no records. A match means the checked input bytes and tree metadata agree with that capture; it cannot detect edits made before capture or prove that dependencies can be safely reinstalled. Existing review consent is separate and remains non-executable.
 
-Plans are private local records in a separate database under the global data directory. Saving does not approve cleanup, move files or free space. Review consent can be recorded separately as described below. Cleanup remains unavailable; Rydd does not verify project activity or regeneration safety. These commands are building blocks for the future guided select-and-confirm flow.
+Plans are private local records in a separate database under the global data directory. Saving does not approve cleanup, move files or free space. Review consent can be recorded separately as described below. Cleanup remains unavailable; Rydd does not verify project activity or regeneration safety.
 
 Saving, checking, live verification, inspection, capture and comparison require inventory schema 9. Reports and previews can still read schemas 4–8. Existing configured state can be migrated with `state init` while its worker is stopped; a manual inventory migrates on the next explicit scan, or with `measure` when it is compact and has no pending scan. Writer commands can migrate plan-store schemas 1/2 to schema 3; capture publishes its observation atomically, with existing plans and consent unchanged. Read-only `--show`, `--check`, `--verify`, `--inspect`, `--compare` and `--preview` do not migrate storage.
 

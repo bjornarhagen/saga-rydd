@@ -1,6 +1,6 @@
 # CLI contract for humans, scripts and AI
 
-Human-readable output is the default. Add `--json` to any finite command for one JSON object on stdout, on both success and failure. Normal JSON responses leave stderr empty; failure to write the response is reported on stderr. `daemon` is a long-running foreground text command; observe it with `status --json` from another process.
+Human-readable output is the default. Add `--json` to finite noninteractive commands for one JSON object on stdout, on both success and failure. Normal JSON responses leave stderr empty; failure to write the response is reported on stderr. `daemon` is a long-running foreground text command; observe it with `status --json` from another process. `review` is a guided text command and rejects JSON before reading input or opening state.
 
 ```sh
 rydd capabilities --json
@@ -11,7 +11,7 @@ rydd stop --json
 rydd --data-dir /absolute/fixture/state status --json
 ```
 
-Put global `--data-dir` before the command. `--json` can go before or after the command. Commands do not prompt. `capabilities --json` works without initialization and lists supported commands, effects, arguments, features and error codes. Unimplemented duplicates and cleanup are explicitly false.
+Put global `--data-dir` before the command. `--json` can go before or after the command. Only `review` prompts. `capabilities --json` works without initialization and lists supported commands, effects, arguments, features and error codes. Its `noninteractive: true` describes machine output; `interactive_text_commands` lists `review`, whose command entry has `json: false`. Unimplemented duplicates and cleanup are explicitly false.
 
 Every JSON response has `api_version: 1`, `ok` and `command`. Success fields depend on the command; status preserves its existing fields and adds `dispatch_budget`. Failures have `error.code` and a human-readable `error.message`. Match codes, not message text. Consumers must tolerate additional fields; incompatible contract changes require a new API version.
 
@@ -86,6 +86,29 @@ Each file includes `logical_bytes`, `allocated_bytes`, `observed_at`, `modified_
 `roots` contains up to 100 enabled roots, with pending/running job counts, directory error counts, last root error and last root-directory pass time. `roots_truncated` indicates omitted root diagnostics. Root pass times cover direct children, not complete subtrees; empty queues do not prove coverage, and saved errors do not establish current availability. Observation timestamps describe freshness without inventing whole-tree completion percentages.
 
 Pages use a cursor based on size and entry ID rather than an increasing offset. Each invocation uses one short SQLite read snapshot, capped at five seconds, returning at most one extra file to determine whether a next page exists. Index-backed file pagination bounds returned data, while root diagnostic counts still depend on inventory size. Concurrent scanning can change ordering between pages; this is not a frozen export and changes can cause omissions/repeats across invocations. Missing/empty inventories, exhausted pages and invalid cursors produce explicit empty reports or standard errors. A returned `next_cursor` should be passed unchanged with the same state directory. Selected-directory measurement is described below; the first review-candidate category is described below.
+
+## Guided manual review
+
+`rydd review -d PATH [--min-age-days N]` opens the existing inventory for that exact normalized manual root. It does not load a replacement inventory, scan, inspect source files, record consent or start cleanup. Missing manual inventory fails with a scan command. Directory aliases cannot be combined; age is 1–36500 days (default 90).
+
+Discovery examines at most 1,000 saved entries and finds at most 20 candidates. Before displaying numbered rows, review captures their exact bindings and measurements in one saved inventory snapshot, then closes the reader. Human input holds no database reader, transaction or writer lock. Each database operation has a five-second deadline; input waiting does not consume that deadline.
+
+| Input | Result |
+| --- | --- |
+| `1,3` or `1 3` | Select unique row numbers from this page; repeat the exact chosen paths and measurements |
+| `next` | Replace the page with later saved entries; no selection carries forward |
+| `refresh` | Replace the page from the start of saved entries |
+| `save` after selection | Compare the frozen subset with current saved inventory, then save it as unapproved evidence |
+| `back` after selection | Discard the tentative subset and return to the same frozen page |
+| `quit`, EOF or Ctrl+C before publication | End without saving a plan |
+
+Ranges, `all`, duplicate numbers and numbers outside this page are refused. Empty pages may have a continuation. Unselected folders stay unchanged for this review; no durable keep, dismissal or exclusion decision is recorded. A new page resets row numbers.
+
+Changed evidence, including a rebuilt inventory reusing numeric entry IDs, refuses saving. The check does not replace displayed evidence with newer records. Unchanged incomplete evidence can be saved as a qualified historical record and is explicitly labelled unverifiable. The check and publication are separate operations: an intervening change can make the record outdated, but cannot change its exact selected objects. Later checks remain necessary. No result verifies current filesystem contents or permits execution.
+
+Input lines are bounded to 4096 bytes, including the newline. A command needs a completed line: an unterminated `save` at EOF does not confirm publication. Native terminal and pipe input wait with bounded polling and context cancellation, without changing inherited input blocking mode or leaving blocked reader goroutines. Paths are printed from authoritative raw bytes with escaped controls. `--json` returns `unsupported_output` and exit 2 before input or state access. Existing finite commands remain noninteractive.
+
+The completion output includes commands to reopen the saved plan and start another explicit scan and review. Review exits after one saved subset. Scanning never continues automatically.
 
 ## Saved directory-size reports
 
@@ -257,7 +280,7 @@ rydd plan --revoke PLAN_ID [--json]
 rydd plan --show PLAN_ID [--json]
 ```
 
-`--approve` requires both confirmations to be explicitly true. `--confirm-project-review` records the owner's review of project activity, local dependency edits and reinstall requirements. `--confirm-quarantine` accepts same-filesystem quarantine without purge, acknowledges that quarantine frees no disk space, and records review consent only with a 24-hour validity period. These are owner statements, not Rydd's verification. All commands remain noninteractive. Confirmations are rejected with any other mode, even if set false. Approval accepts the original manual scan directory or configured inventory, but no age override or replacement finding selection. Revoke/show require only the exact plan ID in the same global data directory.
+`--approve` requires both confirmations to be explicitly true. `--confirm-project-review` records the owner's review of project activity, local dependency edits and reinstall requirements. `--confirm-quarantine` accepts same-filesystem quarantine without purge, acknowledges that quarantine frees no disk space, and records review consent only with a 24-hour validity period. These are owner statements, not Rydd's verification. Plan commands remain noninteractive. Confirmations are rejected with any other mode, even if set false. Approval accepts the original manual scan directory or configured inventory, but no age override or replacement finding selection. Revoke/show require only the exact plan ID in the same global data directory.
 
 Approval loads and verifies the exact content-addressed plan, then requires `matches_saved_inventory` with no issues from a fresh bounded inventory snapshot. This check can match with offline or unobserved live changes; the review-v1 contract cannot authorize an executor. The five-second command deadline applies. Invalid or missing confirmations use `invalid_arguments` (exit 2). Changed/unknown/different inventory evidence returns `review_evidence_changed`; expired, revoked or not-yet-valid consent returns `review_unavailable`; damaged or mismatched review records return `review_invalid` (exit 1). Missing storage or a revoke request without approval is `not_found`. No real source files are read, moved or deleted.
 
