@@ -229,6 +229,56 @@ func TestRecoveryRacesStayUnknown(t *testing.T) {
 	}
 }
 
+func TestRecoveryOpeningStampBoundaries(t *testing.T) {
+	for _, exactParent := range []bool{false, true} {
+		t.Run(fmt.Sprintf("exact_parent_%t", exactParent), func(t *testing.T) {
+			request := recoveryFixture(t)
+			source := string(request.SourcePathBytes)
+			parent := filepath.Dir(source)
+			mutationPath := filepath.Dir(parent)
+			if exactParent {
+				mutationPath = parent
+			}
+			scanner, err := New(nil, nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer scanner.Close()
+			mutated := false
+			chain, err := scanner.openRecoveryChainWithHook(context.Background(), source, request.SourceParent, func(path string) {
+				if path != mutationPath {
+					return
+				}
+				mutated = true
+				if err := os.WriteFile(filepath.Join(path, "unrelated-sibling"), []byte("fixture mutation"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			})
+			if !mutated {
+				t.Fatal("between-stat/open fixture hook did not run")
+			}
+			if exactParent {
+				var failure liveError
+				if err == nil || !errors.As(err, &failure) || failure.code != "path_changed_during_check" || chain != nil {
+					t.Fatalf("exact-parent mutation passed opening: chain=%v error=%v", chain, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unrelated outer-ancestor sibling mutation blocked opening: %v", err)
+			}
+			defer chain.close()
+			if err := scanner.recheckRecoveryChain(context.Background(), chain); err != nil {
+				t.Fatalf("outer ancestor identity/link checks failed after sibling mutation: %v", err)
+			}
+			object, err := scanner.probeRecoveryChild(context.Background(), chain)
+			if err != nil || object == nil || fmt.Sprint(object.Ino) != request.SourceObject.Inode {
+				t.Fatalf("outer sibling mutation changed exact child observation: %v", err)
+			}
+		})
+	}
+}
+
 func TestRecoveryBuiltInProtections(t *testing.T) {
 	for _, target := range []string{"source", "destination", "ancestor"} {
 		t.Run(target, func(t *testing.T) {

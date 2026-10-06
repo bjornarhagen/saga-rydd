@@ -225,6 +225,10 @@ func validRecoveryIdentity(identity RecoveryIdentity) bool {
 }
 
 func (s *Scanner) openRecoveryChain(ctx context.Context, path string, reference RecoveryIdentity) (_ *recoveryChain, resultErr error) {
+	return s.openRecoveryChainWithHook(ctx, path, reference, nil)
+}
+
+func (s *Scanner) openRecoveryChainWithHook(ctx context.Context, path string, reference RecoveryIdentity, beforeOpen func(string)) (_ *recoveryChain, resultErr error) {
 	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
 	chain := &recoveryChain{name: parts[len(parts)-1], path: path, ref: reference}
 	if s.excluded(path) {
@@ -276,12 +280,18 @@ func (s *Scanner) openRecoveryChain(ctx context.Context, path string, reference 
 		if s.protectedIDs[objectID(named)] {
 			return nil, blocked("scope_excluded", "A required ancestor has a protected built-in identity. The final location is unknown.")
 		}
+		if beforeOpen != nil {
+			beforeOpen(abs)
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		next, err := s.openat(link.fd, parts[i])
 		if err != nil {
 			return nil, blocked("path_unavailable", "A required ancestor changed or became inaccessible while opening. The final location is unknown.")
 		}
 		var held unix.Stat_t
-		if err := unix.Fstat(next, &held); err != nil || !sameRecoveryStamp(named, held) {
+		if err := unix.Fstat(next, &held); err != nil || !sameRecoveryAncestorStamp(named, held) || (i == len(parts)-2 && !sameRecoveryStamp(named, held)) {
 			_ = unix.Close(next)
 			return nil, blocked("path_changed_during_check", "A required ancestor changed while opening. The final location is unknown.")
 		}
