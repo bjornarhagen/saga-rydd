@@ -57,6 +57,11 @@ type allocationWork struct {
 	coverage                                      scopeCoverage
 }
 
+// Seek the exact pending prefix rather than walking completed scope members.
+// The partial index omits excluded, ordinary-file and noncompact members.
+const allocationPendingMemberQuery = `SELECT path,generation FROM allocation_members INDEXED BY allocation_members_pending
+ WHERE root_id=? AND scope=? AND done=0 AND excluded=0 AND kind='directory' AND generation>0 ORDER BY path LIMIT 1`
+
 // ReduceAllocations advances one saved scope in a short transaction. A step
 // processes at most 128 inventory rows, 128 inode contributions, or 128 scratch
 // rows for cleanup. Even one inode linked across many directories is resumable.
@@ -249,8 +254,7 @@ func (w *allocationWork) entries(ctx context.Context, tx *sql.Tx) error {
 func (w *allocationWork) inodes(ctx context.Context, tx *sql.Tx) error {
 	var path []byte
 	var generation int64
-	err := tx.QueryRowContext(ctx, `SELECT path,generation FROM allocation_members
- WHERE root_id=? AND scope=? AND done=0 AND excluded=0 AND kind='directory' AND generation>0 ORDER BY path LIMIT 1`,
+	err := tx.QueryRowContext(ctx, allocationPendingMemberQuery,
 		w.root, w.path).Scan(&path, &generation)
 	if errors.Is(err, sql.ErrNoRows) {
 		w.ready, w.phase = true, "cleanup"
