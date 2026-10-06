@@ -110,6 +110,20 @@ Input lines are bounded to 4096 bytes, including the newline. A command needs a 
 
 The completion output includes commands to reopen the saved plan and start another explicit scan and review. Review exits after one saved subset. Scanning never continues automatically.
 
+## Saved same-size file bands
+
+`report --same-size [-d PATH] [--min-size-bytes N] [--limit N] [--cursor TOKEN] [--json]` is a metadata-only prerequisite for duplicate discovery. JSON uses `report.same_size`, with `content_verified: false`, `current_state_verified: false` and `estimated_reclaimable_bytes: null`. Equal sizes are not content matches. `same_size_candidates` is true; `duplicates` and cleanup remain false.
+
+Minimum size is a positive integer number of bytes, default 1048576 (1 MiB). `--limit` is 1–200 raw saved regular-file rows per page, default 20, plus one lookahead. It does not limit whole size bands. `--min-size-bytes` requires `--same-size`; `--candidates` and its age filter cannot be combined with this mode. Providing both mode flags is refused even when one is explicitly false. A scoped report requires the exact existing manual scan; it never falls through to configured inventory.
+
+One read transaction selects bounded raw rows through the existing size index, then filters disabled roots, saved skip reasons, dependency trees named `node_modules`, compact-parent overlaps and invalid saved paths. This also excludes detailed dependency inventory. Other generated categories remain future work. Parent-pass freshness is qualified per member; stale descendants and ancestor freshness are not verified. No source path is opened, configuration loaded, worker contacted or database migrated.
+
+The cursor binds its version, inventory incarnation, minimum bytes, last raw size and entry ID. Continuation first seeks remaining IDs in the current size band, then smaller sizes using the remaining allowance. There is no whole-band count or whole-inventory grouping. Rebuilding the inventory or changing the minimum refuses continuation. Each page reads a new saved snapshot; scans may add, remove or reorder observations between pages.
+
+Bands contain page-local `files`, `known_objects`, `repeated_saved_objects`, `unknown_identities` and `conflicting_identities`. Known aliases use saved device/inode with qualified change/generation evidence; conflicting stamps or allocation values remain uncertain. No count establishes live inode continuity, independent storage or reclaimable space. `continues_before`/`continues_after` describe raw size-band boundaries, which can include excluded rows. Boundary singletons are retained so a split pair remains visible. Interior unique-size files are omitted. Empty filtered pages can still return a cursor, and exhaustion does not prove complete scan coverage or absence of duplicates.
+
+Schema 9 is required for durable inventory identity. Sample/full hashing, read budgets, resumable large-file hashing, content mutation checks, keeper selection and cleanup remain separate tasks.
+
 ## Saved directory-size reports
 
 Human output groups size, scan coverage, freshness and concise caveats into aligned sections. Zero-valued file-identity diagnostics are omitted from that view; JSON retains all fields and full notes. Missing scan coverage produces an actionable scan command, including custom state selection when needed, without starting a scan.

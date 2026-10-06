@@ -62,6 +62,17 @@ rydd report --limit 10 --cursor TOKEN
 
 The report works while the worker is stopped and reads only saved inventory. It lists the largest observed regular files, sizes, timestamps, parent-pass freshness and saved root diagnostics. Use `--directory` to read a completed scope calculation or measure up to 10,000 saved entries in a selected subtree, with partial/stale/unknown labels and qualified hardlink accounting. `--candidates` selects old recorded `node_modules` and sibling `package.json` timestamps for review. It does not inspect manifest contents or establish inactivity or safe deletion. The default age filter is 90 days; `--min-age-days N` changes it for one report only. Candidate reports now explain selection outcomes (including age, missing evidence and incomplete listings) and whether more saved entries remain. Reports do not rescan paths or delete anything. Use the returned `next_cursor` for another page; keep global `--data-dir` before `report` if using a separate instance. See the [report contract](docs/cli.md#saved-file-reports).
 
+## View same-size saved files
+
+```sh
+rydd report --same-size -d /path/to/project
+rydd report --same-size -d /path/to/project --min-size-bytes 1048576 --limit 20 --json
+```
+
+This is the first filter for duplicate discovery. It groups saved regular-file metadata by size without opening source contents. Equal sizes do not prove equal contents. The default minimum is 1 MiB. `--limit` bounds raw saved file rows per page, including rows later excluded from the report. Dependency trees named `node_modules`, skipped entries and disabled roots are excluded.
+
+Page-local counts distinguish known device/inode objects, repeated saved aliases and unknown or conflicting identities. A size band can cross pages; boundary labels preserve even a single candidate at an edge. Use the returned cursor with the same minimum and data directory. A rebuilt inventory or changed minimum refuses the cursor. Scans can change membership between pages, so this is not a frozen export. There are no verified duplicate matches, keeper choices or savings estimates yet.
+
 ## Preview an exact selection
 
 ```sh

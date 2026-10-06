@@ -20,6 +20,7 @@ type reportResult struct {
 	state.FileReport
 	candidateCommand string
 	fileCommand      string
+	sameSizeCommand  string
 }
 
 func report(ctx context.Context, args []string, paths config.Paths) (reportResult, error) {
@@ -30,6 +31,8 @@ func report(ctx context.Context, args []string, paths config.Paths) (reportResul
 	cursor := f.String("cursor", "", "next page cursor")
 	minimumAge := f.Int("min-age-days", state.FindingAgeDays, "minimum candidate age in days (1–36500)")
 	candidates := f.Bool("candidates", false, "review old node_modules observations")
+	sameSize := f.Bool("same-size", false, "read bounded saved same-size file bands; contents unchecked")
+	minimumBytes := f.Int64("min-size-bytes", state.SameSizeMinimumBytes, "minimum same-size file bytes")
 	directory := f.String("directory", "", "measure a saved directory subtree")
 	f.StringVar(directory, "d", "", "directory alias")
 	if err := f.Parse(args); err != nil {
@@ -38,11 +41,20 @@ func report(ctx context.Context, args []string, paths config.Paths) (reportResul
 	if f.NArg() != 0 || *limit < 1 || *limit > 200 {
 		return reportResult{}, usageError{errors.New("report accepts --limit 1–200 and --cursor TOKEN, or --directory ABSOLUTE_PATH")}
 	}
-	directorySet, pageSet, limitSet, ageSet := false, false, false, false
+	directorySet, pageSet, limitSet, ageSet, sizeSet, candidatesSet, sameSizeSet := false, false, false, false, false, false, false
 	directoryFlags := 0
 	f.Visit(func(v *flag.Flag) {
+		if v.Name == "candidates" {
+			candidatesSet = true
+		}
+		if v.Name == "same-size" {
+			sameSizeSet = true
+		}
 		if v.Name == "min-age-days" {
 			ageSet = true
+		}
+		if v.Name == "min-size-bytes" {
+			sizeSet = true
 		}
 		if v.Name == "limit" {
 			limitSet = true
@@ -58,6 +70,9 @@ func report(ctx context.Context, args []string, paths config.Paths) (reportResul
 	if ageSet && !*candidates {
 		return reportResult{}, usageError{errors.New("--min-age-days requires --candidates")}
 	}
+	if sameSizeSet && candidatesSet || sizeSet && !*sameSize || *minimumBytes < 1 {
+		return reportResult{}, usageError{errors.New("--same-size accepts --min-size-bytes greater than zero and cannot be combined with --candidates; --min-size-bytes requires --same-size")}
+	}
 	if *minimumAge < 1 || *minimumAge > state.MaxFindingAgeDays {
 		return reportResult{}, usageError{state.ErrFindingAge}
 	}
@@ -67,7 +82,7 @@ func report(ctx context.Context, args []string, paths config.Paths) (reportResul
 	if *candidates && limitSet {
 		return reportResult{}, usageError{errors.New("--candidates accepts --cursor and an optional manual-scan directory, but not --limit")}
 	}
-	if directorySet && pageSet && !*candidates {
+	if directorySet && pageSet && !*candidates && !*sameSize {
 		return reportResult{}, usageError{errors.New("directory size reports cannot be combined with --limit or --cursor")}
 	}
 	if directorySet {
@@ -83,6 +98,8 @@ func report(ctx context.Context, args []string, paths config.Paths) (reportResul
 			return reportResult{}, err
 		} else if *candidates {
 			return reportResult{}, usageError{errors.New("scoped candidates require a manual scan of this exact directory; run scan -d PATH first")}
+		} else if *sameSize {
+			return reportResult{}, missingScanMessage(normalized, scanPaths, os.ErrNotExist)
 		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -95,6 +112,17 @@ func report(ctx context.Context, args []string, paths config.Paths) (reportResul
 		return reportResult{}, err
 	}
 	defer s.Close()
+	if *sameSize {
+		r, err := s.SameSizeCandidates(ctx, *limit, *cursor, *minimumBytes)
+		if errors.Is(err, state.ErrReportCursor) {
+			err = usageError{err}
+		}
+		command := fmt.Sprintf("%s report --same-size --min-size-bytes %d --limit %d", commandPrefix(scanPaths), *minimumBytes, *limit)
+		if directorySet {
+			command += " -d " + shellQuote(*directory)
+		}
+		return reportResult{FileReport: state.FileReport{SameSize: &r, GeneratedAt: r.GeneratedAt, Source: r.Source, Files: []state.ReportFile{}, Roots: []state.ReportRoot{}, Notes: r.Notes}, sameSizeCommand: command}, err
+	}
 	if *candidates {
 		c, err := s.NodeModulesFindings(ctx, *cursor, *minimumAge)
 		if errors.Is(err, state.ErrReportCursor) {
@@ -116,6 +144,10 @@ func report(ctx context.Context, args []string, paths config.Paths) (reportResul
 	return reportResult{FileReport: r, fileCommand: fmt.Sprintf("%s report --limit %d", commandPrefix(scanPaths), *limit)}, err
 }
 func printReport(out io.Writer, r reportResult) {
+	if r.SameSize != nil {
+		printSameSizeReport(out, *r.SameSize, r.sameSizeCommand)
+		return
+	}
 	if r.Candidates != nil {
 		printFindingReport(out, *r.Candidates, r.candidateCommand)
 		return

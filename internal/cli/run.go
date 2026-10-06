@@ -50,6 +50,7 @@ Commands:
   review -d PATH [--min-age-days N]                   Choose a numbered subset; save unapproved evidence
   report -d PATH [--json]                             Saved directory size
   report [--limit N] [--cursor TOKEN] [--json]           Largest observed files
+  report --same-size [--min-size-bytes N] [--limit N] [--cursor TOKEN]    Saved size bands; contents unchecked
   capabilities [--json]                                Discover commands and supported features
 
 Options: --help, --version; --json on finite commands

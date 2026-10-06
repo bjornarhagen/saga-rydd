@@ -221,6 +221,12 @@ V1 deduplication means helping the user keep one copy and remove selected others
 
 Track logical size and allocated blocks separately. Sparse files, existing hardlinks, shared clone extents, snapshots and Docker's shared layers mean apparent size is not guaranteed reclaimable space. Avoid summing overlapping folder findings and duplicates inside them. Show savings as estimates and distinguish Docker-internal reclamation from host filesystem free space.
 
+### Saved size-band foundation (P3-01a)
+
+`report --same-size [-d PATH] [--min-size-bytes N] [--limit N] [--cursor TOKEN]` reads saved ordinary file metadata only. The default minimum is 1 MiB and each page examines 1–200 raw regular-file records (default 20) plus one lookahead. Apply disabled-root, saved-skip, generated `node_modules` and compact-overlap filtering after a bounded indexed raw selection. This is the first duplicate-pipeline prerequisite: report equal-size bands, saved device/inode aliases and unknown/conflicting identities without reading source contents, claiming duplicate matches, choosing keepers or estimating savings. Other generated categories remain later work.
+
+Require schema 9 for the inventory incarnation and bind versioned cursors to that identity, minimum size and last raw size/entry ID. Continue within the same size using `size = ? AND id < ?`, then seek smaller sizes with the remaining allowance. Verify both seeks in the bundled SQLite driver; tuple pagination can rescan a large equal-size prefix. No full-band aggregation/count or schema migration is needed. Group only the bounded records in memory. Preserve singleton bands at page boundaries with `continues_before`/`continues_after` so a split pair remains visible; counts describe this page only. Empty filtered pages can continue. New scans can change membership between pages; these are saved views, not a frozen export. Parent-pass qualifiers and unknown ancestor freshness remain explicit. `duplicates` and cleanup capabilities remain false until content verification is implemented.
+
 ## 7. Review, cleanup and recovery
 
 Background discovery does not itself authorize deletion. The action executor requires an approved plan or a matching, explicitly enabled automatic policy.
