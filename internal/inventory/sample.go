@@ -328,6 +328,65 @@ func matchesSampleFile(t SavedFileTarget, st unix.Stat_t) bool {
 }
 
 func (s *Scanner) sampleFile(ctx context.Context, t SavedFileTarget, budget *fileSampleBudget, item *FileSampleResult, hooks fileSampleHooks) error {
+	var digest string
+	err := s.withSavedRegularFile(ctx, t, func(fileFD int, opened unix.Stat_t, _, _ string) error {
+		item.LiveLinkCount = uint64(opened.Nlink)
+		if hooks.afterOpen != nil {
+			hooks.afterOpen()
+		}
+		ranges := fileSampleRanges(opened.Size)
+		item.Ranges = ranges
+		h := sha256.New()
+		_, _ = h.Write([]byte("saga-rydd:" + FileSampleContract + "\x00"))
+		var frame [8]byte
+		writeNumber := func(value int64) { binary.BigEndian.PutUint64(frame[:], uint64(value)); _, _ = h.Write(frame[:]) }
+		writeNumber(opened.Size)
+		writeNumber(int64(len(ranges)))
+		var buffer [32 * 1024]byte
+		for _, sample := range ranges {
+			writeNumber(sample.Offset)
+			writeNumber(sample.Length)
+			for consumed := int64(0); consumed < sample.Length; {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				if s.closed.Load() {
+					return blocked("scanner_closed", "The scanner closed before sample observation completed.")
+				}
+				want := min(int64(len(buffer)), sample.Length-consumed)
+				if want > FileSampleCallByteLimit-budget.requested {
+					return blocked("sample_limit", "The fixed per-call sample byte limit was reached.")
+				}
+				// Charge every requested read, including a short or failed read.
+				// Final validation never reads additional source contents.
+				budget.requested += want
+				n, readErr := unix.Pread(fileFD, buffer[:int(want)], sample.Offset+consumed)
+				if n > 0 {
+					budget.read += int64(n)
+					_, _ = h.Write(buffer[:n])
+					consumed += int64(n)
+				}
+				if hooks.afterRead != nil {
+					hooks.afterRead(max(n, 0))
+				}
+				if readErr != nil || int64(n) != want {
+					return blocked("sample_incomplete", "A selected range could not be read completely. No sample digest is available.")
+				}
+			}
+		}
+		digest = hex.EncodeToString(h.Sum(nil))
+		return nil
+	}, hooks.beforeFinalCheck)
+	if err == nil {
+		item.SHA256 = digest
+	}
+	return err
+}
+
+// Visit one exact saved ordinary file while all parent and leaf descriptors are
+// held. The callback's observations are tentative until final checks succeed.
+// No descriptors escape this helper or remain open after it returns.
+func (s *Scanner) withSavedRegularFile(ctx context.Context, t SavedFileTarget, visit func(int, unix.Stat_t, string, string) error, beforeFinalCheck func()) error {
 	root, path := string(t.Root.PathBytes), string(t.File.PathBytes)
 	if !s.roots[root] || s.excluded(root) || s.excluded(path) {
 		return blocked("scope_excluded", "The selected root or file is outside the current scope or exclusions.")
@@ -426,64 +485,25 @@ func (s *Scanner) sampleFile(ctx context.Context, t SavedFileTarget, budget *fil
 		return err
 	}
 	if !s.supportedSampleFile(opened) || !sameInputStamp(before, opened) {
-		return blocked("file_changed_during_check", "The selected file changed while opening. No sample digest is available.")
+		return blocked("file_changed_during_check", "The selected file changed while opening. No digest is available.")
 	}
 	v, m, fsErr := s.filesystem(fileFD)
 	if fsErr != nil || v != volume || m != mount {
 		return blocked("mount_boundary", "The opened file differs from the root filesystem or mount.")
 	}
-	item.LiveLinkCount = uint64(opened.Nlink)
-	if hooks.afterOpen != nil {
-		hooks.afterOpen()
-	}
-	ranges := fileSampleRanges(opened.Size)
-	item.Ranges = ranges
-	h := sha256.New()
-	_, _ = h.Write([]byte("saga-rydd:" + FileSampleContract + "\x00"))
-	var frame [8]byte
-	writeNumber := func(value int64) { binary.BigEndian.PutUint64(frame[:], uint64(value)); _, _ = h.Write(frame[:]) }
-	writeNumber(opened.Size)
-	writeNumber(int64(len(ranges)))
-	var buffer [32 * 1024]byte
-	for _, sample := range ranges {
-		writeNumber(sample.Offset)
-		writeNumber(sample.Length)
-		for consumed := int64(0); consumed < sample.Length; {
-			if err = ctx.Err(); err != nil {
-				return err
-			}
-			if s.closed.Load() {
-				return blocked("scanner_closed", "The scanner closed before sample observation completed.")
-			}
-			want := min(int64(len(buffer)), sample.Length-consumed)
-			if want > FileSampleCallByteLimit-budget.requested {
-				return blocked("sample_limit", "The fixed per-call sample byte limit was reached.")
-			}
-			// Charge every requested read, including a short or failed read. There
-			// is no extra byte probe and no content read during final validation.
-			budget.requested += want
-			n, readErr := unix.Pread(fileFD, buffer[:int(want)], sample.Offset+consumed)
-			if n > 0 {
-				budget.read += int64(n)
-				_, _ = h.Write(buffer[:n])
-				consumed += int64(n)
-			}
-			if hooks.afterRead != nil {
-				hooks.afterRead(max(n, 0))
-			}
-			if readErr != nil || int64(n) != want {
-				return blocked("sample_incomplete", "A selected range could not be read completely. No sample digest is available.")
-			}
+	if visit != nil {
+		if err = visit(fileFD, opened, volume, mount); err != nil {
+			return err
 		}
 	}
-	if hooks.beforeFinalCheck != nil {
-		hooks.beforeFinalCheck()
+	if beforeFinalCheck != nil {
+		beforeFinalCheck()
 	}
 	if err = ctx.Err(); err != nil {
 		return err
 	}
 	if s.closed.Load() {
-		return blocked("scanner_closed", "The scanner closed before sample observation completed.")
+		return blocked("scanner_closed", "The scanner closed before file observation completed.")
 	}
 	// Retain and recheck every parent. Open handles to detached directories
 	// alone are not evidence that the selected named path remains the same.
@@ -497,21 +517,21 @@ func (s *Scanner) sampleFile(ctx context.Context, t SavedFileTarget, budget *fil
 		}
 		v, m, fsErr := s.filesystem(link.fd)
 		if fsErr != nil || v != link.volume || m != link.mount || objectID(current) != objectID(link.stamp) || (i >= rootParts && !sameInputStamp(current, link.stamp)) {
-			return blocked("path_changed_during_check", "A held directory or its mount changed during sample observation.")
+			return blocked("path_changed_during_check", "A held directory or its mount changed during file observation.")
 		}
 		if i == 0 {
 			continue
 		}
 		checkFD, err := s.openat(links[i-1].fd, link.name)
 		if err != nil {
-			return blocked("path_changed_during_check", "A named directory link changed or became unavailable during sample observation.")
+			return blocked("path_changed_during_check", "A named directory link changed or became unavailable during file observation.")
 		}
 		var named unix.Stat_t
 		statErr := unix.Fstat(checkFD, &named)
 		v, m, fsErr = s.filesystem(checkFD)
 		_ = unix.Close(checkFD)
 		if statErr != nil || fsErr != nil || objectID(named) != objectID(link.stamp) || (i >= rootParts && !sameInputStamp(named, link.stamp)) || v != link.volume || m != link.mount {
-			return blocked("path_changed_during_check", "A named directory link or mount changed during sample observation.")
+			return blocked("path_changed_during_check", "A named directory link or mount changed during file observation.")
 		}
 	}
 	var held, named unix.Stat_t
@@ -519,24 +539,23 @@ func (s *Scanner) sampleFile(ctx context.Context, t SavedFileTarget, budget *fil
 		return err
 	}
 	if err = unix.Fstatat(parent, name, &named, unix.AT_SYMLINK_NOFOLLOW); err != nil {
-		return blocked("file_changed_during_check", "The selected file became unavailable during sample observation.")
+		return blocked("file_changed_during_check", "The selected file became unavailable during file observation.")
 	}
 	if !s.supportedSampleFile(held) || !s.supportedSampleFile(named) || !sameInputStamp(before, held) || !sameInputStamp(before, named) {
-		return blocked("file_changed_during_check", "The file or its named link changed during sample observation.")
+		return blocked("file_changed_during_check", "The file or its named link changed during file observation.")
 	}
 	v, m, fsErr = s.filesystem(fileFD)
 	if fsErr != nil || v != volume || m != mount {
-		return blocked("mount_boundary", "The held file's filesystem or mount changed during sample observation.")
+		return blocked("mount_boundary", "The held file's filesystem or mount changed during file observation.")
 	}
 	if err = verifyNamedMount(parent, name, mount); err != nil {
-		return blocked("mount_boundary", "The named file's mount changed during sample observation.")
+		return blocked("mount_boundary", "The named file's mount changed during file observation.")
 	}
 	if err = ctx.Err(); err != nil {
 		return err
 	}
 	if s.closed.Load() {
-		return blocked("scanner_closed", "The scanner closed before sample observation completed.")
+		return blocked("scanner_closed", "The scanner closed before file observation completed.")
 	}
-	item.SHA256 = hex.EncodeToString(h.Sum(nil))
 	return nil
 }
