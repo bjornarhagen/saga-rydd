@@ -165,7 +165,7 @@ P2-05a adds bounded first-match selection counts and saved-page coverage in huma
 
 ### Scan continuation priority (P1-07a)
 
-Before generated-tree aggregation, fix restart scheduling: seed a root only when it has no pending or running inventory jobs, including delayed retries. Preserve interrupted inventory job priority across cancellation and crash recovery. A repeated manual scan finishes its saved queue; a later invocation with an empty queue starts a new pass. Expose resume/new-pass mode to humans and JSON clients. This avoids unnecessary completed-directory revisits without treating recent timestamps as evidence of an unchanged subtree. Directory enumeration still restarts within an interrupted directory; durable wide-directory continuation, adaptive refresh, stale-entry handling and explicit forced-refresh controls remain P1-07 work.
+Before generated-tree aggregation, fix restart scheduling: seed a root only when it has no pending or running inventory jobs, including delayed retries. Preserve interrupted inventory job priority across cancellation and crash recovery. A repeated manual scan finishes its saved queue; compact inventories also finish saved retirement, reconciliation and allocation work before a later invocation starts a new pass. Expose resume/new-pass mode to humans and JSON clients. This avoids unnecessary completed-directory revisits without treating recent timestamps as evidence of an unchanged subtree. Directory enumeration still restarts within an interrupted directory; durable wide-directory continuation, adaptive refresh, broader stale-entry handling and explicit forced-refresh controls remain P1-07 work.
 
 ### Generated dependency trees: next storage priority
 
