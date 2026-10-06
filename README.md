@@ -79,6 +79,8 @@ rydd plan --check PLAN_ID -d /path/to/project
 rydd plan --verify PLAN_ID -d /path/to/project
 rydd plan --inspect PLAN_ID -d /path/to/project
 rydd plan --inspect PLAN_ID --tree -d /path/to/project
+rydd plan --capture PLAN_ID -d /path/to/project
+rydd plan --compare OBSERVATION_ID -d /path/to/project
 ```
 
 Use an actual finding ID, then replace `PLAN_ID` with the returned saved plan ID. Keep the same global `--data-dir` if you override it. The saved record contains the exact selection and evidence from one inventory snapshot. Later scans cannot add targets to it. Reopening works while the source folder or its inventory is offline.
@@ -87,13 +89,17 @@ Use an actual finding ID, then replace `PLAN_ID` with the returned saved plan ID
 
 `--verify` also reads current metadata for the selected root, path ancestors, dependency directory and `package.json`. It blocks changed, missing, excluded or symlinked paths and descendant mount boundaries. Use a canonical scan path: root aliases accepted by scanning are rejected by this stricter check. It does not read dependency contents, inspect the whole subtree or establish that cleanup is safe. No files are moved, and the result cannot authorize a later move.
 
-`--inspect` explicitly reads bounded `package.json` and `package-lock.json` contents after the same path checks. The first supported format is a narrow subset of npm lockfile versions 2 and 3 with public registry dependencies. It compares root dependency declarations and reports exact-byte digests. Unsupported managers, local sources, install scripts and project configuration need separate review. The command does not check installed dependency contents, detect local edits or prove that reinstall will succeed. Digests describe this request; saved plans have no frozen lock-content baseline. See the [input inspection contract](docs/cli.md#project-input-inspection).
+`--inspect` explicitly reads bounded `package.json` and `package-lock.json` contents after the same path checks. The first supported format is a narrow subset of npm lockfile versions 2 and 3 with public registry dependencies. It compares root dependency declarations and reports exact-byte digests. Unsupported managers, local sources, install scripts and project configuration need separate review. The command does not check installed dependency contents, detect local edits or prove that reinstall will succeed. Inspection describes this request; use capture below to save a separate observation for later comparison. See the [input inspection contract](docs/cli.md#project-input-inspection).
 
 Add `--tree` to also inspect up to 10,000 installed entries through recursive metadata listings. It accepts lock-listed package directories, ordinary files and supported internal `.bin` links; it blocks unknown boundary entries, hardlinked files, special objects, exclusions and mount boundaries. Counts and a metadata digest describe the observed layout, including two matching metadata passes. Ordinary dependency contents remain unopened. This does not establish a complete or unmodified install, and large or unsupported trees need separate review. Input-only inspection stays unchanged.
 
+`--capture` repeats the full input/tree check and saves one immutable observation for the exact plan only when all targets pass. It saves digests and counts, with no dependency file bodies or descendant filename list. `--show` exposes the observation ID and observed time, even while source folders or inventory are offline. Repeating capture returns the same ID and time when the observations still match. Changed observations require a new saved selection; an existing baseline is never replaced.
+
+Use the returned `OBSERVATION_ID` with `--compare` to repeat the same checks and report a match, changed evidence or a block. Comparison writes no records. A match means the checked input bytes and tree metadata agree with that capture; it cannot detect edits made before capture or prove that dependencies can be safely reinstalled. Existing review consent is separate and remains non-executable.
+
 Plans are private local records in a separate database under the global data directory. Saving does not approve cleanup, move files or free space. Review consent can be recorded separately as described below. Cleanup remains unavailable; Rydd does not verify project activity or regeneration safety. These commands are building blocks for the future guided select-and-confirm flow.
 
-Saving, checking, live verification and input inspection require inventory schema 9. Reports and previews can still read schemas 4–8. Existing configured state can be migrated with `state init` while its worker is stopped; a manual inventory migrates on the next explicit scan, or with `measure` when it is compact and has no pending scan. No migration is performed by `--show`, `--check`, `--verify`, `--inspect` or `--preview`.
+Saving, checking, live verification, inspection, capture and comparison require inventory schema 9. Reports and previews can still read schemas 4–8. Existing configured state can be migrated with `state init` while its worker is stopped; a manual inventory migrates on the next explicit scan, or with `measure` when it is compact and has no pending scan. Writer commands can migrate plan-store schemas 1/2 to schema 3; capture publishes its observation atomically, with existing plans and consent unchanged. Read-only `--show`, `--check`, `--verify`, `--inspect`, `--compare` and `--preview` do not migrate storage.
 
 ## Record or revoke review consent
 

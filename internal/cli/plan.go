@@ -45,6 +45,21 @@ type InspectedPlan struct {
 	Inspection     *inventory.InspectionReport `json:"inspection,omitempty"`
 }
 
+type CapturedPlan struct {
+	ID             string                      `json:"id"`
+	Directory      string                      `json:"-"`
+	InventoryCheck state.SelectionCheck        `json:"inventory_check"`
+	Inspection     *inventory.InspectionReport `json:"inspection,omitempty"`
+	Observation    *plans.CapturedObservation  `json:"observation,omitempty"`
+}
+
+type ComparedPlan struct {
+	ID             string                       `json:"id"`
+	ObservationID  string                       `json:"observation_id"`
+	InventoryCheck state.SelectionCheck         `json:"inventory_check"`
+	Comparison     *plans.ObservationComparison `json:"comparison,omitempty"`
+}
+
 func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 	r := PlanPreview{}
 	f := flag.NewFlagSet("plan", flag.ContinueOnError)
@@ -55,6 +70,8 @@ func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 	check := f.String("check", "", "compare a saved plan with its inventory")
 	verify := f.String("verify", "", "compare exact saved paths with live metadata; no contents or cleanup")
 	inspect := f.String("inspect", "", "read bounded npm project inputs for an exact saved selection; no cleanup")
+	capture := f.String("capture", "", "save immutable input and tree observations for an exact plan; no approval")
+	compare := f.String("compare", "", "compare current input and tree observations with a captured observation; read-only")
 	tree := f.Bool("tree", false, "with --inspect, list bounded dependency tree metadata; no ordinary file contents")
 	approve := f.String("approve", "", "record 24-hour review consent for an exact plan; cannot execute cleanup")
 	revoke := f.String("revoke", "", "revoke review consent for an exact plan")
@@ -71,7 +88,7 @@ func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 	confirmationSet := false
 	treeSet := false
 	f.Visit(func(v *flag.Flag) {
-		if v.Name == "preview" || v.Name == "save" || v.Name == "show" || v.Name == "check" || v.Name == "verify" || v.Name == "inspect" || v.Name == "approve" || v.Name == "revoke" {
+		if v.Name == "preview" || v.Name == "save" || v.Name == "show" || v.Name == "check" || v.Name == "verify" || v.Name == "inspect" || v.Name == "capture" || v.Name == "compare" || v.Name == "approve" || v.Name == "revoke" {
 			modes++
 		}
 		if v.Name == "confirm-project-review" || v.Name == "confirm-quarantine" {
@@ -88,7 +105,7 @@ func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 		}
 	})
 	if modes != 1 || aliases > 1 {
-		return r, usageError{errors.New("plan accepts exactly one of --preview, --save, --show, --check, --verify, --inspect, --approve or --revoke; put options before IDs")}
+		return r, usageError{errors.New("plan accepts exactly one of --preview, --save, --show, --check, --verify, --inspect, --capture, --compare, --approve or --revoke; put options before IDs")}
 	}
 	if confirmationSet && *approve == "" {
 		return r, usageError{errors.New("review confirmations are accepted only with --approve PLAN_ID")}
@@ -117,6 +134,9 @@ func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 	if *inspect != "" {
 		selectedPlan = *inspect
 	}
+	if *capture != "" {
+		selectedPlan = *capture
+	}
 	if *approve != "" {
 		selectedPlan = *approve
 		if !*projectReview || !*quarantine {
@@ -125,7 +145,11 @@ func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 	}
 	if selectedPlan != "" {
 		if f.NArg() != 0 || ageSet || !plans.ValidID(selectedPlan) {
-			return r, usageError{errors.New("plan --check, --verify, --inspect or --approve requires one full plan ID, an optional directory and no age or finding selection")}
+			return r, usageError{errors.New("plan --check, --verify, --inspect, --capture or --approve requires one full plan ID, an optional directory and no age or finding selection")}
+		}
+	} else if *compare != "" {
+		if f.NArg() != 0 || ageSet || !plans.ValidObservationID(*compare) {
+			return r, usageError{errors.New("plan --compare requires one full observation ID, an optional directory and no age or finding selection")}
 		}
 	} else if (!*preview && !*save) || f.NArg() < 1 || f.NArg() > state.PreviewTargetLimit {
 		return r, usageError{errors.New("plan requires --preview or --save and 1–20 finding IDs; put options before IDs")}
@@ -134,6 +158,22 @@ func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 		return r, usageError{state.ErrFindingAge}
 	}
 	base := paths.StateDir
+	var saved plans.Saved
+	var baseline plans.CapturedObservation
+	if *compare != "" {
+		var err error
+		baseline, saved, err = plans.LoadObservation(ctx, base, *compare)
+		if err != nil {
+			return r, err
+		}
+		selectedPlan = saved.ID
+	} else if *check != "" || *verify != "" || *inspect != "" || *capture != "" {
+		var err error
+		saved, err = plans.Load(ctx, base, selectedPlan)
+		if err != nil {
+			return r, err
+		}
+	}
 	manualRoot := ""
 	if aliases == 1 {
 		root, err := directoryPath(*directory)
@@ -143,22 +183,20 @@ func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 		paths.StateDir = manualState(paths, root)
 		manualRoot = root
 	}
-	var saved plans.Saved
-	if *check != "" || *verify != "" || *inspect != "" {
-		var err error
-		saved, err = plans.Load(ctx, base, selectedPlan)
-		if err != nil {
-			return r, err
-		}
-	}
 	s, err := state.OpenReader(ctx, paths.StateDir)
 	if err != nil {
 		return r, err
 	}
 	defer s.Close()
-	if *verify != "" || *inspect != "" {
+	if *verify != "" || *inspect != "" || *capture != "" || *compare != "" {
 		check, targets, err := s.PrepareLiveSelection(ctx, saved.Record.Selection)
 		if err != nil || check.Status != "matches_saved_inventory" {
+			if *capture != "" {
+				return CapturedPlan{ID: saved.ID, Directory: manualRoot, InventoryCheck: check}, err
+			}
+			if *compare != "" {
+				return ComparedPlan{ID: saved.ID, ObservationID: baseline.ID, InventoryCheck: check}, err
+			}
 			if *inspect != "" {
 				return InspectedPlan{ID: saved.ID, InventoryCheck: check}, err
 			}
@@ -181,15 +219,45 @@ func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 			return r, err
 		}
 		defer scanner.Close()
-		if *inspect != "" {
+		if *inspect != "" || *capture != "" || *compare != "" {
 			var inspection inventory.InspectionReport
-			if *tree {
+			if *tree || *capture != "" || *compare != "" {
 				inspection, err = scanner.InspectTree(ctx, targets)
 			} else {
 				inspection, err = scanner.Inspect(ctx, targets)
 			}
 			if err != nil {
 				return r, err
+			}
+			if *capture != "" || *compare != "" {
+				// The traversal is finite, not atomic. Refuse a known inventory
+				// change observed after it, before publishing or comparing evidence.
+				check, err = s.CheckSelection(ctx, saved.Record.Selection)
+				if err != nil || check.Status != "matches_saved_inventory" {
+					if *capture != "" {
+						return CapturedPlan{ID: saved.ID, Directory: manualRoot, InventoryCheck: check}, err
+					}
+					return ComparedPlan{ID: saved.ID, ObservationID: baseline.ID, InventoryCheck: check}, err
+				}
+			}
+			if *capture != "" {
+				result := CapturedPlan{ID: saved.ID, Directory: manualRoot, InventoryCheck: check, Inspection: &inspection}
+				if inspection.Status != "inputs_and_tree_observed" {
+					return result, nil
+				}
+				observation, err := plans.Capture(ctx, base, saved.ID, inspection)
+				if err != nil {
+					return r, err
+				}
+				result.Observation = &observation
+				return result, nil
+			}
+			if *compare != "" {
+				comparison, err := plans.CompareObservation(baseline, inspection)
+				if err != nil {
+					return r, err
+				}
+				return ComparedPlan{ID: saved.ID, ObservationID: baseline.ID, InventoryCheck: check, Comparison: &comparison}, nil
 			}
 			return InspectedPlan{ID: saved.ID, InventoryCheck: check, Inspection: &inspection}, nil
 		}
@@ -260,6 +328,62 @@ func printPlanPreview(out io.Writer, r PlanPreview) {
 
 func printPlan(out io.Writer, result any, paths config.Paths) {
 	switch r := result.(type) {
+	case CapturedPlan:
+		printWrapped(out, "Saga — Rydd: save an observation", "")
+		switch {
+		case r.Observation != nil:
+			printResultBanner(out, "OBSERVATION SAVED - REVIEW REQUIRED")
+			fmt.Fprintf(out, "Observation: %s\n", r.Observation.ID)
+			printField(out, "Observed", r.Observation.Record.ObservedAt.Format(time.RFC3339))
+		case r.Inspection == nil:
+			printResultBanner(out, "SAVED EVIDENCE BLOCKS OBSERVATION CAPTURE")
+			printSelectionIssues(out, r.InventoryCheck)
+		default:
+			printResultBanner(out, "OBSERVATION CAPTURE BLOCKED - NOTHING SAVED")
+		}
+		fmt.Fprintf(out, "Plan: %s\n", r.ID)
+		if r.Inspection != nil {
+			for _, target := range r.Inspection.Targets {
+				printField(out, "Finding", target.FindingID)
+				printWrapped(out, target.Message, "  ")
+				printObservationEvidence(out, target.Inputs, target.Tree)
+			}
+		}
+		printWrapped(out, "The baseline records digests of observed project input bytes and tree metadata. Ordinary dependency file contents are not read. Local dependency edits and successful reinstall remain unknown. A saved observation does not approve cleanup or renew review consent.", "")
+		printWrapped(out, "Files can change after this check. Source files and the original saved selection are unchanged.", "")
+		if r.Observation != nil {
+			fmt.Fprintf(out, "\nCompare with this baseline:\n  %s plan --compare %s", commandPrefix(paths), r.Observation.ID)
+			if r.Directory != "" {
+				fmt.Fprintf(out, " -d %s", shellQuote(r.Directory))
+			}
+			fmt.Fprintln(out)
+		}
+	case ComparedPlan:
+		printWrapped(out, "Saga — Rydd: compare an observation", "")
+		if r.Comparison == nil {
+			printResultBanner(out, "SAVED EVIDENCE BLOCKS OBSERVATION COMPARISON")
+			printSelectionIssues(out, r.InventoryCheck)
+		} else {
+			switch r.Comparison.Status {
+			case "matches_observation":
+				printResultBanner(out, "OBSERVED INPUTS AND TREE METADATA MATCH THE BASELINE")
+			case "changed":
+				printResultBanner(out, "OBSERVATION CHANGED - REVIEW AGAIN")
+			default:
+				printResultBanner(out, "OBSERVATION COMPARISON BLOCKED - REVIEW REQUIRED")
+			}
+			for _, target := range r.Comparison.Targets {
+				printField(out, "Finding", target.FindingID)
+				printWrapped(out, target.Message, "  ")
+				for _, change := range target.Changes {
+					printWrapped(out, observationChangeMessage(change), "  ")
+				}
+				printObservationEvidence(out, target.Inputs, target.Tree)
+			}
+		}
+		fmt.Fprintf(out, "Observation: %s\nPlan: %s\n", r.ObservationID, r.ID)
+		printWrapped(out, "A match means the observed input bytes and tree metadata equal this captured baseline. It does not establish a complete or unmodified install. Ordinary dependency file contents are not read; local dependency edits and successful reinstall remain unknown.", "")
+		printWrapped(out, "Files can change after this check. This read-only result cannot authorize cleanup or renew review consent. No files or saved records were changed.", "")
 	case InspectedPlan:
 		printWrapped(out, "Saga — Rydd: project input check", "")
 		if r.Inspection == nil {
@@ -361,6 +485,11 @@ func printPlan(out io.Writer, result any, paths config.Paths) {
 		printField(out, "Minimum age", fmt.Sprintf("%d days", r.Record.Selection.Evidence.MinimumAgeDays))
 		printField(out, "Project activity at capture", "Unconfirmed")
 		printWrapped(out, "This is the saved selection. Scanning cannot add targets to it. Current contents have not been checked.", "")
+		if r.Observation != nil {
+			fmt.Fprintf(out, "Observation: %s\n", r.Observation.ID)
+			printField(out, "Observed", r.Observation.Record.ObservedAt.Format(time.RFC3339))
+			printWrapped(out, "This separate baseline contains observed project input digests and tree metadata. It cannot establish current contents or safe cleanup.", "")
+		}
 		for i, f := range r.Record.Selection.Evidence.Findings {
 			printFinding(out, i+1, f)
 		}
@@ -375,9 +504,52 @@ func printPlan(out io.Writer, result any, paths config.Paths) {
 		}
 		printWrapped(out, "Review consent can be recorded with plan --approve and both owner confirmations. It expires after 24 hours and cannot execute cleanup. A future cleanup command will require renewed approval. No files were moved or deleted. Quarantine would free no disk space; purge is not included.", "  ")
 		fmt.Fprintf(out, "\nReopen this selection:\n  %s plan --show %s\n", commandPrefix(paths), r.ID)
+		if r.Observation != nil {
+			fmt.Fprintf(out, "\nCompare with its saved observation:\n  %s plan --compare %s\n", commandPrefix(paths), r.Observation.ID)
+			printWrapped(out, "For a manual scan, append -d with the original scan directory.", "  ")
+		}
 		if r.Review != nil && r.Review.Revocation == nil {
 			fmt.Fprintf(out, "\nRevoke this review consent:\n  %s plan --revoke %s\n", commandPrefix(paths), r.ID)
 		}
+	}
+}
+
+func printSelectionIssues(out io.Writer, check state.SelectionCheck) {
+	for _, issue := range check.Issues {
+		printWrapped(out, issue.Message, "  ")
+	}
+}
+
+func printObservationEvidence(out io.Writer, inputs *inventory.InputEvidence, tree *inventory.TreeEvidence) {
+	if inputs != nil {
+		printField(out, "Lockfile version", inputs.LockfileVersion)
+		printField(out, "Locked packages", inputs.LockedPackages)
+		for _, input := range inputs.Files {
+			printField(out, "Input", fmt.Sprintf("%s (%d bytes)", input.Name, input.Bytes))
+		}
+	}
+	if tree != nil {
+		printField(out, "Tree entries", tree.Entries)
+		printField(out, "Directories", tree.Directories)
+		printField(out, "Regular files", tree.RegularFiles)
+		printField(out, "Internal executable links", tree.InternalBinLinks)
+	}
+}
+
+func observationChangeMessage(change string) string {
+	switch change {
+	case "manifest_bytes_changed":
+		return "package.json bytes changed."
+	case "lock_bytes_changed":
+		return "package-lock.json bytes changed."
+	case "input_summary_changed":
+		return "The supported lock summary changed."
+	case "tree_metadata_changed":
+		return "Dependency tree metadata changed; file contents remain unread."
+	case "tree_counts_changed":
+		return "Dependency tree counts changed."
+	default:
+		return "Observed evidence changed."
 	}
 }
 

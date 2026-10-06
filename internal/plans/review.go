@@ -106,6 +106,10 @@ func Show(ctx context.Context, base, id string) (Saved, error) {
 	if err != nil {
 		return Saved{}, err
 	}
+	saved.Observation, err = readObservationForPlan(ctx, tx, saved.ID, time.Now().UTC())
+	if err != nil {
+		return Saved{}, err
+	}
 	return saved, tx.Commit()
 }
 

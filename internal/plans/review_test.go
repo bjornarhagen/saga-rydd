@@ -189,7 +189,7 @@ func TestReviewMigrationAndRollback(t *testing.T) {
 				t.Fatal(err)
 			}
 			// Reproduce schema 1 from an existing plan, preserving its exact bytes.
-			_, err = db.Exec("DROP TABLE review_revocations; DROP TABLE review_approvals; DROP TABLE plan_store_identity; PRAGMA user_version=1")
+			_, err = db.Exec("DROP TABLE observations; DROP TABLE review_revocations; DROP TABLE review_approvals; DROP TABLE plan_store_identity; PRAGMA user_version=1")
 			if err != nil {
 				t.Fatal(err)
 			}

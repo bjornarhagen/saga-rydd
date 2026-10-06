@@ -44,9 +44,10 @@ type Record struct {
 }
 
 type Saved struct {
-	ID     string  `json:"id"`
-	Record Record  `json:"record"`
-	Review *Review `json:"review,omitempty"`
+	ID          string               `json:"id"`
+	Record      Record               `json:"record"`
+	Review      *Review              `json:"review,omitempty"`
+	Observation *CapturedObservation `json:"observation,omitempty"`
 }
 
 func ValidID(id string) bool {
@@ -180,6 +181,11 @@ func privateFile(path string) error {
 }
 
 func open(ctx context.Context, base string, write bool) (*sql.DB, func(), error) {
+	return openWithMigration(ctx, base, write, true)
+}
+
+// Observation capture defers additive migration until its publication transaction.
+func openWithMigration(ctx context.Context, base string, write, migrate bool) (*sql.DB, func(), error) {
 	if !filepath.IsAbs(base) {
 		return nil, nil, errors.New("plan storage requires an absolute data directory")
 	}
@@ -282,11 +288,11 @@ PRAGMA application_id=0x5259504c; PRAGMA user_version=1;`)
 			return fail(e)
 		}
 		version = 1
-	} else if app != applicationID || (version != 1 && version != 2) {
+	} else if app != applicationID || (version != 1 && version != 2 && version != 3) {
 		return fail(errors.New("unsupported or unidentified plan database; left intact"))
 	}
-	if write && version == 1 {
-		if err = migrateReviews(ctx, db); err != nil {
+	if write && migrate && version < 3 {
+		if err = migrateObservationStore(ctx, db, version); err != nil {
 			return fail(err)
 		}
 	}

@@ -37,6 +37,8 @@ Commands:
   plan --verify PLAN_ID [-d PATH]                     Check selected live metadata; no cleanup
   plan --inspect PLAN_ID [--tree] [-d PATH]           Read bounded npm project inputs; no cleanup
     --tree                                            List bounded tree metadata; no ordinary file contents
+  plan --capture PLAN_ID [-d PATH]                   Save immutable input/tree observation; no approval
+  plan --compare OBSERVATION_ID [-d PATH]            Read-only comparison with captured observation
   plan --approve PLAN_ID [options]                   Record 24-hour review consent; no cleanup
     --confirm-project-review                         Confirm activity, local edits and reinstall review
     --confirm-quarantine                             Accept same-filesystem quarantine without purge
