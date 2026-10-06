@@ -106,9 +106,10 @@ Saving, checking, live verification, inspection, capture and comparison require 
 ```sh
 rydd journal --show INTENT_ID
 rydd journal --show INTENT_ID --json
+rydd journal --observe INTENT_ID --json
 ```
 
-This reads a preparation record and its recorded history without inspecting either filesystem location. The journal foundation is available for development fixtures; there is no CLI command to prepare or execute a move. Saved outcomes are caller-supplied records, not proof of current state. Missing results remain unknown and cannot permit retry. Quarantine, restoration and purge remain unavailable. See the [journal contract](docs/cli.md#saved-recovery-journal).
+This reads a preparation record and its recorded history without inspecting either filesystem location. The journal foundation is available for development fixtures; there is no CLI command to prepare or execute a move. Saved outcomes are caller-supplied records, not proof of current state. Missing results remain unknown and cannot permit retry. `--observe` separately checks metadata at the two recorded locations. It writes no history and keeps the cleanup outcome unknown, even when metadata agrees. Quarantine, restoration and purge remain unavailable. See the [journal contract](docs/cli.md#saved-recovery-journal).
 
 ## Record or revoke review consent
 

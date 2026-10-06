@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/bjornarhagen/saga-rydd/internal/config"
-	"github.com/bjornarhagen/saga-rydd/internal/plans"
 	"github.com/bjornarhagen/saga-rydd/internal/state"
 	"github.com/bjornarhagen/saga-rydd/internal/worker"
 )
@@ -45,6 +44,7 @@ Commands:
     --confirm-quarantine                             Accept same-filesystem quarantine without purge
   plan --revoke PLAN_ID                               Revoke review consent; no inventory needed
   journal --show INTENT_ID [--json]                 Read saved preparation/history; no operations
+  journal --observe INTENT_ID [--json]              Observe recovery locations; no operations
   report --candidates [--min-age-days N] [--cursor TOKEN] [--json]         Node modules review candidates
   measure -d PATH [--batches N] [--json]               Resume saved compact size calculations
   report -d PATH [--json]                             Saved directory size
@@ -143,7 +143,7 @@ func runHuman(ctx context.Context, args []string, out, errOut io.Writer) int {
 			printPlan(out, r, paths)
 		}
 	case "journal":
-		var r plans.JournalSnapshot
+		var r any
 		r, err = journal(ctx, remaining[1:], paths)
 		if err == nil {
 			printJournal(out, r)

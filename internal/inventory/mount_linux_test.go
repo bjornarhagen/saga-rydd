@@ -2,6 +2,7 @@ package inventory
 
 import (
 	"context"
+	"fmt"
 	"github.com/bjornarhagen/saga-rydd/internal/state"
 	"os"
 	"path/filepath"
@@ -60,6 +61,31 @@ func TestBindMountBoundary(t *testing.T) {
 			r, err := s.InspectTree(context.Background(), []state.LiveTarget{target})
 			if err != nil || r.Status != "blocked" || r.Targets[0].Code != "mount_boundary" {
 				t.Fatal(r, err)
+			}
+		})
+	}
+	for _, atDestination := range []bool{false, true} {
+		t.Run(fmt.Sprintf("recovery_destination_%t", atDestination), func(t *testing.T) {
+			request := recoveryFixture(t)
+			path := string(request.SourcePathBytes)
+			if atDestination {
+				path = string(request.DestinationPathBytes)
+				if err := os.Rename(string(request.SourcePathBytes), path); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := unix.Mount(path, path, "", unix.MS_BIND, ""); err != nil {
+				t.Fatal(err)
+			}
+			defer unix.Unmount(path, 0)
+			report, err := ObserveRecovery(context.Background(), request)
+			requireRecoveryUnknown(t, report, err)
+			location := report.SourceLocation
+			if atDestination {
+				location = report.DestinationLocation
+			}
+			if location.Status != "blocked" || location.Code != "mount_boundary" || location.ObjectIdentity != nil {
+				t.Fatal("recovery observation crossed an exact-child bind mount", report)
 			}
 		})
 	}

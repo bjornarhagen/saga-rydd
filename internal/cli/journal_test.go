@@ -14,6 +14,7 @@ import (
 
 	"github.com/bjornarhagen/saga-rydd/internal/config"
 	"github.com/bjornarhagen/saga-rydd/internal/plans"
+	"golang.org/x/sys/unix"
 )
 
 func journalCLIFixture(t *testing.T) (reviewCLI, plans.JournalSnapshot) {
@@ -22,14 +23,22 @@ func journalCLIFixture(t *testing.T) (reviewCLI, plans.JournalSnapshot) {
 	observation := capturedCLIResult(t, f).Observation
 	target := f.saved.Record.Selection.Targets[0]
 	object := plans.JournalIdentity{Device: target.Target.Device, Inode: target.Target.Inode, ChangedNS: target.Target.ChangedNS, Generation: target.Target.Generation}
-	parentInode := "1"
-	if object.Inode == parentInode {
-		parentInode = "2"
+	destinationParent := filepath.Join(filepath.Dir(f.root), "quarantine")
+	if err := os.Mkdir(destinationParent, 0700); err != nil {
+		t.Fatal(err)
 	}
-	parent := plans.JournalIdentity{Device: object.Device, Inode: parentInode, ChangedNS: object.ChangedNS, Generation: object.Generation}
+	parentIdentity := func(path string) plans.JournalIdentity {
+		var st unix.Stat_t
+		if err := unix.Stat(path, &st); err != nil {
+			t.Fatal(err)
+		}
+		// Parent change times are supplied historical evidence. A recovery check
+		// must disclose their change without treating it as object replacement.
+		return plans.JournalIdentity{Device: strconv.FormatUint(uint64(st.Dev), 10), Inode: strconv.FormatUint(uint64(st.Ino), 10), ChangedNS: 1, Generation: object.Generation}
+	}
 	request := plans.PreparationRequest{RequestKey: strings.Repeat("a", 64), Kind: "quarantine_preparation", PlanID: f.saved.ID, ObservationID: observation.ID, FindingID: target.FindingID,
-		SourcePathBytes: f.saved.Record.Selection.Evidence.Findings[0].PathBytes, DestinationPathBytes: []byte(filepath.Join(filepath.Dir(f.root), "quarantine", "slot\t\n")),
-		SourceObject: object, SourceParent: parent, DestinationParent: parent, DestinationMustBeAbsent: true}
+		SourcePathBytes: f.saved.Record.Selection.Evidence.Findings[0].PathBytes, DestinationPathBytes: []byte(filepath.Join(destinationParent, "slot\t\n")),
+		SourceObject: object, SourceParent: parentIdentity(f.root), DestinationParent: parentIdentity(destinationParent), DestinationMustBeAbsent: true}
 	snapshot, err := plans.PrepareJournal(context.Background(), f.base, request)
 	if err != nil {
 		t.Fatal(err)
@@ -155,8 +164,10 @@ func TestJournalShowCorruptionReturnsNoPartialRecord(t *testing.T) {
 	if err != nil || closeErr != nil {
 		t.Fatal(err, closeErr)
 	}
-	code, raw := f.run("journal", "--show", snapshot.Intent.ID, "--json")
-	if code != 1 || !strings.Contains(raw, "journal_outcome_unknown") || strings.Contains(raw, "source_path_bytes") || strings.Contains(raw, "destination_path_bytes") || strings.Contains(raw, snapshot.Intent.ID) {
-		t.Fatal(code, raw)
+	for _, mode := range []string{"--show", "--observe"} {
+		code, raw := f.run("journal", mode, snapshot.Intent.ID, "--json")
+		if code != 1 || !strings.Contains(raw, "journal_outcome_unknown") || strings.Contains(raw, "source_path_bytes") || strings.Contains(raw, "destination_path_bytes") || strings.Contains(raw, snapshot.Intent.ID) {
+			t.Fatal(code, raw)
+		}
 	}
 }

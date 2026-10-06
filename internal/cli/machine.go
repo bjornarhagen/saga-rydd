@@ -36,7 +36,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) int {
 			continue
 		}
 		filtered = append(filtered, a)
-		if (a == "--data-dir" || a == "--root" || a == "--exclude" || a == "--limit" || a == "--cursor" || a == "--directory" || a == "-d" || a == "-s" || a == "--sleep" || a == "--min-age-days" || a == "--batches" || a == "--show" || a == "--check" || a == "--approve" || a == "--revoke" || a == "--verify" || a == "--inspect" || a == "--capture" || a == "--compare") && i+1 < len(args) {
+		if (a == "--data-dir" || a == "--root" || a == "--exclude" || a == "--limit" || a == "--cursor" || a == "--directory" || a == "-d" || a == "-s" || a == "--sleep" || a == "--min-age-days" || a == "--batches" || a == "--show" || a == "--observe" || a == "--check" || a == "--approve" || a == "--revoke" || a == "--verify" || a == "--inspect" || a == "--capture" || a == "--compare") && i+1 < len(args) {
 			i++
 			filtered = append(filtered, args[i])
 		}
@@ -162,7 +162,7 @@ func runMachine(ctx context.Context, args []string, out, errOut io.Writer) int {
 		r, err = plan(ctx, a[1:], paths)
 		result["plan"] = r
 	case "journal":
-		var r plans.JournalSnapshot
+		var r any
 		r, err = journal(ctx, a[1:], paths)
 		result["journal"] = r
 	case "report":
@@ -220,13 +220,13 @@ func capabilities() map[string]any {
 			{"scan", true, "scans_metadata_and_writes_isolated_state", []string{"-d PATH / --directory PATH", "-s MS / --sleep MS (default 10)", "--now (no entry delay)", "--compact / --detailed (saved manual inventory mode)"}},
 			{"measure", true, "writes_derived_state", []string{"-d PATH / --directory PATH (exact manual compact root)", "--batches N (1–1000; default 128; five-second budget)"}},
 			{"plan", true, "read_only_or_writes_saved_plan", []string{"--preview / --save (exactly one for a new selection)", "--show PLAN_ID (reopen without directory or selection options)", "--check PLAN_ID [-d PATH] (compare with saved inventory; no approval)", "--verify PLAN_ID [-d PATH] (read selected live metadata; no contents or cleanup)", "--inspect PLAN_ID [--tree] [-d PATH] (read bounded npm project inputs; optional tree metadata listings, no ordinary dependency contents; reinstall remains unverified)", "--capture PLAN_ID [-d PATH] (save one immutable input/tree observation; no approval)", "--compare OBSERVATION_ID [-d PATH] (read-only input/tree comparison with captured baseline; local edits remain unknown)", "--approve PLAN_ID [-d PATH] --confirm-project-review --confirm-quarantine (24-hour review consent only; cannot execute cleanup)", "--revoke PLAN_ID (revoke review consent without inventory)", "-d PATH / --directory PATH (exact manual scan root)", "--min-age-days N (1–36500; default 90)", "FINDING_ID... (1–20 unique IDs; options first)"}},
-			{"journal", true, "read_only", []string{"--show INTENT_ID (saved preparation/history only; no source operations)"}},
+			{"journal", true, "read_only", []string{"--show INTENT_ID (saved preparation/history only; no source operations)", "--observe INTENT_ID (current recovery-location metadata; no operations or saved changes)"}},
 			{"report", true, "read_only", []string{"--limit N (1–200)", "--cursor TOKEN", "-d PATH / --directory PATH (saved folder size; combine with --candidates for manual scan root)", "--candidates [--min-age-days N] [--cursor TOKEN] (old node_modules review)"}},
 			{"status", true, "read_only", []string{}}, {"pause", true, "writes_state", []string{}}, {"resume", true, "writes_state", []string{}},
 			{"stop", true, "stops_worker", []string{}}, {"daemon", false, "runs_worker", []string{"--experimental-scan"}}, {"capabilities", true, "read_only", []string{}},
 		},
 		"exit_codes":  map[string]string{"0": "success", "1": "operation_failed", "2": "invalid_usage_or_output"},
 		"error_codes": []string{"invalid_arguments", "unsupported_output", "worker_not_running", "writer_busy", "not_found", "already_exists", "permission_denied", "canceled", "command_failed", "review_evidence_changed", "review_unavailable", "review_invalid", "observation_conflict", "observation_invalid", "observation_unavailable", "journal_outcome_unknown"},
-		"features":    map[string]bool{"compact_manual_scan": true, "manual_scan": true, "experimental_inventory": true, "durable_dispatch_limits": true, "wal_backpressure": true, "entry_rate_limit": true, "metadata_api_counters": true, "metadata_rate_limit": false, "cpu_limit": false, "power_controls": false, "file_reports": true, "directory_size_reports": true, "findings": true, "plan_previews": true, "saved_plans": true, "saved_plan_checks": true, "plan_live_checks": true, "plan_input_inspection": true, "plan_tree_inspection": true, "plan_observation_capture": true, "plan_observation_comparison": true, "plan_approval": true, "journal_records": true, "duplicates": false, "cleanup": false, "service_installation": false},
+		"features":    map[string]bool{"compact_manual_scan": true, "manual_scan": true, "experimental_inventory": true, "durable_dispatch_limits": true, "wal_backpressure": true, "entry_rate_limit": true, "metadata_api_counters": true, "metadata_rate_limit": false, "cpu_limit": false, "power_controls": false, "file_reports": true, "directory_size_reports": true, "findings": true, "plan_previews": true, "saved_plans": true, "saved_plan_checks": true, "plan_live_checks": true, "plan_input_inspection": true, "plan_tree_inspection": true, "plan_observation_capture": true, "plan_observation_comparison": true, "plan_approval": true, "journal_records": true, "journal_location_observations": true, "duplicates": false, "cleanup": false, "service_installation": false},
 	}
 }
