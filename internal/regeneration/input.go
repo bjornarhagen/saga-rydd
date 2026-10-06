@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"reflect"
 	"regexp"
+	"sort"
 	"strings"
 	"unicode/utf8"
 )
@@ -24,6 +25,13 @@ const (
 type Summary struct {
 	LockfileVersion int `json:"lockfile_version"`
 	LockedPackages  int `json:"locked_packages"`
+}
+
+// Layout names the package directories declared by the supported lock inputs.
+// Paths are relative to the project and include the leading node_modules.
+// This describes lock declarations only, not the installed dependency tree.
+type Layout struct {
+	PackagePaths []string
 }
 
 // Error deliberately contains no source text, dependency name or URL.
@@ -57,21 +65,32 @@ var lifecycleFields = []string{"preinstall", "install", "postinstall", "prepubli
 // dependency graph or semver resolution, installed contents, download
 // availability, external configuration, platform compatibility or regeneration.
 func Analyze(manifest, lock []byte) (Summary, error) {
+	summary, _, err := analyze(manifest, lock, false)
+	return summary, err
+}
+
+// AnalyzeLayout performs the same checks as Analyze and returns exact validated
+// lock package paths in lexical order. It returns no layout when checking fails.
+func AnalyzeLayout(manifest, lock []byte) (Summary, Layout, error) {
+	return analyze(manifest, lock, true)
+}
+
+func analyze(manifest, lock []byte, includeLayout bool) (Summary, Layout, error) {
 	if len(manifest) > ManifestLimit || len(lock) > LockfileLimit {
-		return Summary{}, limited()
+		return Summary{}, Layout{}, limited()
 	}
 	values := 0
 	m, err := decodeObject(manifest, &values)
 	if err != nil {
-		return Summary{}, err
+		return Summary{}, Layout{}, err
 	}
 	l, err := decodeObject(lock, &values)
 	if err != nil {
-		return Summary{}, err
+		return Summary{}, Layout{}, err
 	}
 	version, ok := l["lockfileVersion"].(json.Number)
 	if !ok {
-		return Summary{}, invalid()
+		return Summary{}, Layout{}, invalid()
 	}
 	v := 0
 	switch version.String() {
@@ -80,59 +99,59 @@ func Analyze(manifest, lock []byte) (Summary, error) {
 	case "3":
 		v = 3
 	default:
-		return Summary{}, unsupported()
+		return Summary{}, Layout{}, unsupported()
 	}
 	packages, ok := l["packages"].(map[string]any)
 	if !ok {
-		return Summary{}, invalid()
+		return Summary{}, Layout{}, invalid()
 	}
 	root, ok := packages[""].(map[string]any)
 	if !ok {
-		return Summary{}, invalid()
+		return Summary{}, Layout{}, invalid()
 	}
 	for _, field := range []string{"name", "version"} {
 		if value, present := l[field]; present {
 			text, ok := value.(string)
 			if !ok {
-				return Summary{}, invalid()
+				return Summary{}, Layout{}, invalid()
 			}
 			if rootValue, present := root[field]; present && rootValue != text {
-				return Summary{}, invalid()
+				return Summary{}, Layout{}, invalid()
 			}
 		}
 	}
 	if err := validateProject(m); err != nil {
-		return Summary{}, err
+		return Summary{}, Layout{}, err
 	}
 	if err := validateProject(root); err != nil {
-		return Summary{}, err
+		return Summary{}, Layout{}, err
 	}
 	for _, field := range dependencyFields {
 		a, err := dependencies(m, field)
 		if err != nil {
-			return Summary{}, err
+			return Summary{}, Layout{}, err
 		}
 		b, err := dependencies(root, field)
 		if err != nil {
-			return Summary{}, err
+			return Summary{}, Layout{}, err
 		}
 		if !reflect.DeepEqual(a, b) {
-			return Summary{}, invalid()
+			return Summary{}, Layout{}, invalid()
 		}
 		for name := range a {
 			if _, exists := packages["node_modules/"+name]; !exists && !optionalPeer(m, field, name) {
-				return Summary{}, invalid()
+				return Summary{}, Layout{}, invalid()
 			}
 		}
 	}
 	if !reflect.DeepEqual(m["peerDependenciesMeta"], root["peerDependenciesMeta"]) {
-		return Summary{}, invalid()
+		return Summary{}, Layout{}, invalid()
 	}
 	for _, field := range []string{"name", "version"} {
 		if value, present := m[field]; present {
 			text, ok := value.(string)
 			if !ok || root[field] != text {
-				return Summary{}, invalid()
+				return Summary{}, Layout{}, invalid()
 			}
 		}
 	}
@@ -141,43 +160,53 @@ func Analyze(manifest, lock []byte) (Summary, error) {
 			continue
 		}
 		if !packagePath(path) {
-			return Summary{}, unsupported()
+			return Summary{}, Layout{}, unsupported()
 		}
 		entry, ok := value.(map[string]any)
 		if !ok {
-			return Summary{}, invalid()
+			return Summary{}, Layout{}, invalid()
 		}
 		if err := validateProject(entry); err != nil {
-			return Summary{}, err
+			return Summary{}, Layout{}, err
 		}
 		if name, present := entry["name"]; present {
 			if name != packagePathName(path) {
-				return Summary{}, unsupported()
+				return Summary{}, Layout{}, unsupported()
 			}
 		}
 		version, ok := entry["version"].(string)
 		if !ok {
-			return Summary{}, invalid()
+			return Summary{}, Layout{}, invalid()
 		}
 		if !concreteVersion(version) {
-			return Summary{}, unsupported()
+			return Summary{}, Layout{}, unsupported()
 		}
 		resolved, ok := entry["resolved"].(string)
 		if !ok {
-			return Summary{}, invalid()
+			return Summary{}, Layout{}, invalid()
 		}
 		if !registryTarball(resolved) {
-			return Summary{}, unsupported()
+			return Summary{}, Layout{}, unsupported()
 		}
 		integrity, ok := entry["integrity"].(string)
 		if !ok {
-			return Summary{}, invalid()
+			return Summary{}, Layout{}, invalid()
 		}
 		if !sha512Integrity(integrity) {
-			return Summary{}, unsupported()
+			return Summary{}, Layout{}, unsupported()
 		}
 	}
-	return Summary{LockfileVersion: v, LockedPackages: len(packages) - 1}, nil
+	var layout Layout
+	if includeLayout {
+		layout.PackagePaths = make([]string, 0, len(packages)-1)
+		for path := range packages {
+			if path != "" {
+				layout.PackagePaths = append(layout.PackagePaths, path)
+			}
+		}
+		sort.Strings(layout.PackagePaths)
+	}
+	return Summary{LockfileVersion: v, LockedPackages: len(packages) - 1}, layout, nil
 }
 
 func decodeObject(input []byte, values *int) (map[string]any, error) {

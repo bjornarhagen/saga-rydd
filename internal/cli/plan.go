@@ -55,6 +55,7 @@ func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 	check := f.String("check", "", "compare a saved plan with its inventory")
 	verify := f.String("verify", "", "compare exact saved paths with live metadata; no contents or cleanup")
 	inspect := f.String("inspect", "", "read bounded npm project inputs for an exact saved selection; no cleanup")
+	tree := f.Bool("tree", false, "with --inspect, list bounded dependency tree metadata; no ordinary file contents")
 	approve := f.String("approve", "", "record 24-hour review consent for an exact plan; cannot execute cleanup")
 	revoke := f.String("revoke", "", "revoke review consent for an exact plan")
 	projectReview := f.Bool("confirm-project-review", false, "owner reviewed project activity, local dependency edits and reinstall requirements")
@@ -68,6 +69,7 @@ func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 	aliases, modes := 0, 0
 	ageSet := false
 	confirmationSet := false
+	treeSet := false
 	f.Visit(func(v *flag.Flag) {
 		if v.Name == "preview" || v.Name == "save" || v.Name == "show" || v.Name == "check" || v.Name == "verify" || v.Name == "inspect" || v.Name == "approve" || v.Name == "revoke" {
 			modes++
@@ -78,6 +80,9 @@ func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 		if v.Name == "min-age-days" {
 			ageSet = true
 		}
+		if v.Name == "tree" {
+			treeSet = true
+		}
 		if v.Name == "directory" || v.Name == "d" {
 			aliases++
 		}
@@ -87,6 +92,9 @@ func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 	}
 	if confirmationSet && *approve == "" {
 		return r, usageError{errors.New("review confirmations are accepted only with --approve PLAN_ID")}
+	}
+	if treeSet && *inspect == "" {
+		return r, usageError{errors.New("--tree is accepted only with --inspect PLAN_ID")}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -174,7 +182,12 @@ func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 		}
 		defer scanner.Close()
 		if *inspect != "" {
-			inspection, err := scanner.Inspect(ctx, targets)
+			var inspection inventory.InspectionReport
+			if *tree {
+				inspection, err = scanner.InspectTree(ctx, targets)
+			} else {
+				inspection, err = scanner.Inspect(ctx, targets)
+			}
 			if err != nil {
 				return r, err
 			}
@@ -255,7 +268,9 @@ func printPlan(out io.Writer, result any, paths config.Paths) {
 				printWrapped(out, issue.Message, "  ")
 			}
 		} else {
-			if r.Inspection.Status == "inputs_observed" {
+			if r.Inspection.Status == "inputs_and_tree_observed" {
+				printResultBanner(out, "INPUTS AND TREE LAYOUT OBSERVED - REVIEW REQUIRED")
+			} else if r.Inspection.Status == "inputs_observed" {
 				printResultBanner(out, "INPUTS OBSERVED - REVIEW REQUIRED")
 			} else {
 				printResultBanner(out, "PROJECT INPUT CHECK BLOCKED - REVIEW REQUIRED")
@@ -270,11 +285,21 @@ func printPlan(out io.Writer, result any, paths config.Paths) {
 						printField(out, "Input", fmt.Sprintf("%s (%d bytes)", input.Name, input.Bytes))
 					}
 				}
+				if target.Tree != nil {
+					printField(out, "Tree entries", target.Tree.Entries)
+					printField(out, "Directories", target.Tree.Directories)
+					printField(out, "Regular files", target.Tree.RegularFiles)
+					printField(out, "Internal executable links", target.Tree.InternalBinLinks)
+				}
 			}
 		}
 		fmt.Fprintf(out, "Plan: %s\n", r.ID)
 		printWrapped(out, "This checks whether the observed package.json and package-lock.json inputs fit the supported npm format. It does not compare their contents with a saved baseline.", "")
 		fmt.Fprintln(out)
+		if r.Inspection != nil && r.Inspection.Source == "live_project_inputs_and_tree_metadata" {
+			printWrapped(out, "The tree check lists bounded recursive metadata and checks the supported npm layout and internal executable links. It does not establish a complete install. Ordinary dependency file contents are not read. The metadata digest has no saved baseline.", "")
+			fmt.Fprintln(out)
+		}
 		printWrapped(out, "Dependency contents are not checked. Local dependency edits and successful reinstall remain unknown.", "")
 		fmt.Fprintln(out)
 		printWrapped(out, "Project inputs and paths can change after this check. The result cannot authorize cleanup. No file contents or saved records were changed.", "")

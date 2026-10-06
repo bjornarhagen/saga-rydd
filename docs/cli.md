@@ -297,10 +297,10 @@ Work is bounded to 20 targets, 4096-byte paths, 256 absolute directory component
 ## Project input inspection
 
 ```sh
-rydd plan --inspect PLAN_ID [-d PATH] [--json]
+rydd plan --inspect PLAN_ID [--tree] [-d PATH] [--json]
 ```
 
-Inspection explicitly reads project inputs. `--verify` retains its metadata-only contract. The saved selection, age threshold, inventory snapshot, current configuration, exclusion rules, canonical path requirements and five-second cooperative deadline are the same as live verification. Review consent is independent and never required for this read-only command. Mixed modes, finding IDs, age overrides and confirmation flags are invalid usage. Changed or incomplete saved evidence prevents any input read.
+Inspection explicitly reads project inputs. `--verify` retains its metadata-only contract. Without `--tree`, inspection has no recursive listings. The saved selection, age threshold, inventory snapshot, current configuration, exclusion rules, canonical path requirements and five-second cooperative deadline are the same as live verification. Review consent is independent and never required for this read-only command. Mixed modes, finding IDs, age overrides and confirmation flags are invalid usage. `--tree` is accepted only with `--inspect`, even when set false; `--inspect --tree=false` retains input-only behaviour. Changed or incomplete saved evidence prevents any input read.
 
 After verifying the selected paths, inspection opens sibling `package.json` and `package-lock.json` through the held project directory. Inputs must be regular, supported local files with no symlinks, dataless flags, protected identities or mount boundaries. Files remain open until identities, size/mode/change times, named links and mounts are rechecked. Root/ancestor/target/manifest path checks also remain active. Observed mutations block the result. Paths and contents can change after the request; no permission or descriptors are returned for execution.
 
@@ -322,6 +322,35 @@ The JSON `plan` has `id`, `inventory_check` and, only after matching saved evide
 
 Input failure codes are `input_missing`, `input_invalid`, `input_unsupported`, `input_limit` and `input_changed_during_check`, in addition to the live path-check codes above. Exit 0 means the observation completed, including a block; inspect both inventory and inspection status. Invalid arguments/storage/configuration and cancellation retain the standard errors and exit codes.
 
-`current_state_verified`, `executable`, `regeneration_verified` and `dependency_contents_checked` remain false. `local_dependency_edits` remains `"unknown"`. The exact-byte digests describe this request only: existing plans contain no frozen lock-content baseline, and even a changed lock can fit the supported shape. No ordinary dependency files or hidden installed lock are opened, no recursive listing occurs, and no package manager or network request runs. Inspection changes no saved records or file contents; normal filesystem access times and SQLite reader sidecars may change.
+`current_state_verified`, `executable`, `regeneration_verified` and `dependency_contents_checked` remain false. `local_dependency_edits` remains `"unknown"`. The exact-byte digests describe this request only: existing plans contain no frozen lock-content baseline, and even a changed lock can fit the supported shape. No ordinary dependency files or hidden installed lock are opened. Input-only mode has no recursive listing. No package manager or network request runs. Inspection changes no saved records or file contents; normal filesystem access times and SQLite reader sidecars may change.
 
 Bounds are 256 KiB for a manifest, 2 MiB for a lock, a combined 50,000 decoded JSON values and 64 nesting levels, plus the existing 20-target/4096-byte/256-directory limits. One target's handles are closed before the next; at most 260 descriptors are used, apart from SQLite/runtime handles. Reads use 8 KiB chunks and cancellation checks between operations; blocked kernel calls can exceed the cooperative deadline. Provider hydration, physical remounts and continuously hostile namespace changes remain unverified. Capabilities expose `plan_input_inspection: true`; cleanup remains false.
+
+
+### Installed-tree metadata review
+
+```sh
+rydd plan --inspect PLAN_ID --tree [-d PATH] [--json]
+```
+
+This opt-in mode adds recursive metadata listings after the same supported project-input checks. It leaves input-only inspection unchanged. Success uses `inspection.source: "live_project_inputs_and_tree_metadata"` and `status: "inputs_and_tree_observed"` for the report and each target. Each successful target adds `tree` with `status: "metadata_observed"`, `entries`, `directories`, `regular_files`, `internal_bin_links` and `metadata_sha256`. Counts exclude the selected root. Blocked targets have neither partial inputs nor tree evidence; a blocked target blocks the report. The four verification/execution flags remain false and local dependency edits remain unknown.
+
+The initial installed-layout contract is narrow:
+
+| Location or object | Observation allowed |
+| --- | --- |
+| Install boundary | Exact lock-listed package directories, required scope containers and `.bin`. |
+| Root hidden lock | A regular `.package-lock.json`, inspected as metadata only; its body is never opened. |
+| Package interior | Ordinary single-link regular files and directories. A direct package `node_modules` starts another install boundary; deeper fixture directories with that name stay ordinary content. |
+| `.bin` entry | A relative symlink through observed directory components to a regular file with an executable mode bit inside a lock-listed package. |
+| Uncertain object | Missing/absolute/outside/chained links, multiple regular-file hardlinks, special file types, protected/excluded objects and mount boundaries block the result. |
+
+Raw symlink components are checked before normalization. A missing directory or regular file followed by `..` cannot be hidden by lexical cleaning. Symlinks are never followed by filesystem operations. Installed packages absent from the lock are refused at boundaries; lock entries absent from disk are allowed because omission or incomplete installation remains unknown. A supported layout does not establish a complete install, authentic package contents, absence of custom data inside packages or successful execution/reinstall.
+
+Each directory stream reads at most 128 names per batch. Directory handles remain open during descent, with no-follow opens, protected identity checks and named mount checks for both files and directories. Directory stamps are checked around listing; every descendant's name, identity, mode, size, link count, change/modification times and link text must agree with a second bounded metadata pass. The enclosing saved root/ancestor/path/manifest checks run after extended tree work. These are observations; concurrent changes after an object's last check remain possible.
+
+The digest uses a domain-separated `rydd-tree-metadata-v1` encoding of sorted relative path bytes and the checked metadata/link fields. It includes the root boundary record and excludes access times and file contents. Matching repeated digests describe matching observations, not a saved pristine-content baseline or cleanup permission. The JSON returns counts and digests without dumping filenames or link text. Ordinary dependency bodies and the hidden lock remain unopened; no source content or saved records are changed.
+
+Per target limits are 10,000 descendant entries, 64 relative directory levels (also at most 256 total absolute directory components), 4096-byte paths/link text and 4 MiB retained path/link bytes. The existing 20-target/input/JSON limits and shared cooperative five-second deadline apply. Handles are released between targets; at most 260 traversal/input handles are open, apart from SQLite/runtime handles. Limit exhaustion returns a block, never a partial positive observation. Cancellation uses the standard error. The synchronous pass has no durable cursor; large trees need separate review or a future resumable inspection.
+
+Additional block codes are `tree_layout_unknown`, `tree_link_unsupported`, `tree_unsupported`, `tree_limit` and `tree_changed_during_check`, plus input/live path codes. Exit 0 still means the check completed, including a block. Capabilities add `plan_tree_inspection: true`. Cleanup, restoration and automatic policies remain unavailable.

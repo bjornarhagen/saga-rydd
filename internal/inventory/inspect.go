@@ -38,6 +38,7 @@ type InspectionResult struct {
 	Code      string         `json:"code,omitempty"`
 	Message   string         `json:"message"`
 	Inputs    *InputEvidence `json:"inputs,omitempty"`
+	Tree      *TreeEvidence  `json:"tree,omitempty"`
 }
 
 type InspectionReport struct {
@@ -55,7 +56,21 @@ type InspectionReport struct {
 // Inspect observes selected project inputs. Digests describe this request only;
 // saved plans contain no lock-content baseline or verified regeneration proof.
 func (s *Scanner) Inspect(ctx context.Context, targets []state.LiveTarget) (InspectionReport, error) {
+	return s.inspect(ctx, targets, false)
+}
+
+// InspectTree additionally observes a bounded installed layout. Neither method
+// reads ordinary dependency contents or establishes that they are unmodified.
+func (s *Scanner) InspectTree(ctx context.Context, targets []state.LiveTarget) (InspectionReport, error) {
+	return s.inspect(ctx, targets, true)
+}
+
+func (s *Scanner) inspect(ctx context.Context, targets []state.LiveTarget, tree bool) (InspectionReport, error) {
 	r := InspectionReport{Status: "inputs_observed", Source: "live_project_inputs", LocalDependencyEdits: "unknown", Targets: []InspectionResult{}}
+	status := r.Status
+	if tree {
+		status, r.Status, r.Source = "inputs_and_tree_observed", "inputs_and_tree_observed", "live_project_inputs_and_tree_metadata"
+	}
 	if len(targets) < 1 || len(targets) > state.PreviewTargetLimit {
 		return InspectionReport{}, errors.New("input inspection requires 1–20 exact targets")
 	}
@@ -63,8 +78,11 @@ func (s *Scanner) Inspect(ctx context.Context, targets []state.LiveTarget) (Insp
 		if err := ctx.Err(); err != nil {
 			return InspectionReport{}, err
 		}
-		item := InspectionResult{FindingID: target.Finding.ID, Status: "inputs_observed", Message: "The manifest and npm lock inputs fit the supported format during this check. Local dependency edits and successful reinstall remain unknown."}
-		evidence, err := s.inspectTarget(ctx, target, nil)
+		item := InspectionResult{FindingID: target.Finding.ID, Status: status, Message: "The manifest and npm lock inputs fit the supported format during this check. Local dependency edits and successful reinstall remain unknown."}
+		if tree {
+			item.Message = "The project inputs and observed dependency layout fit the supported format during this check. File contents, local edits and successful reinstall remain unverified."
+		}
+		evidence, treeEvidence, err := s.inspectTargetWithTree(ctx, target, tree, nil)
 		if err != nil {
 			if ctx.Err() != nil {
 				return InspectionReport{}, ctx.Err()
@@ -78,6 +96,7 @@ func (s *Scanner) Inspect(ctx context.Context, targets []state.LiveTarget) (Insp
 			}
 		} else {
 			item.Inputs = &evidence
+			item.Tree = treeEvidence
 		}
 		r.Targets = append(r.Targets, item)
 	}
@@ -108,10 +127,17 @@ type inputReader struct {
 }
 
 func (s *Scanner) inspectTarget(ctx context.Context, target state.LiveTarget, beforeRecheck func()) (InputEvidence, error) {
+	evidence, _, err := s.inspectTargetWithTree(ctx, target, false, beforeRecheck)
+	return evidence, err
+}
+
+func (s *Scanner) inspectTargetWithTree(ctx context.Context, target state.LiveTarget, tree bool, beforeRecheck func()) (InputEvidence, *TreeEvidence, error) {
 	reader := inputReader{scanner: s, ctx: ctx, project: filepath.Dir(string(target.Finding.PathBytes))}
 	defer reader.close()
 	var evidence InputEvidence
-	err := s.verifyTargetWithVisit(ctx, target, func(parent int, mount string) error {
+	var treeEvidence *TreeEvidence
+	var treeCheck func() error
+	err := s.verifyTargetWithVisit(ctx, target, func(parent, targetFD int, mount string) error {
 		reader.parent, reader.mount = parent, mount
 		if err := reader.checkHints(); err != nil {
 			return err
@@ -124,7 +150,13 @@ func (s *Scanner) inspectTarget(ctx context.Context, target state.LiveTarget, be
 		if err != nil {
 			return err
 		}
-		summary, err := regeneration.Analyze(manifest, lock)
+		var summary regeneration.Summary
+		var layout regeneration.Layout
+		if tree {
+			summary, layout, err = regeneration.AnalyzeLayout(manifest, lock)
+		} else {
+			summary, err = regeneration.Analyze(manifest, lock)
+		}
 		if err != nil {
 			var failure regeneration.Error
 			if errors.As(err, &failure) {
@@ -133,12 +165,28 @@ func (s *Scanner) inspectTarget(ctx context.Context, target state.LiveTarget, be
 			return err
 		}
 		evidence = InputEvidence{LockfileVersion: summary.LockfileVersion, LockedPackages: summary.LockedPackages, Files: []InputFileEvidence{inputDigest("package.json", manifest), inputDigest("package-lock.json", lock)}}
+		if tree {
+			walker := newTreeReader(s, ctx, targetFD, string(target.Finding.PathBytes), mount, layout)
+			observed, err := walker.observe()
+			if err != nil {
+				return err
+			}
+			treeEvidence = &observed
+			treeCheck = walker.recheck
+		}
 		return nil
-	}, reader.recheck, beforeRecheck)
+	}, func() error {
+		if treeCheck != nil {
+			if err := treeCheck(); err != nil {
+				return err
+			}
+		}
+		return reader.recheck()
+	}, beforeRecheck)
 	if err != nil {
-		return InputEvidence{}, err
+		return InputEvidence{}, nil, err
 	}
-	return evidence, nil
+	return evidence, treeEvidence, nil
 }
 
 func inputDigest(name string, contents []byte) InputFileEvidence {

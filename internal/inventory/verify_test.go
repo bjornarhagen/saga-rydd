@@ -182,3 +182,19 @@ func TestLiveMetadataLimitsAndCancellation(t *testing.T) {
 		t.Fatal(r, err)
 	}
 }
+
+func TestLiveVisitorFinishesBeforeFinalPathCheck(t *testing.T) {
+	s, target := liveFixture(t)
+	project := filepath.Dir(string(target.Finding.PathBytes))
+	err := s.verifyTargetWithVisit(context.Background(), target, nil, func() error {
+		// Extended inspection can take time. A substitution during that work
+		// must be checked after it finishes, including ancestors above the tree.
+		if err := os.Rename(project, project+".old"); err != nil {
+			return err
+		}
+		return os.Symlink(project+".old", project)
+	}, nil)
+	if err == nil {
+		t.Fatal("accepted an ancestor substitution during the visitor's final work")
+	}
+}

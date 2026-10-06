@@ -46,6 +46,23 @@ func TestBindMountBoundary(t *testing.T) {
 			t.Fatal(r, err)
 		}
 	})
+	for _, kind := range []string{"file", "directory"} {
+		t.Run("tree_"+kind, func(t *testing.T) {
+			s, target := treeFixture(t, nil)
+			path := filepath.Join(string(target.Finding.PathBytes), "fixture-dep")
+			if kind == "file" {
+				path = filepath.Join(path, "bin.js")
+			}
+			if err := unix.Mount(path, path, "", unix.MS_BIND, ""); err != nil {
+				t.Fatal(err)
+			}
+			defer unix.Unmount(path, 0)
+			r, err := s.InspectTree(context.Background(), []state.LiveTarget{target})
+			if err != nil || r.Status != "blocked" || r.Targets[0].Code != "mount_boundary" {
+				t.Fatal(r, err)
+			}
+		})
+	}
 	s, j, root := scannerFixture(t)
 	source := t.TempDir()
 	write(t, filepath.Join(source, "outside"))

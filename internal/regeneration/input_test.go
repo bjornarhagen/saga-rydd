@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -58,6 +59,76 @@ func TestAnalyzeSupportedInputs(t *testing.T) {
 			if err != nil || summary.LockfileVersion != version || summary.LockedPackages != 3 {
 				t.Fatalf("summary=%+v err=%v", summary, err)
 			}
+		})
+	}
+}
+
+func TestAnalyzeLayoutExactSortedPaths(t *testing.T) {
+	for _, version := range []int{2, 3} {
+		t.Run(string(rune('0'+version)), func(t *testing.T) {
+			manifest, lock := fixture(t)
+			lock["lockfileVersion"] = version
+			packages := lock["packages"].(map[string]any)
+			packages["node_modules/zebra"] = locked("zebra", "2.0.0")
+			packages["node_modules/@scope/.pkg"] = locked("@scope/.pkg", "1.0.0")
+			packages["node_modules/foo/node_modules/bar"] = locked("bar", "3.0.0")
+			packages["node_modules/foo/node_modules/@nested/leaf"] = locked("@nested/leaf", "4.0.0")
+			manifestBytes, lockBytes := encode(t, manifest), encode(t, lock)
+			want := []string{
+				"node_modules/@scope/.pkg",
+				"node_modules/foo",
+				"node_modules/foo/node_modules/@nested/leaf",
+				"node_modules/foo/node_modules/bar",
+				"node_modules/zebra",
+			}
+			for range 8 {
+				summary, layout, err := AnalyzeLayout(manifestBytes, lockBytes)
+				if err != nil || summary.LockfileVersion != version || summary.LockedPackages != len(want) || !reflect.DeepEqual(layout.PackagePaths, want) {
+					t.Fatalf("summary=%+v layout=%+v err=%v", summary, layout, err)
+				}
+				ordinary, err := Analyze(manifestBytes, lockBytes)
+				if err != nil || ordinary != summary {
+					t.Fatalf("ordinary=%+v summary=%+v err=%v", ordinary, summary, err)
+				}
+			}
+		})
+	}
+}
+
+func TestAnalyzeLayoutWithoutLockedPackages(t *testing.T) {
+	manifest, lock := fixture(t)
+	delete(manifest, "dependencies")
+	packages := lock["packages"].(map[string]any)
+	delete(packages[""].(map[string]any), "dependencies")
+	delete(packages, "node_modules/foo")
+	summary, layout, err := AnalyzeLayout(encode(t, manifest), encode(t, lock))
+	if err != nil || summary.LockedPackages != 0 || layout.PackagePaths == nil || len(layout.PackagePaths) != 0 {
+		t.Fatalf("summary=%+v layout=%+v err=%v", summary, layout, err)
+	}
+}
+
+func TestAnalyzeLayoutNoPartialResultOnFailure(t *testing.T) {
+	manifest, lock := fixture(t)
+	manifestBytes, lockBytes := encode(t, manifest), encode(t, lock)
+	lock["packages"].(map[string]any)["node_modules/foo/node_modules/../custom"] = locked("custom", "1.0.0")
+	cases := []struct {
+		name, code string
+		manifest   []byte
+		lock       []byte
+	}{
+		{"invalid", "input_invalid", []byte(`{"name":"project","name":"ambiguous"}`), lockBytes},
+		{"unsupported", "input_unsupported", manifestBytes, encode(t, lock)},
+		{"limited", "input_limit", bytes.Repeat([]byte(" "), ManifestLimit+1), lockBytes},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			summary, layout, err := AnalyzeLayout(test.manifest, test.lock)
+			assertCode(t, err, test.code)
+			if summary != (Summary{}) || layout.PackagePaths != nil {
+				t.Fatalf("partial result: summary=%+v layout=%+v", summary, layout)
+			}
+			_, ordinaryErr := Analyze(test.manifest, test.lock)
+			assertCode(t, ordinaryErr, test.code)
 		})
 	}
 }

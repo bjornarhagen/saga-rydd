@@ -21,7 +21,7 @@ import (
 var inspectManifest = []byte(`{"name":"fixture","version":"1.0.0","dependencies":{"fixture-dep":"1.0.0"}}`)
 var inspectLock = []byte(`{"name":"fixture","version":"1.0.0","lockfileVersion":3,"requires":true,"packages":{"":{"name":"fixture","version":"1.0.0","dependencies":{"fixture-dep":"1.0.0"}},"node_modules/fixture-dep":{"version":"1.0.0","resolved":"https://registry.npmjs.org/fixture-dep/-/fixture-dep-1.0.0.tgz","integrity":"sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="}}}`)
 
-func inspectCLIFixture(t *testing.T, manifest, lock []byte) reviewCLI {
+func inspectCLIFixture(t *testing.T, manifest, lock []byte, setup ...func(string)) reviewCLI {
 	t.Helper()
 	f := reviewCLI{t: t, base: filepath.Join(t.TempDir(), "state"), root: filepath.Join(t.TempDir(), "project")}
 	modules := filepath.Join(f.root, "node_modules")
@@ -39,6 +39,9 @@ func inspectCLIFixture(t *testing.T, manifest, lock []byte) reviewCLI {
 		if err := os.WriteFile(filepath.Join(f.root, name), contents, 0600); err != nil {
 			t.Fatal(err)
 		}
+	}
+	for _, prepare := range setup {
+		prepare(f.root)
 	}
 	old := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 	for _, name := range []string{"node_modules", "package.json"} {

@@ -78,7 +78,7 @@ func (s *Scanner) verifyTarget(ctx context.Context, t state.LiveTarget, beforeRe
 
 // A visitor may inspect project inputs while the verified path handles remain
 // open. Its final check runs before these handles are released.
-func (s *Scanner) verifyTargetWithVisit(ctx context.Context, t state.LiveTarget, visit func(int, string) error, recheck func() error, beforeRecheck func()) error {
+func (s *Scanner) verifyTargetWithVisit(ctx context.Context, t state.LiveTarget, visit func(int, int, string) error, recheck func() error, beforeRecheck func()) error {
 	root, path := string(t.Root.PathBytes), string(t.Finding.PathBytes)
 	if !filepath.IsAbs(root) || filepath.Clean(root) != root || strings.ContainsRune(root, 0) || len(root) > 4096 || !filepath.IsAbs(path) || filepath.Clean(path) != path || strings.ContainsRune(path, 0) || len(path) > 4096 || !config.Within(path, root) || path == root || filepath.Base(path) != "node_modules" {
 		return blocked("scope_invalid", "The saved target is not an exact dependency directory inside its saved root.")
@@ -189,12 +189,17 @@ func (s *Scanner) verifyTargetWithVisit(ctx context.Context, t state.LiveTarget,
 		return err
 	}
 	if visit != nil {
-		if err = visit(parent, mount); err != nil {
+		if err = visit(parent, links[len(links)-1].fd, mount); err != nil {
 			return err
 		}
 	}
 	if beforeRecheck != nil {
 		beforeRecheck()
+	}
+	if recheck != nil {
+		if err = recheck(); err != nil {
+			return err
+		}
 	}
 	// Retain and recheck every parent link. A detached open directory must not
 	// be mistaken for the object currently reachable through the reviewed path.
@@ -230,11 +235,6 @@ func (s *Scanner) verifyTargetWithVisit(ctx context.Context, t state.LiveTarget,
 	}
 	if !sameStamp(manifest, after) {
 		return blocked("path_changed_during_check", "The manifest changed during validation.")
-	}
-	if recheck != nil {
-		if err = recheck(); err != nil {
-			return err
-		}
 	}
 	return ctx.Err()
 }

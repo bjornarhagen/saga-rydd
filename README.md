@@ -78,6 +78,7 @@ rydd plan --show PLAN_ID
 rydd plan --check PLAN_ID -d /path/to/project
 rydd plan --verify PLAN_ID -d /path/to/project
 rydd plan --inspect PLAN_ID -d /path/to/project
+rydd plan --inspect PLAN_ID --tree -d /path/to/project
 ```
 
 Use an actual finding ID, then replace `PLAN_ID` with the returned saved plan ID. Keep the same global `--data-dir` if you override it. The saved record contains the exact selection and evidence from one inventory snapshot. Later scans cannot add targets to it. Reopening works while the source folder or its inventory is offline.
@@ -87,6 +88,8 @@ Use an actual finding ID, then replace `PLAN_ID` with the returned saved plan ID
 `--verify` also reads current metadata for the selected root, path ancestors, dependency directory and `package.json`. It blocks changed, missing, excluded or symlinked paths and descendant mount boundaries. Use a canonical scan path: root aliases accepted by scanning are rejected by this stricter check. It does not read dependency contents, inspect the whole subtree or establish that cleanup is safe. No files are moved, and the result cannot authorize a later move.
 
 `--inspect` explicitly reads bounded `package.json` and `package-lock.json` contents after the same path checks. The first supported format is a narrow subset of npm lockfile versions 2 and 3 with public registry dependencies. It compares root dependency declarations and reports exact-byte digests. Unsupported managers, local sources, install scripts and project configuration need separate review. The command does not check installed dependency contents, detect local edits or prove that reinstall will succeed. Digests describe this request; saved plans have no frozen lock-content baseline. See the [input inspection contract](docs/cli.md#project-input-inspection).
+
+Add `--tree` to also inspect up to 10,000 installed entries through recursive metadata listings. It accepts lock-listed package directories, ordinary files and supported internal `.bin` links; it blocks unknown boundary entries, hardlinked files, special objects, exclusions and mount boundaries. Counts and a metadata digest describe the observed layout, including two matching metadata passes. Ordinary dependency contents remain unopened. This does not establish a complete or unmodified install, and large or unsupported trees need separate review. Input-only inspection stays unchanged.
 
 Plans are private local records in a separate database under the global data directory. Saving does not approve cleanup, move files or free space. Review consent can be recorded separately as described below. Cleanup remains unavailable; Rydd does not verify project activity or regeneration safety. These commands are building blocks for the future guided select-and-confirm flow.
 
