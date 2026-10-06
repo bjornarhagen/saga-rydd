@@ -93,7 +93,7 @@ rydd review -d /path/to/project --min-age-days 30
 2. Enter unique row numbers, such as `1,3`. Check the selected paths shown again.
 3. Type `save` to preserve that exact unapproved selection, or `back` or `quit`.
 
-Each page has at most 20 candidates. `next` replaces it with a later page; `refresh` returns to the first page. Numbers reset, and selections do not carry between pages. Unselected folders stay unchanged. This does not save a keep decision or hide candidates from later reports. EOF or Ctrl+C before saving ends review without publishing a plan.
+Each page has at most 20 candidates. `next` replaces it with a later page; `refresh` returns to the first page. Numbers reset, and selections do not carry between pages. Empty pages show rejection counts and a command to read the same saved page, preserving the folder, state location, age filter and cursor. Unselected folders stay unchanged. This does not save a keep decision or hide candidates from later reports. EOF or Ctrl+C before saving ends review without publishing a plan.
 
 The page is frozen before input. If the selected inventory evidence changes before saving, review refuses it and asks you to start again. Incomplete but unchanged evidence can be saved as a qualified historical record. Saving never records cleanup consent, moves files or verifies current source contents. Afterward, start another scan explicitly when needed. `review` prompts in text mode; use the finite report and plan commands for JSON workflows.
 

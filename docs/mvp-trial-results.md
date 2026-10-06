@@ -14,6 +14,8 @@ P2-05a now provides bounded per-page selection diagnostics in human and JSON out
 - Evaluate the tradeoff between dispatch pauses and progress through many small directories before changing resource defaults.
 - Ask owners whether a project is still used. Modification timestamps alone cannot establish inactivity or whether dependencies contain local edits.
 - Keep trial state and raw reports separate from public documentation. Publishing general lessons does not authorize disclosure of measurements or project details.
+- Guided review needs the same empty-page explanation as finite candidate reports. Keep the exact folder, private state, age and current-page cursor in any suggested command; a generic command can open a different inventory or page. P4-01e shares the bounded rejection summary on empty guided pages while preserving frozen nonempty selection evidence.
+- Separate a drained scan queue from completed saved size calculations. Foreground interruption can retain useful partial evidence; resume the same saved work before assessing completed coverage. Report and navigation commands must not start another pass.
 
 ## Remaining acceptance work
 

@@ -339,6 +339,30 @@ func printFindingReport(out io.Writer, r state.FindingReport, command string) {
 	for i, f := range r.Findings {
 		printFinding(out, i+1, f)
 	}
+	printFindingPageSummary(out, r)
+
+	if r.NextCursor != "" {
+		fmt.Fprintln(out, "\nMORE RESULTS")
+		if len(r.Findings) == 0 {
+			printWrapped(out, "This page is empty, but more saved entries remain.", "  ")
+		} else {
+			fmt.Fprintln(out, "  More saved entries remain.")
+		}
+		fmt.Fprintf(out, "  Next page:\n    %s --cursor %s\n", command, shellQuote(r.NextCursor))
+	} else {
+		fmt.Fprintln(out)
+		printWrapped(out, "End of saved entries. This does not prove the scan is complete.", "")
+	}
+	fmt.Fprintln(out, "\nABOUT THESE RESULTS")
+	printWrapped(out, fmt.Sprintf("Age filter: both the folder and package.json modification dates must be at least %d days old. Age alone does not establish inactivity or safe deletion.", r.MinimumAgeDays), "  ")
+	printWrapped(out, "Recognition uses the saved package.json filename. Its contents, lockfiles and project activity have not been checked. Do not add overlapping folder sizes.", "  ")
+	if len(r.Findings) > 0 {
+		printWrapped(out, "Removing dependencies can break builds or lose local edits. Reinstalling may need the right tools, lockfile, credentials and available packages.", "  ")
+	}
+
+}
+
+func printFindingPageSummary(out io.Writer, r state.FindingReport) {
 	fmt.Fprintln(out, "\nPAGE SUMMARY")
 	printField(out, "Saved entries checked", humanCount(r.EntriesExamined))
 	labels := map[string]string{
@@ -362,25 +386,6 @@ func printFindingReport(out io.Writer, r state.FindingReport, command string) {
 			label = d.Explanation
 		}
 		printField(out, label, humanCount(d.Count))
-	}
-
-	if r.NextCursor != "" {
-		fmt.Fprintln(out, "\nMORE RESULTS")
-		if len(r.Findings) == 0 {
-			printWrapped(out, "This page is empty, but more saved entries remain.", "  ")
-		} else {
-			fmt.Fprintln(out, "  More saved entries remain.")
-		}
-		fmt.Fprintf(out, "  Next page:\n    %s --cursor %s\n", command, shellQuote(r.NextCursor))
-	} else {
-		fmt.Fprintln(out)
-		printWrapped(out, "End of saved entries. This does not prove the scan is complete.", "")
-	}
-	fmt.Fprintln(out, "\nABOUT THESE RESULTS")
-	printWrapped(out, fmt.Sprintf("Age filter: both the folder and package.json modification dates must be at least %d days old. Age alone does not establish inactivity or safe deletion.", r.MinimumAgeDays), "  ")
-	printWrapped(out, "Recognition uses the saved package.json filename. Its contents, lockfiles and project activity have not been checked. Do not add overlapping folder sizes.", "  ")
-	if len(r.Findings) > 0 {
-		printWrapped(out, "Removing dependencies can break builds or lose local edits. Reinstalling may need the right tools, lockfile, credentials and available packages.", "  ")
 	}
 
 }

@@ -60,7 +60,11 @@ func review(ctx context.Context, args []string, paths config.Paths, in io.Reader
 			}
 			return fmt.Errorf("cannot freeze this review page; run review again after checking the saved scan: %w", err)
 		}
-		printReviewPage(out, page, *age)
+		command := candidateReportCommand(paths, root, *age)
+		if cursor != "" {
+			command += " --cursor " + shellQuote(cursor)
+		}
+		printReviewPage(out, page, *age, command)
 		for {
 			fmt.Fprint(out, "\nChoose numbers (for example 1,3), next, refresh, or quit: ")
 			if display.err != nil {
@@ -182,7 +186,7 @@ func checkReviewSelection(ctx context.Context, base string, selection state.Sele
 	return r.CheckSelection(ctx, selection)
 }
 
-func printReviewPage(out io.Writer, page reviewPage, age int) {
+func printReviewPage(out io.Writer, page reviewPage, age int, command string) {
 	printResultBanner(out, "REVIEW SAVED CANDIDATES - CLEANUP UNAVAILABLE")
 	printWrapped(out, fmt.Sprintf("%d candidate(s) on this page. Both saved modification dates must be at least %d days old. Age does not prove inactivity or safe deletion.", len(page.Evidence.Findings), age), "")
 	printWrapped(out, "The numbered rows are frozen saved evidence. Current files have not been checked. Sizes are not estimates of space you can free. Do not add overlapping sizes.", "")
@@ -195,7 +199,10 @@ func printReviewPage(out io.Writer, page reviewPage, age int) {
 		printWrapped(out, "End of saved entries. This does not prove the scan is complete.", "")
 	}
 	if len(page.Evidence.Findings) == 0 {
-		printWrapped(out, "No eligible candidates on this page. An empty page can still have more saved entries. Use report --candidates for selection details.", "")
+		printWrapped(out, "No eligible candidates on this page. An empty page can still have more saved entries.", "")
+		printFindingPageSummary(out, page.Evidence)
+		fmt.Fprintf(out, "\nView this saved-entry page again:\n  %s\n", command)
+		printWrapped(out, "A later scan can change these results.", "")
 	}
 	printWrapped(out, "Unselected folders stay unchanged. This does not save a keep decision or change future reports.", "")
 }
