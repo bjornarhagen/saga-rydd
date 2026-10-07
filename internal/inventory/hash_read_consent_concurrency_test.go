@@ -128,7 +128,11 @@ func TestHashReadConsentCloseCancelsSliceBeforeReleasingWriterLock(t *testing.T)
 	}
 	close(release)
 	first := finishHeldHashRead(t, done)
-	if !errors.Is(err, localfs.ErrLocked) || !errors.Is(first.err, context.Canceled) || first.result.Progress.SHA256 != "" || first.result.DurableOffset != 0 || first.result.Usage.ReadBytes != 32*1024 || first.result.ReservedBytes != FileHashStepByteLimit {
+	// life cancellation is synchronous; its AfterFunc propagation to the
+	// request context is asynchronous. The first buffer was already read at
+	// this seam, and any further reads must stay within the charged grant.
+	usage := first.result.Usage
+	if !errors.Is(err, localfs.ErrLocked) || !errors.Is(first.err, context.Canceled) || first.result.Progress.SHA256 != "" || first.result.DurableOffset != 0 || usage.ReadBytes < 32*1024 || usage.RequestedBytes < usage.ReadBytes || usage.RequestedBytes > FileHashStepByteLimit || first.result.ReservedBytes != FileHashStepByteLimit {
 		t.Fatal("close released writer ownership before accounting or lost canceled read usage", first, err)
 	}
 	select {
@@ -141,7 +145,7 @@ func TestHashReadConsentCloseCancelsSliceBeforeReleasingWriterLock(t *testing.T)
 	}
 	f.reopen(t)
 	snapshot := hashStoreSnapshot(t, f.store)
-	if snapshot.ReadConsent == nil || snapshot.ReadConsent.ID != approval.ID || snapshot.ReadConsent.Revocation != nil || snapshot.Work[0].DurableOffset != 0 || snapshot.Work[0].Sequence != 1 || snapshot.Work[0].LatestAttempt == nil || snapshot.Work[0].LatestAttempt.Status != "settled" || snapshot.Work[0].LatestAttempt.ReadBytes == nil || *snapshot.Work[0].LatestAttempt.ReadBytes != 32*1024 || snapshot.Budget.TotalReservedBytes != FileHashStepByteLimit || snapshot.Budget.TotalReadBytes != 32*1024 || snapshot.Budget.TotalUnknownReservedBytes != 0 {
+	if snapshot.ReadConsent == nil || snapshot.ReadConsent.ID != approval.ID || snapshot.ReadConsent.Revocation != nil || snapshot.Work[0].DurableOffset != 0 || snapshot.Work[0].Sequence != 1 || snapshot.Work[0].LatestAttempt == nil || snapshot.Work[0].LatestAttempt.Status != "settled" || snapshot.Work[0].LatestAttempt.RequestedBytes == nil || *snapshot.Work[0].LatestAttempt.RequestedBytes != usage.RequestedBytes || snapshot.Work[0].LatestAttempt.ReadBytes == nil || *snapshot.Work[0].LatestAttempt.ReadBytes != usage.ReadBytes || snapshot.Budget.TotalReservedBytes != FileHashStepByteLimit || snapshot.Budget.TotalRequestedBytes != usage.RequestedBytes || snapshot.Budget.TotalReadBytes != usage.ReadBytes || snapshot.Budget.TotalUnknownReservedBytes != 0 {
 		t.Fatal("reopen lost the canceled slice's known accounting or changed consent", snapshot)
 	}
 }
