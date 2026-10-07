@@ -53,6 +53,9 @@ func (s *HashStore) runNext(ctx context.Context, source *state.Store, scanner *S
 		return result, err
 	}
 	defer s.mu.Unlock()
+	if s.selectionOnly {
+		return result, errors.New("hash selection writers cannot dispatch source reads")
+	}
 	stop := context.AfterFunc(s.life, cancel)
 	defer stop()
 	if source == nil || scanner == nil || scanner.closed.Load() {

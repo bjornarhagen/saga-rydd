@@ -75,6 +75,16 @@ Page-local counts distinguish known device/inode objects, repeated saved aliases
 
 A separate library foundation supports bounded full hashing with private checkpoints and conservative byte reservations. `rydd hashes [--work WORK_ID] [--json]` reads its existing saved observations and whole-selection budget. This command does not create, recover or resume work; CLI content reads and worker integration remain pending. See [durable hashing limits](docs/inventory.md#explicit-file-observations-and-durable-hashing).
 
+## Save an exact hashing proposal
+
+```sh
+rydd report --same-size -d /path/to/project --json > /path/to/private/same-size.json
+rydd hash --select -d /path/to/project --from /path/to/private/same-size.json 12 18
+rydd hash --show SELECTION_ID --json
+```
+
+Use the saved file IDs from that report and the returned selection ID. The report file contains private paths. This captures one immutable unapproved proposal and shows its complete saved evidence. Changed rows or a different selection are refused. Selection and display open no selected file contents, start no scanner and recover no hashing work. CLI read approval and execution remain pending.
+
 ## Preview an exact selection
 
 ```sh

@@ -40,28 +40,30 @@ var ErrHashDeferred = errors.New("hashing is deferred by the reservation budget 
 var ErrHashRecoveryRequired = errors.New("hash publication is uncertain; close and reopen storage before dispatching work")
 
 // HashStore preserves one finite selected batch separately from inventory.
-// This library foundation has no CLI, read-consent or cleanup authority.
+// Saved evidence supplies no source-read consent or cleanup authority.
 type HashStore struct {
-	db         *sql.DB
-	base       string
-	readOnly   bool
-	lock       *localfs.Lock
-	mu         sync.Mutex
-	closed     atomic.Bool
-	poisoned   bool
-	now        func() time.Time
-	life       context.Context
-	cancel     context.CancelFunc
-	closeErr   error
-	storageIDs map[string]string
+	db            *sql.DB
+	base          string
+	readOnly      bool
+	selectionOnly bool
+	lock          *localfs.Lock
+	mu            sync.Mutex
+	closed        atomic.Bool
+	poisoned      bool
+	now           func() time.Time
+	life          context.Context
+	cancel        context.CancelFunc
+	closeErr      error
+	storageIDs    map[string]string
 }
 
 type hashSelectionRecord struct {
-	Version     int               `json:"version"`
-	StoreID     string            `json:"store_id"`
-	Scope       string            `json:"scope"`
-	InventoryID string            `json:"inventory_id"`
-	Targets     []SavedFileTarget `json:"targets"`
+	Version       int                `json:"version"`
+	StoreID       string             `json:"store_id"`
+	Scope         string             `json:"scope"`
+	InventoryID   string             `json:"inventory_id"`
+	Targets       []SavedFileTarget  `json:"targets"`
+	SourceLocator *HashSourceLocator `json:"source_locator,omitempty"`
 }
 
 // HashBudget measures charged allowances by their UTC reservation day. It is
@@ -145,7 +147,17 @@ func OpenHashReader(ctx context.Context, base string) (*HashStore, error) {
 	return openHashStore(ctx, base, true)
 }
 
+// OpenHashSelectionWriter may initialize private storage, but never reconciles
+// existing attempts. It cannot dispatch source reads or restore continuations.
+func OpenHashSelectionWriter(ctx context.Context, base string) (*HashStore, error) {
+	return openHashStoreMode(ctx, base, false, true)
+}
+
 func openHashStore(ctx context.Context, base string, readOnly bool) (*HashStore, error) {
+	return openHashStoreMode(ctx, base, readOnly, false)
+}
+
+func openHashStoreMode(ctx context.Context, base string, readOnly, selectionOnly bool) (*HashStore, error) {
 	ctx, cancelOpen := context.WithTimeout(ctx, 5*time.Second)
 	defer cancelOpen()
 	if !filepath.IsAbs(base) || filepath.Clean(base) != base || len(base) > 4096 || strings.ContainsRune(base, 0) {
@@ -166,7 +178,7 @@ func openHashStore(ctx context.Context, base string, readOnly bool) (*HashStore,
 			return nil, errors.New("hash storage must not use directory aliases")
 		}
 	}
-	s := &HashStore{base: base, readOnly: readOnly, now: time.Now}
+	s := &HashStore{base: base, readOnly: readOnly, selectionOnly: selectionOnly, now: time.Now}
 	s.life, s.cancel = context.WithCancel(context.Background())
 	fail := func(err error) (*HashStore, error) {
 		if s.db != nil {
@@ -260,7 +272,7 @@ func openHashStore(ctx context.Context, base string, readOnly bool) (*HashStore,
 	} else if app != hashStoreApplicationID || version != 1 {
 		return fail(ErrHashStoreCorrupt)
 	}
-	if !readOnly {
+	if !readOnly && !selectionOnly {
 		if err = s.recoverHashWork(ctx); err != nil {
 			return fail(err)
 		}
@@ -423,6 +435,10 @@ func (s *HashStore) Close() error {
 // CreateSelection captures current saved bindings without opening source paths.
 // One frozen batch is supported; changed evidence can never replace its targets.
 func (s *HashStore) CreateSelection(ctx context.Context, source *state.Store, inventoryID string, expected []state.SameSizeFile) (HashSnapshot, error) {
+	return s.createHashSelection(ctx, source, inventoryID, expected, nil)
+}
+
+func (s *HashStore) createHashSelection(ctx context.Context, source *state.Store, inventoryID string, expected []state.SameSizeFile, locator *HashSourceLocator) (HashSnapshot, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err := s.acquire(ctx, true); err != nil {
@@ -454,11 +470,22 @@ func (s *HashStore) CreateSelection(ctx context.Context, source *state.Store, in
 	if err = boundedSampleRequest(targets); err != nil {
 		return HashSnapshot{}, err
 	}
+	if locator != nil {
+		for _, target := range targets {
+			if !bytes.Equal(target.Root.PathBytes, locator.RootPathBytes) {
+				return HashSnapshot{}, ErrHashManualRoot
+			}
+		}
+	}
 	current, _, err := s.readHashSnapshot(ctx, s.db)
 	if err != nil {
 		return HashSnapshot{}, err
 	}
 	record := hashSelectionRecord{Version: 1, StoreID: current.StoreID, Scope: hashStoreScope, InventoryID: inventoryID, Targets: targets}
+	if locator != nil {
+		record.Version = 2
+		record.SourceLocator = &HashSourceLocator{Kind: locator.Kind, RootPathBytes: bytes.Clone(locator.RootPathBytes), InventoryKey: locator.InventoryKey}
+	}
 	payload, err := json.Marshal(record)
 	if err != nil || len(payload) > state.FileSampleEvidenceLimit {
 		if err == nil {
@@ -569,7 +596,7 @@ func (s *HashStore) readHashSnapshot(ctx context.Context, db hashQuery) (HashSna
 	var record hashSelectionRecord
 	d := json.NewDecoder(bytes.NewReader(payload))
 	d.DisallowUnknownFields()
-	if d.Decode(&record) != nil || d.Decode(new(any)) != io.EOF || record.Version != 1 || record.StoreID != out.StoreID || record.Scope != hashStoreScope || !hashStoreDigest(record.InventoryID) || boundedSampleRequest(record.Targets) != nil {
+	if d.Decode(&record) != nil || d.Decode(new(any)) != io.EOF || !validHashSelectionSource(record) || record.StoreID != out.StoreID || record.Scope != hashStoreScope || !hashStoreDigest(record.InventoryID) || boundedSampleRequest(record.Targets) != nil {
 		return out, nil, ErrHashStoreCorrupt
 	}
 	canonical, _ := json.Marshal(record)

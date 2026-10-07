@@ -24,6 +24,7 @@ func printSameSizeReport(out io.Writer, r state.SameSizeReport, command string) 
 		}
 		for _, file := range band.Files {
 			fmt.Fprintf(out, "\n  %q\n", string(file.PathBytes))
+			printField(out, "Saved file ID", file.ID)
 			printField(out, "Allocated on disk", humanBytes(file.Allocated))
 			printField(out, "Parent folder listing", parentLabel(file.ParentPass))
 		}
