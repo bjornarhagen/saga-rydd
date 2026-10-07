@@ -23,6 +23,10 @@ func printHashResult(out io.Writer, result any) error {
 		return printHashKeeperChoiceMetadata(out, result)
 	case inventory.HashKeeperChoiceFreshRequestReport:
 		return printHashKeeperChoiceFreshRequest(out, result)
+	case HashFreshJobKeyResult:
+		return printHashFreshJobKey(out, result)
+	case HashFreshChoiceJobResult:
+		return printHashFreshChoiceJob(out, result)
 	default:
 		return errors.New("unknown hash command result")
 	}

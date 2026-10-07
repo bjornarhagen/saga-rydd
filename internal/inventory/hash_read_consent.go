@@ -161,7 +161,7 @@ func (s *HashStore) readHashReadConsent(ctx context.Context, db hashQuery, recor
 	if version == 1 {
 		return nil, nil
 	}
-	if version != 2 && version != 3 {
+	if version != 2 && version != 3 && version != 4 {
 		return nil, ErrHashStoreCorrupt
 	}
 	var count int

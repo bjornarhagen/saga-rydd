@@ -143,10 +143,10 @@ func (s *HashStore) saveKeeperChoice(ctx context.Context, expected HashKeeperPre
 		return SavedHashKeeperChoice{}, err
 	}
 	var version int
-	if err = tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil || version < 1 || version > 3 {
+	if err = tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil || version < 1 || version > 4 {
 		return SavedHashKeeperChoice{}, hashKeeperChoiceFailure(ctx, ErrHashKeeperChoiceCorrupt)
 	}
-	if version == 3 {
+	if version >= 3 {
 		var id string
 		err = tx.QueryRowContext(ctx, "SELECT substr(CAST(id AS BLOB),1,80) FROM hash_keeper_choice WHERE request_key=?", key).Scan(&id)
 		if err == nil {
@@ -217,7 +217,10 @@ func (s *HashStore) saveKeeperChoice(ctx context.Context, expected HashKeeperPre
 		s.poisoned = true
 		return saved, fmt.Errorf("choice %s publication is uncertain; close storage and inspect this ID or repeat the exact request: %w", id, ErrHashRecoveryRequired)
 	}
-	s.schemaVersion = 3
+	if version < 3 {
+		version = 3
+	}
+	s.schemaVersion = version
 	if hooks.afterCommit != nil {
 		hooks.afterCommit()
 	}
@@ -297,7 +300,7 @@ func (s *HashStore) readHashKeeperChoice(ctx context.Context, db hashQuery, id s
 	if version < 3 {
 		return SavedHashKeeperChoice{}, fmt.Errorf("saved historical choice %s is unavailable: %w", id, os.ErrNotExist)
 	}
-	if version != 3 {
+	if version != 3 && version != 4 {
 		return SavedHashKeeperChoice{}, ErrHashKeeperChoiceCorrupt
 	}
 	if _, err = hashKeeperChoiceCount(ctx, db); err != nil {

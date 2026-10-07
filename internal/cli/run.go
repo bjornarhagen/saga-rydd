@@ -54,6 +54,9 @@ Commands:
                                                      Save historical roles; no source reads or cleanup
   hash --check-choice CHOICE_ID [--json]              Screen exact metadata; no file bodies or approval
   hash --request-choice CHOICE_ID [--json]            Review a fresh-read request; nothing is saved
+  hash --new-job-key [--json]                        Generate a fresh job retry key; nothing is saved
+  hash --save-choice-job CHOICE_ID --job-key KEY      Save an independent unapproved fresh job
+  hash --show-job JOB_ID [--json]                    Show saved fresh work; no source access
   hash --select -d ROOT --from REPORT_JSON FILE_ID... Save unapproved hash metadata; no source contents
   hash --show SELECTION_ID [--json]                 Show exact saved hash proposal; no source reads
   hash --approve SELECTION_ID --confirm-content-read --max-day-bytes N --max-total-bytes N
@@ -189,6 +192,10 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 				err = fmt.Errorf("choice %s metadata screen reply was canceled; no screen result was saved: %w", choice.ChoiceID, ctx.Err())
 			case inventory.HashKeeperChoiceFreshRequestReport:
 				err = fmt.Errorf("choice %s fresh-read request reply was canceled; no request was saved: %w", choice.ChoiceID, ctx.Err())
+			case HashFreshJobKeyResult:
+				err = fmt.Errorf("fresh job key reply was canceled; nothing was saved: %w", ctx.Err())
+			case HashFreshChoiceJobResult:
+				err = fmt.Errorf("fresh job %s reply was canceled; inspect hash --show-job %s or repeat the same choice with --job-key %s: %w", choice.Job.ID, choice.Job.ID, choice.Job.Record.JobKey, ctx.Err())
 			}
 		}
 	case "report":

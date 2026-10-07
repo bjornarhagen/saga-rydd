@@ -65,8 +65,8 @@ func validHashSelectionID(value string) bool {
 }
 
 func hash(ctx context.Context, args []string, paths config.Paths) (any, error) {
-	var selectMode, confirmRead hashSelectOption
-	var show, directory, from, approve, run, revoke, day, total, saveChoice, checkChoice, requestChoice, keeper hashOption
+	var selectMode, confirmRead, newJobKey hashSelectOption
+	var show, directory, from, approve, run, revoke, day, total, saveChoice, checkChoice, requestChoice, keeper, saveChoiceJob, showJob, jobKey hashOption
 	f := flag.NewFlagSet("hash", flag.ContinueOnError)
 	f.SetOutput(io.Discard)
 	f.Var(&selectMode, "select", "save an exact unapproved metadata selection")
@@ -74,6 +74,10 @@ func hash(ctx context.Context, args []string, paths config.Paths) (any, error) {
 	f.Var(&saveChoice, "save-choice", "save explicitly selected historical keeper/copy roles; no cleanup approval")
 	f.Var(&checkChoice, "check-choice", "screen one saved choice's exact live metadata; no file-body reads or approval")
 	f.Var(&requestChoice, "request-choice", "review an unapproved fresh-read request from one saved choice; nothing is saved or read from sources")
+	f.Var(&newJobKey, "new-job-key", "generate an explicit fresh job retry key without saving or reading storage")
+	f.Var(&saveChoiceJob, "save-choice-job", "save a separate unapproved fresh job from one exact saved choice")
+	f.Var(&jobKey, "job-key", "with --save-choice-job, one explicit stable job retry key")
+	f.Var(&showJob, "show-job", "show one existing fresh job without source access")
 	f.Var(&keeper, "keeper", "with --save-choice, one explicit keeper work ID")
 	f.Var(&directory, "d", "exact manual scan root")
 	f.Var(&directory, "directory", "exact manual scan root")
@@ -88,13 +92,37 @@ func hash(ctx context.Context, args []string, paths config.Paths) (any, error) {
 		return inventory.HashProposal{}, usageError{err}
 	}
 	modes := 0
-	for _, set := range []bool{selectMode.set, show.set, approve.set, run.set, revoke.set, saveChoice.set, checkChoice.set, requestChoice.set} {
+	for _, set := range []bool{selectMode.set, show.set, approve.set, run.set, revoke.set, saveChoice.set, checkChoice.set, requestChoice.set, newJobKey.set, saveChoiceJob.set, showJob.set} {
 		if set {
 			modes++
 		}
 	}
 	if modes != 1 {
-		return nil, usageError{errors.New("hash requires exactly one of --select, --show, --save-choice, --check-choice, --request-choice, --approve, --run or --revoke")}
+		return nil, usageError{errors.New("hash requires exactly one of --select, --show, --save-choice, --check-choice, --request-choice, --new-job-key, --save-choice-job, --show-job, --approve, --run or --revoke")}
+	}
+	if newJobKey.set || saveChoiceJob.set || showJob.set {
+		if directory.set || from.set || keeper.set || confirmRead.set || day.set || total.set || f.NArg() != 0 {
+			return nil, usageError{errors.New("fresh-job modes accept no root, report, target, keeper, read confirmation or budget options")}
+		}
+		if newJobKey.set {
+			if !newJobKey.value || jobKey.set {
+				return nil, usageError{errors.New("hash --new-job-key takes no key or target; use the generated key explicitly when saving a job")}
+			}
+			return hashNewFreshJobKey(ctx)
+		}
+		if showJob.set {
+			if jobKey.set || !inventory.ValidHashFreshJobID(showJob.value) {
+				return nil, usageError{errors.New("hash --show-job requires one full saved hash-choice-job-v1 ID and no key or other options")}
+			}
+			return hashShowFreshChoiceJob(ctx, paths, showJob.value)
+		}
+		if !jobKey.set || !inventory.ValidHashKeeperChoiceID(saveChoiceJob.value) || !inventory.ValidHashFreshJobKey(jobKey.value) {
+			return nil, usageError{errors.New("hash --save-choice-job requires one full saved choice ID and --job-key KEY from --new-job-key; no key is generated implicitly")}
+		}
+		return hashSaveFreshChoiceJob(ctx, paths, saveChoiceJob.value, jobKey.value)
+	}
+	if jobKey.set {
+		return nil, usageError{errors.New("--job-key requires hash --save-choice-job")}
 	}
 	if requestChoice.set {
 		if directory.set || from.set || keeper.set || confirmRead.set || day.set || total.set || f.NArg() != 0 || !inventory.ValidHashKeeperChoiceID(requestChoice.value) {

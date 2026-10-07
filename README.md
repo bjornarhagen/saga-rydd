@@ -144,7 +144,21 @@ rydd hash --request-choice CHOICE_ID --json
 
 This saved-only review preserves the exact keeper and ordered copies, their full frozen target evidence, and the historical context saved with the choice. It works with source files and inventory offline and does not load configuration. The request ID identifies this exact proposed scope; it is separate from a future job or read approval.
 
-Nothing is saved or read from source files. No old approval is renewed and no hashing charges are changed. A fresh job, separate consent and guarded dispatch remain later work. This request proves neither current equality nor safe cleanup.
+Nothing is saved or read from source files. No old approval is renewed and no hashing charges are changed. This request proves neither current equality nor safe cleanup.
+
+## Save and reopen an independent fresh job
+
+```sh
+rydd hash --new-job-key
+rydd hash --save-choice-job CHOICE_ID --job-key KEY
+rydd hash --show-job JOB_ID --json
+```
+
+Generate and keep an explicit key before saving. Reuse that key with the same choice after a failed reply; the exact retry returns the first job, time and evidence. The same key with a different choice is refused. A new key creates a separate unapproved job.
+
+The job preserves exact selected roles and frozen targets, with zero fresh progress and byte charges. Original hashing records and approvals remain unchanged. Archived choice context and original context at first job publication are labelled separately from new work. Saving and reopening work with source files, inventory and configuration offline. Up to 128 immutable jobs fit in one hash store, each at most 2 MiB.
+
+Job creation does not authorize or start a read. Fresh consent and guarded dispatch remain later work. Keep the job ID, key and original private data directory. Failed output can leave a saved job; inspect the ID or repeat the exact key before creating another generation.
 
 ## Save an exact hashing proposal
 

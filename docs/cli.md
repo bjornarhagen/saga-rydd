@@ -613,6 +613,26 @@ Human output leads with the unapproved request, shows exact roles and frozen sco
 
 Saved SQLite pages can be read and normal reader sidecars/access times can change. Source bodies and saved records are unchanged. The request does not evaluate current files or consent and gives no fresh-read or cleanup permission. Durable fresh jobs, new consent and dispatch are not implemented by this command.
 
+## Save and reopen independent fresh jobs
+
+```sh
+rydd hash --new-job-key [--json]
+rydd hash --save-choice-job CHOICE_ID --job-key KEY [--json]
+rydd hash --show-job JOB_ID [--json]
+```
+
+These exclusive finite modes add no source, configuration or inventory access. Key generation opens no storage and returns an unsaved `hash-job-key-v1-` key with 64 lowercase hex characters. Saving requires the exact existing choice ID and an explicit key; it never generates another key after failure. Showing requires one full `hash-choice-job-v1-` ID. Repeated/mixed modes, positional IDs and root/report/keeper/confirmation/budget overrides are invalid before storage access. `--job-key` is valid only with `--save-choice-job`. Missing storage never initializes.
+
+Saving prepares an opaque exact request from an existing hash reader and closes the reader before the request-aware writer checks captured physical private objects and all-proposal known aliases. The writer opens existing state without recovery; it stays bound to that request. One five-second context covers preparation and publication. Atomic hash-schema 3→4 publication creates one immutable job and exact ordered pending rows. Every row starts at sequence/checked offset zero, with no old SHA continuation, attempt, consent or charge. Original work/reservations/consent clocks and all original reports are unchanged. Saved readers accept schema 4 without migration.
+
+The key is unique across the store. Same key plus exact request returns the first immutable job ID, creation time and publication context, including at capacity. Same key with a different request uses `hash_fresh_job_conflict` and saves nothing. A new explicit key creates another unapproved generation. The limit is 128 jobs, each at most 2 MiB; refusal uses `hash_fresh_job_capacity`. Strict canonical/digest/request/work binding failures use `hash_fresh_job_invalid`; changed publication evidence uses `hash_fresh_job_evidence_changed`. Missing jobs/storage use `not_found`. Errors expose no partial successful result.
+
+JSON uses the standard `hash` envelope. Key generation returns contract `fresh_hash_job_key_v1`, `job_key`, and false `saved`, `approval_available` and `executable` fields. Save/show returns `mode` and `job`. The saved job contains its separate ID, immutable version-1 record with contract `choice_bound_fresh_full_hash_job_v1`, creation time, explicit key, status `unapproved`, exact request and original context at first publication. Ordered fresh work maps each new ordinal to its historical work ID/role and frozen target digest. Fresh byte counters are zero. Approval/verification/executable fields remain false and reclaimable bytes null. Archived choice context stays inside the request; original first-publication context is separate and never refreshed on retry. Neither supplies permission or allowance for fresh work.
+
+Human output shows exact roles, zero fresh progress/charges and the separately labelled original context. Failed publication/close/output or late cancellation retains the job ID and explicit key in diagnostics so the user can inspect or repeat the exact request. A failed reply can leave a published job; never replace its key implicitly. Machine output can be partial or contain one already-written result, returns exit 1 on output failure/cancellation and never appends a second envelope. Key generation and showing perform no publication; neither claims a new saved result. Capabilities include `saved_fresh_hash_jobs: true`.
+
+These commands create no read consent, evaluate no current source state, perform no interrupted-work recovery and start no source reads. Source contents and original hashing records remain unchanged. New consent, independent durable accounting and guarded fresh dispatch remain separate work. A job or key is not cleanup authority.
+
 ## Save and show a hash proposal
 
 ```sh
