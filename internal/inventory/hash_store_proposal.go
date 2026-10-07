@@ -28,7 +28,8 @@ type HashSourceLocator struct {
 }
 
 // HashProposal exposes the complete frozen evidence for review. It contains no
-// checkpoint state, resume offset, consent or executable operation.
+// checkpoint state, resume offset or executable operation. Any separate saved
+// read consent leaves current permission unevaluated.
 type HashProposal struct {
 	StoreID                   string             `json:"store_id"`
 	SelectionID               string             `json:"selection_id"`
@@ -37,6 +38,7 @@ type HashProposal struct {
 	Contract                  string             `json:"contract"`
 	SourceLocator             *HashSourceLocator `json:"source_locator,omitempty"`
 	Targets                   []SavedFileTarget  `json:"targets"`
+	ReadConsent               *HashReadConsent   `json:"read_consent,omitempty"`
 	ProvenanceVerified        bool               `json:"provenance_verified"`
 	ContentVerified           bool               `json:"content_verified"`
 	CurrentStateVerified      bool               `json:"current_state_verified"`
@@ -115,7 +117,7 @@ func (s *HashStore) Proposal(ctx context.Context, selectionID string) (HashPropo
 	if record == nil || snapshot.SelectionID != selectionID {
 		return HashProposal{}, fmt.Errorf("saved hash selection not found: %w", os.ErrNotExist)
 	}
-	proposal := HashProposal{StoreID: snapshot.StoreID, SelectionID: snapshot.SelectionID, InventoryID: record.InventoryID, Source: "saved_hash_selection", Contract: FileHashContract, Targets: make([]SavedFileTarget, len(record.Targets))}
+	proposal := HashProposal{StoreID: snapshot.StoreID, SelectionID: snapshot.SelectionID, InventoryID: record.InventoryID, Source: "saved_hash_selection", Contract: FileHashContract, Targets: make([]SavedFileTarget, len(record.Targets)), ReadConsent: snapshot.ReadConsent}
 	for i, target := range record.Targets {
 		proposal.Targets[i] = cloneHashTarget(target)
 	}

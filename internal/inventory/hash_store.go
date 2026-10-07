@@ -46,6 +46,7 @@ type HashStore struct {
 	base          string
 	readOnly      bool
 	selectionOnly bool
+	schemaVersion int
 	lock          *localfs.Lock
 	mu            sync.Mutex
 	closed        atomic.Bool
@@ -109,19 +110,20 @@ type SavedHashWork struct {
 
 // Snapshot digests describe saved historical observations, never current files.
 type HashSnapshot struct {
-	StoreID                   string          `json:"store_id"`
-	SelectionID               string          `json:"selection_id,omitempty"`
-	InventoryID               string          `json:"inventory_id,omitempty"`
-	Source                    string          `json:"source"`
-	Contract                  string          `json:"contract"`
-	Budget                    *HashBudget     `json:"budget,omitempty"`
-	Work                      []SavedHashWork `json:"work"`
-	ProvenanceVerified        bool            `json:"provenance_verified"`
-	ContentVerified           bool            `json:"content_verified"`
-	CurrentStateVerified      bool            `json:"current_state_verified"`
-	DuplicatesVerified        bool            `json:"duplicates_verified"`
-	Executable                bool            `json:"executable"`
-	EstimatedReclaimableBytes *int64          `json:"estimated_reclaimable_bytes"`
+	StoreID                   string           `json:"store_id"`
+	SelectionID               string           `json:"selection_id,omitempty"`
+	InventoryID               string           `json:"inventory_id,omitempty"`
+	Source                    string           `json:"source"`
+	Contract                  string           `json:"contract"`
+	Budget                    *HashBudget      `json:"budget,omitempty"`
+	Work                      []SavedHashWork  `json:"work"`
+	ReadConsent               *HashReadConsent `json:"read_consent,omitempty"`
+	ProvenanceVerified        bool             `json:"provenance_verified"`
+	ContentVerified           bool             `json:"content_verified"`
+	CurrentStateVerified      bool             `json:"current_state_verified"`
+	DuplicatesVerified        bool             `json:"duplicates_verified"`
+	Executable                bool             `json:"executable"`
+	EstimatedReclaimableBytes *int64           `json:"estimated_reclaimable_bytes"`
 }
 
 type hashStoredWork struct {
@@ -138,6 +140,8 @@ type hashStoredAttempt struct {
 	HashAttempt
 	nonce            string
 	sequence, offset int64
+	clockHighWater   time.Time // fresh consent observation from reservation transaction
+	guardCode        string    // transient refusal reason; never submitted or persisted
 }
 
 func OpenHashWriter(ctx context.Context, base string) (*HashStore, error) {
@@ -269,8 +273,15 @@ func openHashStoreMode(ctx context.Context, base string, readOnly, selectionOnly
 		if e = tx.Commit(); e != nil {
 			return fail(e)
 		}
-	} else if app != hashStoreApplicationID || version != 1 {
+		version = 1
+	} else if app != hashStoreApplicationID || (version != 1 && version != 2) {
 		return fail(ErrHashStoreCorrupt)
+	}
+	s.schemaVersion = version
+	if !readOnly && version == 1 {
+		if err = s.migrateHashReadSchema(ctx); err != nil {
+			return fail(err)
+		}
 	}
 	if !readOnly && !selectionOnly {
 		if err = s.recoverHashWork(ctx); err != nil {
@@ -585,7 +596,8 @@ func (s *HashStore) readHashSnapshot(ctx context.Context, db hashQuery) (HashSna
 			}
 			return out, nil, err
 		}
-		return out, nil, nil
+		out.ReadConsent, err = s.readHashReadConsent(ctx, db, nil, out.SelectionID, budget)
+		return out, nil, err
 	}
 	if err != nil {
 		return out, nil, err
@@ -661,7 +673,8 @@ func (s *HashStore) readHashSnapshot(ctx context.Context, db hashQuery) (HashSna
 		}
 		return out, nil, err
 	}
-	return out, &record, nil
+	out.ReadConsent, err = s.readHashReadConsent(ctx, db, &record, out.SelectionID, budget)
+	return out, &record, err
 }
 
 func readHashWork(ctx context.Context, db hashQuery, record *hashSelectionRecord, selectionID string, id int) (hashStoredWork, error) {

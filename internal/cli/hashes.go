@@ -119,6 +119,7 @@ func printHashes(out io.Writer, r HashReport) error {
 		}
 	}
 	printHashBudget(guard, r.Budget)
+	printHashReadConsent(guard, r.ReadConsent)
 	printWrapped(guard, "Saved running state does not prove a process is active. This command does not recover, resume or start work. No source files or saved records were changed.", "")
 	if guard.err != nil {
 		return fmt.Errorf("write hash report: %w", guard.err)
@@ -187,5 +188,5 @@ func printHashBudget(out io.Writer, budget *inventory.HashBudget) {
 	} {
 		printField(out, item.label, humanBytes(item.value))
 	}
-	printWrapped(out, "These counters cover the whole saved selection, including work not shown. Reservations are full charged allowances and are never refunded. Interrupted charges count recovered attempts with unknown usage. Unsettled reservations remain charged but are excluded from the interrupted counters. Known counters omit attempts with unknown usage. They do not measure physical I/O or reads per wall-clock day. A daily limit and remaining quota are not saved.", "")
+	printWrapped(out, "These counters cover the whole saved selection, including work not shown. Reservations are full charged allowances and are never refunded. Interrupted charges count recovered attempts with unknown usage. Unsettled reservations remain charged but are excluded from the interrupted counters. Known counters omit attempts with unknown usage. They do not measure physical I/O or reads per wall-clock day. The budget itself does not store a limit or calculate remaining quota.", "")
 }

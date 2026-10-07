@@ -182,14 +182,20 @@ func hash(ctx context.Context, args []string, paths config.Paths) (inventory.Has
 func printHashProposal(out io.Writer, proposal inventory.HashProposal) error {
 	guard := &reviewOutput{writer: out}
 	printWrapped(guard, "Saga — Rydd: saved hash proposal", "")
-	printResultBanner(guard, "UNAPPROVED HASH SELECTION - NO SELECTED FILE CONTENTS READ")
-	printWrapped(guard, "This shows saved metadata for exact selected files. It does not approve or start full-file reads. Current source files have not been checked. No duplicate, keeper or cleanup action is selected.", "")
+	if proposal.ReadConsent == nil {
+		printResultBanner(guard, "UNAPPROVED HASH SELECTION - NO SELECTED FILE CONTENTS READ")
+		printWrapped(guard, "This shows saved metadata for exact selected files. It does not approve or start full-file reads. Current source files have not been checked. No duplicate, keeper or cleanup action is selected.", "")
+	} else {
+		printResultBanner(guard, "SAVED HASH SELECTION - READ CONSENT RECORDED")
+		printWrapped(guard, "This shows saved metadata and a read consent record for exact selected files. Current read permission and source files have not been checked. This command does not start reads. No duplicate, keeper or cleanup action is selected.", "")
+	}
 	fmt.Fprintf(guard, "Store: %s\nSelection: %s\nInventory: %s\n", proposal.StoreID, proposal.SelectionID, proposal.InventoryID)
 	if proposal.SourceLocator == nil {
 		printWrapped(guard, "This historical selection has no manual inventory locator. It cannot authorize later source reads.", "")
 	} else {
 		fmt.Fprintf(guard, "Manual root: %q\n", string(proposal.SourceLocator.RootPathBytes))
 	}
+	printHashReadConsent(guard, proposal.ReadConsent)
 	for i, target := range proposal.Targets {
 		file := target.File
 		fmt.Fprintf(guard, "\nSelected file %d\n  %q\n", i+1, string(file.PathBytes))
