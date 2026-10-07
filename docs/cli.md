@@ -597,6 +597,22 @@ Missing choice/storage uses `not_found`; an unsupported locator or invalid prepa
 
 The check saves no result and performs no writer opening, migration, recovery, scan, directory listing, content hash, consent evaluation or reservation. Ordinary file bodies are not read. Configuration and saved SQLite records can be read, and normal SQLite sidecars/access times can change. Path-based private-storage guards are not authentication against deliberate coherent same-user replacement. Sequential metadata matches prove neither simultaneous/current content equality, inode continuity, independent storage nor safe cleanup, and grant no further content-read or execution authority.
 
+## Review a choice-bound fresh-read request
+
+```sh
+rydd hash --request-choice CHOICE_ID [--json]
+```
+
+This exclusive finite mode reads existing saved hash storage only. Require the full lowercase `hash-choice-v1-` ID and the original data directory. Repeated or mixed modes, positional targets, directory/report/keeper overrides, read confirmation and budget flags are invalid before storage access. Source files, inventory and configuration can be offline. No writer, initialization, migration, recovery, metadata screen or content read runs.
+
+The standard `hash` JSON envelope contains version 1, contract `choice_bound_fresh_full_hash_request_v1`, `hash_contract`, deterministic `request_id`, source `saved_hash_choice`, status `unapproved`, original choice/store/selection/inventory IDs, the frozen `source_locator`, and ordered `targets`. Each target includes its exact role, historical observation and complete frozen root/file/ancestor evidence. `historical_choice` retains the immutable saved choice with its original coverage, charges and unevaluated consent. Authoritative path bytes remain base64. All approval, verification and execution flags are false; estimated reclaimable bytes is null.
+
+The `hash-choice-request-v1-` identity binds the versioned contracts, exact original choice/store/selection/inventory/locator, and full ordered observations and targets. It has no preparation timestamp or future job ID and does not change with later original-store charges or consent lifecycle. It is an ephemeral scope identity, not a persisted request, job, approval or execution token. Earlier metadata results and completed SHA continuation state are not inputs. A future fresh job must start new observations and accounting under separate consent.
+
+Human output leads with the unapproved request, shows exact roles and frozen scope, then labels the archived context separately. It states that no request was saved, no previous approval renewed and no charges changed. A five-second cooperative deadline and the 2–20 target, 1 MiB target-evidence, 4096-byte path and 256-level limits apply. Missing hash storage or choice uses `not_found`; unsupported saved locators or invalid bounded request evidence uses `hash_choice_request_unavailable`; corruption keeps existing error codes. These setup/cancellation failures expose no partial report. Failed or canceled output returns exit 1, can leave partial output or one already-written envelope, and never appends a second envelope or claims publication. Capabilities include `fresh_hash_choice_requests: true`.
+
+Saved SQLite pages can be read and normal reader sidecars/access times can change. Source bodies and saved records are unchanged. The request does not evaluate current files or consent and gives no fresh-read or cleanup permission. Durable fresh jobs, new consent and dispatch are not implemented by this command.
+
 ## Save and show a hash proposal
 
 ```sh

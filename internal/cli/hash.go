@@ -66,13 +66,14 @@ func validHashSelectionID(value string) bool {
 
 func hash(ctx context.Context, args []string, paths config.Paths) (any, error) {
 	var selectMode, confirmRead hashSelectOption
-	var show, directory, from, approve, run, revoke, day, total, saveChoice, checkChoice, keeper hashOption
+	var show, directory, from, approve, run, revoke, day, total, saveChoice, checkChoice, requestChoice, keeper hashOption
 	f := flag.NewFlagSet("hash", flag.ContinueOnError)
 	f.SetOutput(io.Discard)
 	f.Var(&selectMode, "select", "save an exact unapproved metadata selection")
 	f.Var(&show, "show", "show one full saved selection ID without source reads")
 	f.Var(&saveChoice, "save-choice", "save explicitly selected historical keeper/copy roles; no cleanup approval")
 	f.Var(&checkChoice, "check-choice", "screen one saved choice's exact live metadata; no file-body reads or approval")
+	f.Var(&requestChoice, "request-choice", "review an unapproved fresh-read request from one saved choice; nothing is saved or read from sources")
 	f.Var(&keeper, "keeper", "with --save-choice, one explicit keeper work ID")
 	f.Var(&directory, "d", "exact manual scan root")
 	f.Var(&directory, "directory", "exact manual scan root")
@@ -87,13 +88,19 @@ func hash(ctx context.Context, args []string, paths config.Paths) (any, error) {
 		return inventory.HashProposal{}, usageError{err}
 	}
 	modes := 0
-	for _, set := range []bool{selectMode.set, show.set, approve.set, run.set, revoke.set, saveChoice.set, checkChoice.set} {
+	for _, set := range []bool{selectMode.set, show.set, approve.set, run.set, revoke.set, saveChoice.set, checkChoice.set, requestChoice.set} {
 		if set {
 			modes++
 		}
 	}
 	if modes != 1 {
-		return nil, usageError{errors.New("hash requires exactly one of --select, --show, --save-choice, --check-choice, --approve, --run or --revoke")}
+		return nil, usageError{errors.New("hash requires exactly one of --select, --show, --save-choice, --check-choice, --request-choice, --approve, --run or --revoke")}
+	}
+	if requestChoice.set {
+		if directory.set || from.set || keeper.set || confirmRead.set || day.set || total.set || f.NArg() != 0 || !inventory.ValidHashKeeperChoiceID(requestChoice.value) {
+			return nil, usageError{errors.New("hash --request-choice requires one full saved hash-choice-v1 ID and no root, report, target, read confirmation or budget options")}
+		}
+		return hashRequestKeeperChoice(ctx, paths, requestChoice.value)
 	}
 	if checkChoice.set {
 		if directory.set || from.set || keeper.set || confirmRead.set || day.set || total.set || f.NArg() != 0 || !inventory.ValidHashKeeperChoiceID(checkChoice.value) {

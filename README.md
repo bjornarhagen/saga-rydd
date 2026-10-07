@@ -135,6 +135,17 @@ Use the full saved choice ID and the same data directory. This checks only its k
 
 Files are checked one at a time without reading their bodies. Configuration and saved SQLite records can be read. A metadata match does not prove current content equality or authorize another content read or cleanup. Results are not saved; approval remains unavailable and reclaimable space unknown. In JSON, inspect `hash.status`: exit 0 can include a completed `blocked` result. `hashes --choice` continues to reopen saved evidence without live checks.
 
+## Review a fresh-read request from a saved choice
+
+```sh
+rydd hash --request-choice CHOICE_ID
+rydd hash --request-choice CHOICE_ID --json
+```
+
+This saved-only review preserves the exact keeper and ordered copies, their full frozen target evidence, and the historical context saved with the choice. It works with source files and inventory offline and does not load configuration. The request ID identifies this exact proposed scope; it is separate from a future job or read approval.
+
+Nothing is saved or read from source files. No old approval is renewed and no hashing charges are changed. A fresh job, separate consent and guarded dispatch remain later work. This request proves neither current equality nor safe cleanup.
+
 ## Save an exact hashing proposal
 
 ```sh

@@ -53,6 +53,7 @@ Commands:
   hash --save-choice SELECTION_ID --keeper WORK_ID COPY_ID... [--json]
                                                      Save historical roles; no source reads or cleanup
   hash --check-choice CHOICE_ID [--json]              Screen exact metadata; no file bodies or approval
+  hash --request-choice CHOICE_ID [--json]            Review a fresh-read request; nothing is saved
   hash --select -d ROOT --from REPORT_JSON FILE_ID... Save unapproved hash metadata; no source contents
   hash --show SELECTION_ID [--json]                 Show exact saved hash proposal; no source reads
   hash --approve SELECTION_ID --confirm-content-read --max-day-bytes N --max-total-bytes N
@@ -186,6 +187,8 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 				err = fmt.Errorf("choice %s was saved, but its reply was canceled; reopen with hashes --choice %s: %w", choice.ID, choice.ID, ctx.Err())
 			case inventory.HashKeeperChoiceMetadataReport:
 				err = fmt.Errorf("choice %s metadata screen reply was canceled; no screen result was saved: %w", choice.ChoiceID, ctx.Err())
+			case inventory.HashKeeperChoiceFreshRequestReport:
+				err = fmt.Errorf("choice %s fresh-read request reply was canceled; no request was saved: %w", choice.ChoiceID, ctx.Err())
 			}
 		}
 	case "report":
