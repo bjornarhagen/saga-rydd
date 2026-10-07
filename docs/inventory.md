@@ -46,3 +46,39 @@ API references: [Go directory enumeration](https://go.dev/src/os/dir.go), [Unix 
 ## Paced partial batches
 
 The worker supplies an entry-inspection rate. A throttle-window deadline produces a partial batch while preserving up to 128 pending names in the current stream. Final pathname/stamp validation still runs before that batch is committed. A throttle yield keeps the generation; actual cancellation, mutation, lost cursor or process restart retains the existing restart-and-upsert behavior. See [CLI contract](cli.md#child-entry-pacing) for the exact rate scope and remaining limits.
+
+## Explicit file observations and durable hashing
+
+Metadata scans still open no ordinary file contents. Separate library requests can capture exact saved evidence, observe bounded samples or calculate a full SHA-256 hash. These requests do not supply source-read consent or cleanup permission. `rydd hashes [--work WORK_ID] [--json]` reads existing historical observations and their whole-selection budget. CLI content reads, resumptions and background integration remain pending.
+
+The durable hashing store keeps one frozen selection of 1–20 files, with at most 1 MiB of evidence, in a separate private `hashes/hashes.sqlite3` database. Its writer holds an exclusive lock for its lifetime. Inventory rebuilds do not remove hashing records. The store accepts no imported SHA state, caller-supplied offset, usage receipt or final digest.
+
+```mermaid
+flowchart TD
+    A[Capture exact saved selection] --> B[Choose next affordable queued file]
+    B --> C[Compare current saved inventory]
+    C --> D[Commit full byte reservation]
+    D --> E[Reopen and check live paths and mounts]
+    E --> F[Read bounded suffix and recheck]
+    F --> G[Commit checked progress and known usage together]
+    G --> B
+    D -. Process interrupted .-> H[Recover old checkpoint with full charge]
+    H --> B
+```
+
+Each call grants at most 1 MiB. A persisted indexed order rotates reserved work behind its peers, including after cancellation or recovery. Partial grants are rounded down to complete 64-byte SHA blocks. A smaller allowance defers without reservation or source reads, unless it can finish the exact remaining tail. A bounded search can let an affordable small tail proceed while a larger file waits. This is fairness within one finite batch, not a production scheduler or latency guarantee.
+
+Partial checkpoints store the SHA chaining state at the last complete block and zero the entire buffered-byte area. Restart can repeat at most 63 checked bytes. Completed records contain only the final digest and cannot resume as prefix state. Version, runtime, platform, count, checksum and exact store/selection/file/sequence bindings are checked before reading. Incompatible records are refused; they never silently restart a file. The current saved inventory and live identity, stamp, scope and mount are checked on every continuation. Metadata checks cannot establish an atomic content snapshot across slices.
+
+The reservation is permanent. Known usage and the next checked checkpoint are committed together; cancellation before publication retains the previous checkpoint while settling known usage. If a process dies before settlement, recovery keeps that checkpoint and the full charge. It marks requested/read/elapsed usage as unknown, rather than inventing zero. An uncertain publication stops dispatch until close and reopen. Previously committed progress survives a lost or canceled reply; a canceled request returns no live digest.
+
+| Saved value | Meaning |
+| --- | --- |
+| Reserved bytes | Full allowances charged before reads; never refunded |
+| Observed requested bytes | Read requests from attempts with known settlement |
+| Observed read bytes | Bytes returned by those settled read requests |
+| Unknown reserved bytes | Charges whose interrupted attempts have unknown usage |
+| Durable offset | Checked prefix saved at a SHA block boundary, or completed file size |
+| Completed digest | Historical full-read observation; no current-file or duplicate claim |
+
+Unsettled reservations remain fully charged with null usage; the unknown-reservation counters include them only after writer recovery marks an interrupted attempt. Daily counters use the UTC day of reservation. A saved clock high-water blocks backward clock changes; rollover resets only current-day counters. These values do not measure physical disk I/O or limit reads by their actual wall-clock day. Storage retains only the latest checkpoint and attempt per file plus aggregate counters, with no per-slice history. Checksums detect inconsistent corruption and swapped records, not coherent same-user rewrites or whole-store rollback. Process-crash fixtures do not establish power-loss durability. All provenance, current-content, duplicate and execution flags remain false; estimated reclaimable bytes remain unknown.

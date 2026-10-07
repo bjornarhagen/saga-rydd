@@ -469,3 +469,31 @@ These finite observations do not lock out later changes, prove inode continuity 
 
 
 Recovery paths are capped at 4096 bytes and 256 components each, with at most 512 held chain descriptors plus transient probes. The shared five-second context is cooperative; a blocked kernel call can exceed it. No durable cursor or stored recovery observation is created. Symlink aliases used by scanning can be refused by these stricter no-follow paths.
+
+## Saved hash observations
+
+```sh
+rydd hashes [--work WORK_ID] [--json]
+rydd --data-dir /absolute/path/to/state hashes --work 1 --json
+```
+
+`hashes` reads the one finite saved hashing selection, its work records and its reservation budget. `--work` optionally selects one canonical decimal work ID from `1` to `20` within that selection. Repeated work flags, positional IDs, directory/source options, pagination and operation flags are rejected before storage access. Global `--data-dir` selects the hashing store; it must precede the command. The standard `--json` placement rules apply.
+
+The command opens only existing `hashes/hashes.sqlite3` storage under the selected data directory. It does not load configuration or inventory, access source paths, initialize or migrate storage, recover interrupted work, record consent or dispatch a read. Sources and inventory can be unavailable. Readers do not take the hashing writer lock. Opening and loading use a shared cooperative five-second context. No source files or saved records are changed; normal SQLite reader sidecars may change.
+
+JSON uses the standard envelope with a `hashes` object. It retains the saved snapshot's store/selection/inventory IDs, `source: "saved_hash_observations"`, `contract: "full_file_sha256_v1"`, budget and work. `selected_work_id` appears when `--work` filters the work list. `budget_scope: "whole_saved_selection"` always applies: filtering one work item does not filter the budget. Paths use authoritative base64 `path_bytes`; the human view quotes the full raw path and escapes controls.
+
+| Saved work state | Meaning |
+| --- | --- |
+| `pending` | Work is pending in the saved queue. |
+| `running` | An unsettled attempt is saved. This does not prove a process is active. |
+| `complete` | A historical full-read SHA-256 observation is saved. Current files are not checked. |
+| `invalidated` | Work was refused. Its previous prefix does not establish current contents. |
+
+`durable_offset` is the saved prefix in bytes, or the full file size for a completed record. `checked_at` describes the historical check; a zero value means no checked prefix is recorded. A completed `sha256` is not duplicate detection, current-content verification or cleanup authority. All provenance/content/current-state/duplicate verification and execution flags remain false; `estimated_reclaimable_bytes` remains `null`.
+
+`latest_attempt` distinguishes `reserved` (usage not settled), `settled` (known requested/read/elapsed usage), and `interrupted_unknown` (usage unknown after writer recovery). Unknown `observed_requested_bytes`, `observed_read_bytes` and `observed_elapsed_ns` are present as `null`; known zero stays zero. No attempt is represented by an absent `latest_attempt`. Reading a saved running record does not perform recovery.
+
+The budget contains the saved UTC reservation day, clock high-water, charged allowances, settled known usage and interrupted charges, for that day and across all reservation days. The unchanged JSON keys `unknown_reserved_bytes` and `total_unknown_reserved_bytes` count only recovered `interrupted_unknown` attempts. A currently unsettled `reserved` attempt has null usage and remains fully charged, but is excluded from those interrupted counters until writer recovery. The human view labels them as interrupted charges. The budget describes the whole saved selection, including work hidden by `--work`. Full reservations are never refunded; known usage counters omit unknown attempts. These are not physical I/O measurements or reads per wall-clock day. No daily limit or remaining quota is stored or inferred.
+
+Exit `0` means the saved snapshot was read, including a present store with no selection. Missing storage or work uses `not_found` and exit `1`; corrupt/incompatible records use `hash_invalid` without partially trusted record output. Cancellation and storage permissions use the standard failures. Invalid arguments use exit `2`; output-write failures use exit `1`. Capabilities add `saved_hash_reports: true`; `full_hashing`, duplicate detection and cleanup remain false. There is no CLI command to create a hash selection, start or resume reads, or recover work.

@@ -54,7 +54,8 @@ type FullHashProgress struct {
 // FullHashSession is an opaque, in-memory continuation. Copies of the wrapper
 // share the same private state and serialize their steps. No descriptors remain
 // open between steps. Private SHA state can retain buffered source bytes; it is
-// never returned, serialized or persisted. Process loss loses this continuation.
+// never exposed through this public API. Step does not persist continuation;
+// process loss loses it unless a separate private controller checkpoints it.
 type FullHashSession struct{ core *fullHashCore }
 
 type fullHashCore struct {
@@ -70,10 +71,11 @@ type fullHashCore struct {
 type fullHashCheckpoint struct {
 	digest             hash.Cloner
 	offset             int64
-	stamp              unix.Stat_t
+	stamp              hashLiveStamp
 	volume, mount      string
 	baseline, complete bool
 	checkedAt          time.Time
+	finalSHA           string // decoded completed records are historical, not resumable
 }
 
 // Private seams support deterministic cancellation, path-change and soft-yield
@@ -106,14 +108,7 @@ func (s *Scanner) NewFullHashSession(target SavedFileTarget) (*FullHashSession, 
 	if _, err := digest.Clone(); err != nil {
 		return nil, errors.New("SHA-256 in-memory cloning is unsupported")
 	}
-	target.Root.PathBytes = bytes.Clone(target.Root.PathBytes)
-	target.File.PathBytes = bytes.Clone(target.File.PathBytes)
-	target.File.Path = string(target.File.PathBytes)
-	copy := append(target.Ancestors[:0:0], target.Ancestors...)
-	for i := range copy {
-		copy[i].Path = bytes.Clone(copy[i].Path)
-	}
-	target.Ancestors = copy
+	target = cloneHashTarget(target)
 	core := &fullHashCore{scanner: s, target: target, checkpoint: fullHashCheckpoint{digest: digest}}
 	core.publishCheckedProgress()
 	return &FullHashSession{core: core}, nil
@@ -194,10 +189,10 @@ func (s *FullHashSession) step(ctx context.Context, allowance int64, hooks fileH
 		return core.progress(false), usage, err
 	}
 	err = core.scanner.withSavedRegularFile(ctx, core.target, func(fd int, opened unix.Stat_t, volume, mount string) error {
-		if previous.baseline && (!sameInputStamp(previous.stamp, opened) || previous.volume != volume || previous.mount != mount) {
+		if previous.baseline && (!previous.stamp.matches(opened) || previous.volume != volume || previous.mount != mount) {
 			return blocked("file_changed", "The file's identity, metadata, link count or mount differs from the checked continuation.")
 		}
-		candidate.stamp, candidate.volume, candidate.mount, candidate.baseline = opened, volume, mount, true
+		candidate.stamp, candidate.volume, candidate.mount, candidate.baseline = newHashLiveStamp(opened), volume, mount, true
 		if hooks.afterOpen != nil {
 			hooks.afterOpen()
 		}

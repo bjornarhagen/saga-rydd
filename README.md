@@ -73,6 +73,8 @@ This is the first filter for duplicate discovery. It groups saved regular-file m
 
 Page-local counts distinguish known device/inode objects, repeated saved aliases and unknown or conflicting identities. A size band can cross pages; boundary labels preserve even a single candidate at an edge. Use the returned cursor with the same minimum and data directory. A rebuilt inventory or changed minimum refuses the cursor. Scans can change membership between pages, so this is not a frozen export. There are no verified duplicate matches, keeper choices or savings estimates yet.
 
+A separate library foundation supports bounded full hashing with private checkpoints and conservative byte reservations. `rydd hashes [--work WORK_ID] [--json]` reads its existing saved observations and whole-selection budget. This command does not create, recover or resume work; CLI content reads and worker integration remain pending. See [durable hashing limits](docs/inventory.md#explicit-file-observations-and-durable-hashing).
+
 ## Preview an exact selection
 
 ```sh

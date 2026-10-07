@@ -45,6 +45,7 @@ Commands:
   plan --revoke PLAN_ID                               Revoke review consent; no inventory needed
   journal --show INTENT_ID [--json]                 Read saved preparation/history; no operations
   journal --observe INTENT_ID [--json]              Observe recovery locations; no operations
+  hashes [--work WORK_ID] [--json]                  Read saved hash observations and whole-selection budget
   report --candidates [--min-age-days N] [--cursor TOKEN] [--json]         Node modules review candidates
   measure -d PATH [--batches N] [--json]               Resume saved compact size calculations
   review -d PATH [--min-age-days N]                   Choose a numbered subset; save unapproved evidence
@@ -87,7 +88,7 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 		return 0
 	}
 	if remaining[0] == "capabilities" && len(remaining) == 1 {
-		fmt.Fprintln(out, "Rydd commands: init, config check, state init, status, scan, measure, report, review, plan, journal, pause, resume, stop, capabilities.\nAdd --json for versioned machine output on finite commands. review prompts in text mode; daemon uses foreground text output.\nOther commands are noninteractive. Exit codes: 0 success, 1 operation failed, 2 invalid usage.\nScanning is experimental. Deletion, duplicate detection, and full resource controls are unavailable.")
+		fmt.Fprintln(out, "Rydd commands: init, config check, state init, status, scan, measure, report, review, plan, journal, hashes, pause, resume, stop, capabilities.\nAdd --json for versioned machine output on finite commands. review prompts in text mode; daemon uses foreground text output.\nOther commands are noninteractive. Exit codes: 0 success, 1 operation failed, 2 invalid usage.\nScanning is experimental. Deletion, duplicate detection, and full resource controls are unavailable.")
 		return 0
 	}
 	paths, err := config.ResolvePaths(*dataDir)
@@ -152,6 +153,12 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 		if err == nil {
 			printJournal(out, r)
 		}
+	case "hashes":
+		var r HashReport
+		r, err = hashes(ctx, remaining[1:], paths)
+		if err == nil {
+			err = printHashes(out, r)
+		}
 	case "report":
 		var r reportResult
 		r, err = report(ctx, remaining[1:], paths)
@@ -197,7 +204,8 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 	}
 	if err != nil {
 		var missing missingScanError
-		if errors.As(err, &missing) {
+		var missingHash missingHashError
+		if errors.As(err, &missing) || errors.As(err, &missingHash) {
 			fmt.Fprintln(errOut, err)
 		} else if errors.Is(err, os.ErrNotExist) {
 			fmt.Fprintf(errOut, "Not initialized or unavailable: %v\nUse rydd init --root /path for new configuration, or rydd state init with existing configuration.\n", err)
