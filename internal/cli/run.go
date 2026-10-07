@@ -46,6 +46,8 @@ Commands:
   journal --show INTENT_ID [--json]                 Read saved preparation/history; no operations
   journal --observe INTENT_ID [--json]              Observe recovery locations; no operations
   hashes [--work WORK_ID | --groups] [--json]       Read saved hash observations or historical matches
+  hashes --preview SELECTION_ID --keeper WORK_ID COPY_ID... [--json]
+                                                Preview possible roles from saved historical hashes
   hash --select -d ROOT --from REPORT_JSON FILE_ID... Save unapproved hash metadata; no source contents
   hash --show SELECTION_ID [--json]                 Show exact saved hash proposal; no source reads
   hash --approve SELECTION_ID --confirm-content-read --max-day-bytes N --max-total-bytes N

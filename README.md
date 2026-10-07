@@ -84,6 +84,17 @@ rydd hashes --groups --json
 
 Groups contain equal recorded logical sizes and full SHA-256 hashes. They show exact paths, each historical check time and qualified saved identities, including aliases and conflicts. Counts show how much selected work has a full observation and how many completed observations have no match. The command reads saved hash storage only. The observations need not be simultaneous and do not establish current duplicates, a keeper or reclaimable space. `--groups` cannot be combined with `--work`.
 
+To preview possible keeper and copy roles for an explicit matching subset:
+
+```sh
+rydd hashes --preview SELECTION_ID --keeper 1 2 3
+rydd hashes --preview SELECTION_ID --keeper 1 2 3 --json
+```
+
+Use the full selection ID and work IDs from the saved reports. This example previews work 1 as a possible keeper and works 2 and 3 as possible copies for review. Every selected work item must have a complete matching historical size/hash, with no repeated or conflicting saved identity anywhere in the selection. The preview includes only the paths you name; it does not choose or add paths. Flags other than `--json` must precede the copy IDs. Preview, group and single-work modes cannot be combined.
+
+This reads saved records only, so it works with source folders and inventory offline. It preserves observation sequences/times and whole-selection coverage, budget and saved consent. No decision is saved, no approval is available, and reclaimable space remains unknown. Current file verification and executable cleanup plans remain separate.
+
 ## Save an exact hashing proposal
 
 ```sh
@@ -109,7 +120,7 @@ Replace the example IDs with the saved selection and returned approval IDs. Keep
 
 Each explicit run attempts one step of at most 1 MiB. Rydd rechecks consent, limits, current saved inventory, configuration exclusions and live paths before publishing checked progress. Run again explicitly to continue later; there is no automatic loop or retry. Opening the writer can recover interrupted accounting even if the new read is refused. Saved readers do not perform that recovery. Revocation works offline and blocks later reservations after taking the writer lock; it cannot interrupt a step that already holds the lock.
 
-Completed hashes are historical observations. They do not prove that files are still equal, choose a keeper or authorize cleanup. Hashing currently supports one immutable selection per state directory. Background hashing, current duplicate verification, keeper choices, savings estimates and cleanup remain pending.
+Completed hashes are historical observations. They do not prove that files are still equal, choose a keeper or authorize cleanup. Hashing currently supports one immutable selection per state directory. Background hashing, current duplicate verification, saved keeper decisions, savings estimates and cleanup remain pending.
 
 ## Preview an exact selection
 

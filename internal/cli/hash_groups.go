@@ -53,6 +53,10 @@ func printHashGroups(out io.Writer, r inventory.HashGroupsReport) error {
 		}
 	}
 	printWrapped(guard, "Member identity flags cover the whole selection, including paths outside the displayed group. Saved identities do not establish inode continuity or independent storage. File sizes are per file; no keeper or reclaimable-space estimate is provided.", "")
+	if len(r.Groups) != 0 {
+		printWrapped(guard, "For a possible keeper/copy preview, use the same data directory and explicitly name the full selection ID, keeper work ID and copy work IDs. No decision is saved.", "")
+		fmt.Fprintln(guard, "  hashes --preview SELECTION_ID --keeper WORK_ID COPY_ID...")
+	}
 	printHashBudget(guard, r.Budget)
 	printHashReadConsent(guard, r.ReadConsent)
 	printWrapped(guard, "This command reads saved hash records only. It does not check current files, recover or resume work, or evaluate current read permission. No source files or saved records were changed.", "")

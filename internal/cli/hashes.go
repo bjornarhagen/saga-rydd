@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/bjornarhagen/saga-rydd/internal/config"
@@ -30,26 +29,31 @@ func (e missingHashError) Unwrap() error { return e.error }
 func hashes(ctx context.Context, args []string, paths config.Paths) (any, error) {
 	f := flag.NewFlagSet("hashes", flag.ContinueOnError)
 	f.SetOutput(io.Discard)
-	workID := f.String("work", "", "show one saved work ID (1–20); whole-selection budget remains visible")
-	groups := f.Bool("groups", false, "group matching completed historical hashes from the whole saved selection")
+	var work, preview, keeper hashOption
+	var groups hashSelectOption
+	f.Var(&work, "work", "show one saved work ID (1–20); whole-selection budget remains visible")
+	f.Var(&groups, "groups", "group matching completed historical hashes from the whole saved selection")
+	f.Var(&preview, "preview", "preview possible keeper/copy roles for one exact saved selection")
+	f.Var(&keeper, "keeper", "one explicitly selected possible keeper work ID (1–20)")
 	if err := f.Parse(args); err != nil {
 		return HashReport{}, usageError{err}
 	}
-	workFlags, groupFlags := 0, 0
-	for _, arg := range args {
-		if arg == "--work" || arg == "-work" || strings.HasPrefix(arg, "--work=") || strings.HasPrefix(arg, "-work=") {
-			workFlags++
+	if preview.set {
+		if work.set || groups.set || !keeper.set || !validHashSelectionID(preview.value) || f.NArg() < 1 || f.NArg() >= inventory.FileSampleTargetLimit {
+			return nil, usageError{errors.New("hashes --preview requires one full lowercase selection ID, --keeper WORK_ID and 1–19 distinct copy work IDs; modes cannot be combined and options must precede IDs")}
 		}
-		if arg == "--groups" || arg == "-groups" || strings.HasPrefix(arg, "--groups=") || strings.HasPrefix(arg, "-groups=") {
-			groupFlags++
+		seen := map[string]bool{}
+		for _, id := range append([]string{keeper.value}, f.Args()...) {
+			if !validSavedHashWorkID(id) || seen[id] {
+				return nil, usageError{errors.New("keeper and copy work IDs must be distinct canonical saved work IDs from 1 to 20")}
+			}
+			seen[id] = true
 		}
-	}
-	if f.NArg() != 0 || workFlags > 1 || groupFlags > 1 || (workFlags != 0 && groupFlags != 0) || (groupFlags != 0 && !*groups) {
-		return nil, usageError{errors.New("hashes accepts one optional --work WORK_ID or --groups; modes cannot be repeated or combined, and no directory or source options are allowed")}
-	}
-	if workFlags != 0 {
-		ordinal, err := strconv.Atoi(*workID)
-		if err != nil || ordinal < 1 || ordinal > inventory.FileSampleTargetLimit || strconv.Itoa(ordinal) != *workID {
+	} else {
+		if keeper.set || f.NArg() != 0 || (work.set && groups.set) || (groups.set && !groups.value) {
+			return nil, usageError{errors.New("hashes accepts --work WORK_ID, --groups, or --preview SELECTION_ID --keeper WORK_ID COPY_ID...; modes cannot be repeated or combined, and no directory or source options are allowed")}
+		}
+		if work.set && !validSavedHashWorkID(work.value) {
 			return HashReport{}, usageError{errors.New("--work requires a canonical saved work ID from 1 to 20")}
 		}
 	}
@@ -65,7 +69,21 @@ func hashes(ctx context.Context, args []string, paths config.Paths) (any, error)
 		}
 		return HashReport{}, err
 	}
-	if *groups {
+	if preview.set {
+		r, readErr := reader.PreviewKeeper(ctx, preview.value, keeper.value, f.Args())
+		closeErr := reader.Close()
+		if readErr != nil {
+			return nil, readErr
+		}
+		if closeErr != nil {
+			return nil, closeErr
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return r, nil
+	}
+	if groups.value {
 		r, readErr := reader.Groups(ctx)
 		closeErr := reader.Close()
 		if readErr != nil {
@@ -90,17 +108,22 @@ func hashes(ctx context.Context, args []string, paths config.Paths) (any, error)
 	if err := ctx.Err(); err != nil {
 		return HashReport{}, err
 	}
-	r := HashReport{HashSnapshot: snapshot, SelectedWorkID: *workID, BudgetScope: "whole_saved_selection"}
-	if *workID != "" {
+	r := HashReport{HashSnapshot: snapshot, SelectedWorkID: work.value, BudgetScope: "whole_saved_selection"}
+	if work.value != "" {
 		for _, work := range snapshot.Work {
-			if work.ID == *workID {
+			if work.ID == r.SelectedWorkID {
 				r.Work = []inventory.SavedHashWork{work}
 				return r, nil
 			}
 		}
-		return HashReport{}, missingHashError{fmt.Errorf("saved hash work %s is absent from this selection: %w", *workID, os.ErrNotExist)}
+		return HashReport{}, missingHashError{fmt.Errorf("saved hash work %s is absent from this selection: %w", work.value, os.ErrNotExist)}
 	}
 	return r, nil
+}
+
+func validSavedHashWorkID(value string) bool {
+	ordinal, err := strconv.Atoi(value)
+	return err == nil && ordinal >= 1 && ordinal <= inventory.FileSampleTargetLimit && strconv.Itoa(ordinal) == value
 }
 
 func printHashes(out io.Writer, report any) error {
@@ -109,6 +132,8 @@ func printHashes(out io.Writer, report any) error {
 		return printHashObservations(out, r)
 	case inventory.HashGroupsReport:
 		return printHashGroups(out, r)
+	case inventory.HashKeeperPreview:
+		return printHashKeeperPreview(out, r)
 	default:
 		return errors.New("unsupported saved hash report")
 	}

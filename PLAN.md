@@ -271,6 +271,16 @@ Report selected, completed, unfinished and unmatched-completed counts across the
 
 Keep the default `hashes` schema unchanged. Group output uses its own historical grouping contract, false provenance/content/current-state/duplicate/executable flags and null estimated reclaimable bytes. Retain whole-selection saved reservation/consent context with current read permission unevaluated. Open existing hash storage only: no source, inventory or configuration reads, initialization, migration, recovery, source dispatch, new schema/dependency, keeper selection or cleanup. Human output quotes paths and states that the observations need not be simultaneous. Validate equal/different digests, partial/invalidated/running work, alias/conflict evidence, finite bounds, corrupt rows, cancellation, offline sources and unchanged saved records on generated fixtures and native platforms.
 
+### Saved keeper/copy review preview (P3-04b)
+
+Add `hashes --preview SELECTION_ID --keeper WORK_ID COPY_ID... [--json]`, exclusive with `--groups` and `--work`. Require the full canonical selection ID, one canonical keeper work ordinal and 1–19 distinct copy ordinals, with no overlap. Flags precede positional copy IDs. The exact selection binds its hash store and inventory; ordinals or group numbers alone cannot identify evidence across stores. Only explicitly selected paths appear; other matching paths receive no role.
+
+Read one bounded existing saved-hash transaction. Every requested member must have a completed full observation in the same logical-size/SHA-256 group. Refuse the entire preview if any requested member has a repeated or conflicting saved identity, using the whole selection including unfinished or differently grouped rows. Unrelated unselected ambiguity does not add paths or choose a keeper. This conservatively screens historical identity ambiguity; it does not verify current objects or independent storage.
+
+Return the ephemeral `historical_keeper_preview_v1` contract with exact store/selection/inventory IDs, saved hash contract/size/digest, keeper and explicitly selected copy evidence, observation sequences/times, whole-selection coverage, reservation budget and saved read consent with current permission unevaluated. Preserve authoritative path bytes. Approval is unavailable; verification/executable flags stay false and estimated reclaimable bytes stay null. Human output calls these possible roles for review, quotes paths and explains that observations need not be simultaneous. No source, inventory or configuration reads, initialization, migration, recovery, dispatch, persistence, schema/dependency change or cleanup is included. Future executable plans need separate durable evidence, explicit approval and fresh action-time checks.
+
+Validate explicit subsets, wrong selections/reused ordinals, mismatched or unfinished observations, whole-selection aliases/conflicts, raw paths, caller mutation, cancellation, concurrent publication, offline/legacy storage and unchanged records under human/JSON output failures on generated fixtures and native platforms.
+
 ## 7. Review, cleanup and recovery
 
 Background discovery does not itself authorize deletion. The action executor requires an approved plan or a matching, explicitly enabled automatic policy.

@@ -477,7 +477,7 @@ rydd hashes [--work WORK_ID | --groups] [--json]
 rydd --data-dir /absolute/path/to/state hashes --work 1 --json
 ```
 
-`hashes` reads the one finite saved hashing selection, its work records and its reservation budget. `--work` optionally selects one canonical decimal work ID from `1` to `20` within that selection. `--groups` selects the historical matching view below; it cannot be combined with `--work`. Repeated mode flags, `--groups=false`, positional IDs, directory/source options, pagination and operation flags are rejected before storage access. Global `--data-dir` selects the hashing store; it must precede the command. The standard `--json` placement rules apply.
+`hashes` reads the one finite saved hashing selection, its work records and its reservation budget. `--work` optionally selects one canonical decimal work ID from `1` to `20` within that selection. `--groups` selects the historical matching view below; `--preview` selects the possible-role view. Modes cannot be combined. Repeated mode flags, `--groups=false`, unexpected positional IDs, directory/source options, pagination and operation flags are rejected before storage access. Global `--data-dir` selects the hashing store; it must precede the command. The standard `--json` placement rules apply.
 
 The command opens only existing `hashes/hashes.sqlite3` storage under the selected data directory. It does not load configuration or inventory, access source paths, initialize or migrate storage, recover interrupted work, record consent or dispatch a read. Sources and inventory can be unavailable. Readers do not take the hashing writer lock. Opening and loading use a shared cooperative five-second context. No source files or saved records are changed; normal SQLite reader sidecars may change.
 
@@ -521,6 +521,21 @@ JSON retains the standard `hashes` envelope. This mode uses `source: "saved_hash
 Identity counts describe recorded device/inode values. Repeated identities and conflicts are classified across the whole selection, including unfinished records and observations outside the displayed group. Differing saved size, change time, modification time, allocation or completed digests makes an identity conflicting. Group counts cover only its members; member flags retain the wider context. Multiple paths to one recorded identity can still form a group, with an explicit alias qualification. These records do not prove current hardlinks, inode continuity or independent storage.
 
 The human view quotes paths, shows historical check times and labels sizes per file. It provides no keeper or savings recommendation. Saved budget and consent retain their existing semantics; current read permission remains unevaluated. Both the immutable selection and observed work come from one bounded read transaction. Argument/error/output contracts are the same as the default saved view. `saved_hash_groups` is true; `duplicates` and cleanup remain false.
+
+### Possible keeper/copy preview
+
+```sh
+rydd hashes --preview SELECTION_ID --keeper 1 2
+rydd --data-dir /absolute/path/to/state hashes --preview SELECTION_ID --keeper 1 3 2 --json
+```
+
+Require the full lowercase 64-character selection ID, one canonical keeper work ID from `1` to `20` and 1–19 distinct canonical copy work IDs, with no overlap. Preview cannot be combined with `--groups` or `--work`; flags precede positional copy IDs, with the standard `--json` placement rules. Repeated flags, invalid IDs and missing/overlapping roles are rejected before storage access. The preview never chooses or adds a path. Copy order follows the explicit request.
+
+One bounded existing saved transaction supplies complete observations and frozen evidence. Every requested member must share logical size and full SHA-256. Whole-selection saved identity checks refuse any requested identity that repeats or conflicts, including unfinished or differently grouped aliases. Unselected ambiguity does not select more paths. A valid selection mismatch, absent work, unfinished observation or hash/size mismatch returns `hash_preview_unavailable`; requested identity ambiguity returns `hash_preview_identity_ambiguous`. These failures return exit `1` and error-only JSON. Invalid arguments use exit `2`; missing storage, corrupt records, cancellation and output failures retain the standard codes.
+
+JSON uses the `hashes` envelope with `contract: "historical_keeper_preview_v1"`, `hash_contract: "full_file_sha256_v1"`, `scope: "explicit_saved_subset"`, exact store/selection/inventory IDs, logical size/hash, `keeper` and ordered `copies`. Members preserve authoritative raw `path_bytes`, work/file/root IDs, historical check times, `observation_sequence` and saved identity/change/mtime/allocation evidence. The four coverage counts, budget and saved consent cover the whole selection; `budget_scope` stays `whole_saved_selection`, and current read permission stays unevaluated. Default observations and matching-group schemas are unchanged.
+
+The human result calls these possible roles for review. Observations need not be simultaneous and cannot prove current equality, inode continuity or independent storage. No decision is saved and no source, inventory or configuration is read. There is no initialization, migration, recovery or dispatch. `approval_available` and all verification/execution flags are `false`; `estimated_reclaimable_bytes` is `null`. Capabilities include `hash_keeper_previews: true`; cleanup and duplicate verification remain unavailable. Future saved decisions and executable plans require separate durable evidence, explicit approval and fresh action-time checks.
 
 ## Save and show a hash proposal
 

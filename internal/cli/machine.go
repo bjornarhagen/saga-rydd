@@ -32,6 +32,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) int {
 func runWithInput(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer) int {
 	filtered := make([]string, 0, len(args))
 	machine := false
+	command := ""
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		if a == "--" {
@@ -43,7 +44,10 @@ func runWithInput(ctx context.Context, args []string, in io.Reader, out, errOut 
 			continue
 		}
 		filtered = append(filtered, a)
-		if (a == "--data-dir" || a == "--root" || a == "--exclude" || a == "--limit" || a == "--cursor" || a == "--directory" || a == "-directory" || a == "-d" || a == "--d" || a == "-s" || a == "--sleep" || a == "--min-age-days" || a == "--min-size-bytes" || a == "--batches" || a == "--show" || a == "-show" || a == "--from" || a == "-from" || a == "--observe" || a == "--check" || a == "--approve" || a == "-approve" || a == "--run" || a == "-run" || a == "--max-day-bytes" || a == "-max-day-bytes" || a == "--max-total-bytes" || a == "-max-total-bytes" || a == "--revoke" || a == "-revoke" || a == "--verify" || a == "--inspect" || a == "--capture" || a == "--compare" || a == "--work" || a == "-work") && i+1 < len(args) {
+		if command == "" && len(a) > 0 && a[0] != '-' {
+			command = a
+		}
+		if (a == "--data-dir" || a == "-data-dir" || a == "--root" || a == "--exclude" || a == "--limit" || a == "--cursor" || a == "--directory" || a == "-directory" || a == "-d" || a == "--d" || a == "-s" || a == "--sleep" || a == "--min-age-days" || a == "--min-size-bytes" || a == "--batches" || a == "--show" || a == "-show" || a == "--from" || a == "-from" || a == "--observe" || a == "--check" || a == "--approve" || a == "-approve" || a == "--run" || a == "-run" || a == "--max-day-bytes" || a == "-max-day-bytes" || a == "--max-total-bytes" || a == "-max-total-bytes" || a == "--revoke" || a == "-revoke" || a == "--verify" || a == "--inspect" || a == "--capture" || a == "--compare" || a == "--work" || a == "-work" || (command == "hashes" && (a == "--preview" || a == "-preview" || a == "--keeper" || a == "-keeper"))) && i+1 < len(args) {
 			i++
 			filtered = append(filtered, args[i])
 		}
@@ -66,7 +70,7 @@ func machineFailure(out, errOut io.Writer, command, code, message string, exit i
 }
 func operationFailure(out, errOut io.Writer, command string, err error) int {
 	var usage usageError
-	if errors.As(err, &usage) || errors.Is(err, inventory.ErrHashReadLimits) || errors.Is(err, inventory.ErrHashReadConfirmation) {
+	if errors.As(err, &usage) || errors.Is(err, inventory.ErrHashReadLimits) || errors.Is(err, inventory.ErrHashReadConfirmation) || errors.Is(err, inventory.ErrHashSelectionID) || errors.Is(err, inventory.ErrHashKeeperRequest) {
 		return machineFailure(out, errOut, command, "invalid_arguments", err.Error(), 2)
 	}
 	code := "command_failed"
@@ -76,6 +80,10 @@ func operationFailure(out, errOut io.Writer, command string, err error) int {
 		code = deferred.code
 	case errors.Is(err, inventory.ErrHashStoreCorrupt):
 		code = "hash_invalid"
+	case errors.Is(err, inventory.ErrHashKeeperSelection):
+		code = "hash_preview_unavailable"
+	case errors.Is(err, inventory.ErrHashKeeperIdentity):
+		code = "hash_preview_identity_ambiguous"
 	case errors.Is(err, inventory.ErrHashSelectionConflict):
 		code = "already_exists"
 	case errors.Is(err, inventory.ErrHashReadApprovalConflict):
@@ -264,14 +272,14 @@ func capabilities() map[string]any {
 			{"review", false, "prompts_and_writes_unapproved_selection", []string{"-d PATH / --directory PATH (exact manual scan root)", "--min-age-days N (1–36500; default 90)", "numbered subset then explicit save; no cleanup"}},
 			{"plan", true, "read_only_or_writes_saved_plan", []string{"--preview / --save (exactly one for a new selection)", "--show PLAN_ID (reopen without directory or selection options)", "--check PLAN_ID [-d PATH] (compare with saved inventory; no approval)", "--verify PLAN_ID [-d PATH] (read selected live metadata; no contents or cleanup)", "--inspect PLAN_ID [--tree] [-d PATH] (read bounded npm project inputs; optional tree metadata listings, no ordinary dependency contents; reinstall remains unverified)", "--capture PLAN_ID [-d PATH] (save one immutable input/tree observation; no approval)", "--compare OBSERVATION_ID [-d PATH] (read-only input/tree comparison with captured baseline; local edits remain unknown)", "--approve PLAN_ID [-d PATH] --confirm-project-review --confirm-quarantine (24-hour review consent only; cannot execute cleanup)", "--revoke PLAN_ID (revoke review consent without inventory)", "-d PATH / --directory PATH (exact manual scan root)", "--min-age-days N (1–36500; default 90)", "FINDING_ID... (1–20 unique IDs; options first)"}},
 			{"journal", true, "read_only", []string{"--show INTENT_ID (saved preparation/history only; no source operations)", "--observe INTENT_ID (current recovery-location metadata; no operations or saved changes)"}},
-			{"hashes", true, "read_only", []string{"--work WORK_ID (optional saved work ID 1–20; whole-selection budget remains visible)", "--groups (matching completed historical hashes; mutually exclusive with --work)", "no source/inventory/configuration reads, recovery or dispatch"}},
+			{"hashes", true, "read_only", []string{"--work WORK_ID (optional saved work ID 1–20; whole-selection budget remains visible)", "--groups (matching completed historical hashes)", "--preview SELECTION_ID --keeper WORK_ID COPY_ID... (ephemeral possible roles for an explicit matching subset; no saved decision, approval or savings)", "modes are mutually exclusive; flags precede copy IDs", "no source/inventory/configuration reads, recovery or dispatch"}},
 			{"hash", true, "saved_records_or_guarded_content_read", []string{"--select -d ROOT --from REPORT_JSON FILE_ID... (one existing same-size JSON page, at most 1 MiB; 1–20 unique exact saved file IDs; metadata only)", "--show SELECTION_ID (full saved proposal; no source/inventory reads)", "--approve SELECTION_ID --confirm-content-read --max-day-bytes N --max-total-bytes N (fixed 24-hour full-file read consent; no content read)", "--run APPROVAL_ID (one guarded step, at most 1 MiB under a cooperative five-second context; frozen scope only)", "--revoke APPROVAL_ID (saved revocation without source/inventory reads)", "no cleanup, automatic loop or implicit retry"}},
 			{"report", true, "read_only", []string{"--limit N (1–200)", "--cursor TOKEN", "-d PATH / --directory PATH (saved folder size; combine with --candidates or --same-size for exact manual scan root)", "--candidates [--min-age-days N] [--cursor TOKEN] (old node_modules review)", "--same-size [--min-size-bytes N] [--limit N] [--cursor TOKEN] (saved size bands; contents unchecked)"}},
 			{"status", true, "read_only", []string{}}, {"pause", true, "writes_state", []string{}}, {"resume", true, "writes_state", []string{}},
 			{"stop", true, "stops_worker", []string{}}, {"daemon", false, "runs_worker", []string{"--experimental-scan"}}, {"capabilities", true, "read_only", []string{}},
 		},
 		"exit_codes":  map[string]string{"0": "success", "1": "operation_failed", "2": "invalid_usage_or_output"},
-		"error_codes": []string{"invalid_arguments", "unsupported_output", "worker_not_running", "writer_busy", "not_found", "already_exists", "permission_denied", "canceled", "command_failed", "review_evidence_changed", "review_unavailable", "review_invalid", "observation_conflict", "observation_invalid", "observation_unavailable", "journal_outcome_unknown", "hash_invalid", "read_consent_required", "read_consent_expired", "read_consent_revoked", "clock_rollback", "daily_byte_limit", "lifetime_byte_limit", "durable_quantum", "hash_inventory_changed", "hash_recovery_required"},
-		"features":    map[string]bool{"compact_manual_scan": true, "manual_scan": true, "experimental_inventory": true, "durable_dispatch_limits": true, "wal_backpressure": true, "entry_rate_limit": true, "metadata_api_counters": true, "metadata_rate_limit": false, "cpu_limit": false, "power_controls": false, "file_reports": true, "directory_size_reports": true, "findings": true, "plan_previews": true, "saved_plans": true, "guided_review": true, "saved_plan_checks": true, "plan_live_checks": true, "plan_input_inspection": true, "plan_tree_inspection": true, "plan_observation_capture": true, "plan_observation_comparison": true, "plan_approval": true, "journal_records": true, "journal_location_observations": true, "same_size_candidates": true, "saved_hash_reports": true, "saved_hash_groups": true, "saved_hash_proposals": true, "hash_read_consent": true, "guarded_hash_steps": true, "full_hashing": true, "duplicates": false, "cleanup": false, "service_installation": false},
+		"error_codes": []string{"invalid_arguments", "unsupported_output", "worker_not_running", "writer_busy", "not_found", "already_exists", "permission_denied", "canceled", "command_failed", "review_evidence_changed", "review_unavailable", "review_invalid", "observation_conflict", "observation_invalid", "observation_unavailable", "journal_outcome_unknown", "hash_invalid", "hash_preview_unavailable", "hash_preview_identity_ambiguous", "read_consent_required", "read_consent_expired", "read_consent_revoked", "clock_rollback", "daily_byte_limit", "lifetime_byte_limit", "durable_quantum", "hash_inventory_changed", "hash_recovery_required"},
+		"features":    map[string]bool{"compact_manual_scan": true, "manual_scan": true, "experimental_inventory": true, "durable_dispatch_limits": true, "wal_backpressure": true, "entry_rate_limit": true, "metadata_api_counters": true, "metadata_rate_limit": false, "cpu_limit": false, "power_controls": false, "file_reports": true, "directory_size_reports": true, "findings": true, "plan_previews": true, "saved_plans": true, "guided_review": true, "saved_plan_checks": true, "plan_live_checks": true, "plan_input_inspection": true, "plan_tree_inspection": true, "plan_observation_capture": true, "plan_observation_comparison": true, "plan_approval": true, "journal_records": true, "journal_location_observations": true, "same_size_candidates": true, "saved_hash_reports": true, "saved_hash_groups": true, "hash_keeper_previews": true, "saved_hash_proposals": true, "hash_read_consent": true, "guarded_hash_steps": true, "full_hashing": true, "duplicates": false, "cleanup": false, "service_installation": false},
 	}
 }
