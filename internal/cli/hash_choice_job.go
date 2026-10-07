@@ -138,7 +138,7 @@ func printHashFreshChoiceJob(out io.Writer, result HashFreshChoiceJobResult) err
 	fmt.Fprintf(guard, "Job: %s\nJob key: %s\nRequest: %s\nChoice: %s\nOriginal store: %s\nOriginal selection: %s\nInventory: %s\n", job.ID, record.JobKey, record.Request.RequestID, record.Request.ChoiceID, record.Request.StoreID, record.Request.SelectionID, record.Request.InventoryID)
 	printField(guard, "Job saved at", record.CreatedAt.UTC().Format(time.RFC3339Nano))
 	printField(guard, "Job creation status", record.Status)
-	printWrapped(guard, "This separate job was created unapproved. Its selected files start with zero fresh progress. Historical digests and old read approvals are context only; no SHA continuation state or allowance was copied into this job.", "")
+	printWrapped(guard, "This separate job was created unapproved. Its immutable initial scope starts at zero. Saved fresh progress, when present, is shown separately below. Historical digests and old read approvals are context only; no SHA continuation state or allowance was copied into this job.", "")
 	for i, work := range job.Work {
 		target := record.Request.Targets[i]
 		role := "Selected copy for review"
@@ -147,8 +147,42 @@ func printHashFreshChoiceJob(out io.Writer, result HashFreshChoiceJobResult) err
 		}
 		printHashPreviewMember(guard, role, target.Observation)
 		printField(guard, "Fresh work ordinal", work.Ordinal)
-		printField(guard, "Fresh work status", work.Status)
-		printField(guard, "Fresh checked offset", fmt.Sprintf("%d bytes", work.CheckedOffset))
+		if len(job.Progress) == 0 {
+			printField(guard, "Fresh work status", work.Status)
+			printField(guard, "Fresh checked offset", fmt.Sprintf("%d bytes", work.CheckedOffset))
+		} else {
+			printField(guard, "Initial work status", work.Status)
+			printField(guard, "Initial checked offset", fmt.Sprintf("%d bytes", work.CheckedOffset))
+		}
+	}
+	if len(job.Progress) != 0 {
+		printResultBanner(guard, "SAVED FRESH PROGRESS - HISTORICAL OBSERVATIONS")
+		completed := 0
+		for _, work := range job.Progress {
+			fmt.Fprintf(guard, "Fresh work %d (historical work %s, selected %s)\n  %q\n", work.Ordinal, work.HistoricalWorkID, work.Role, string(work.PathBytes))
+			printField(guard, "Saved fresh work status", work.Status)
+			printField(guard, "Saved fresh prefix", fmt.Sprintf("%d bytes", work.DurableOffset))
+			printField(guard, "Fresh sequence", work.Sequence)
+			if !work.CheckedAt.IsZero() {
+				printField(guard, "Checked at", work.CheckedAt.UTC().Format(time.RFC3339Nano))
+			}
+			if work.SHA256 != "" {
+				fmt.Fprintf(guard, "Historical fresh SHA-256: %s\n", work.SHA256)
+			}
+			if work.Code != "" {
+				printField(guard, "Saved work code", work.Code)
+			}
+			if work.LatestAttempt != nil {
+				printField(guard, "Latest fresh attempt", work.LatestAttempt.Status)
+				printField(guard, "Latest charged allowance", fmt.Sprintf("%d bytes", work.LatestAttempt.ReservedBytes))
+			}
+			if work.Status == "complete" {
+				completed++
+			}
+		}
+		printField(guard, "Completed fresh observations", fmt.Sprintf("%d of %d", completed, len(job.Progress)))
+		printWrapped(guard, "These observations were made at separate times. They prove no current equality, duplicate verification or safe cleanup. Viewing them starts no read and recovers no work.", "")
+		printHashBudgetScope(guard, job.FreshBudget, "FRESH-JOB RESERVATION BUDGET", "fresh job", "whole exact fresh job")
 	}
 	fmt.Fprintln(guard)
 	printField(guard, "Fresh reserved bytes", fmt.Sprintf("%d bytes", job.FreshReservedBytes))

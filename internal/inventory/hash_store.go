@@ -42,22 +42,24 @@ var ErrHashRecoveryRequired = errors.New("hash publication is uncertain; close a
 // HashStore preserves one finite selected batch separately from inventory.
 // Saved evidence supplies no source-read consent or cleanup authority.
 type HashStore struct {
-	db              *sql.DB
-	base            string
-	readOnly        bool
-	selectionOnly   bool
-	schemaVersion   int
-	lock            *localfs.Lock
-	mu              sync.Mutex
-	closed          atomic.Bool
-	poisoned        bool
-	now             func() time.Time
-	life            context.Context
-	cancel          context.CancelFunc
-	closeErr        error
-	storageIDs      map[string]string
-	freshJobRequest *keeperChoiceFreshRequestCore
-	freshJobLockID  string
+	db                *sql.DB
+	base              string
+	readOnly          bool
+	selectionOnly     bool
+	schemaVersion     int
+	lock              *localfs.Lock
+	mu                sync.Mutex
+	closed            atomic.Bool
+	poisoned          bool
+	now               func() time.Time
+	life              context.Context
+	cancel            context.CancelFunc
+	closeErr          error
+	storageIDs        map[string]string
+	freshJobRequest   *keeperChoiceFreshRequestCore
+	freshJobLockID    string
+	freshRunJobID     string
+	freshRunBaselines []keeperChoiceMetadataBaseline
 }
 
 type hashSelectionRecord struct {
@@ -301,7 +303,7 @@ func openHashStoreMigrationMode(ctx context.Context, base string, readOnly, sele
 			return fail(e)
 		}
 		version = 1
-	} else if app != hashStoreApplicationID || (version != 1 && version != 2 && version != 3 && version != 4 && version != 5) {
+	} else if app != hashStoreApplicationID || (version != 1 && version != 2 && version != 3 && version != 4 && version != 5 && version != 6) {
 		return fail(ErrHashStoreCorrupt)
 	}
 	s.schemaVersion = version

@@ -78,6 +78,8 @@ type SavedFreshJob struct {
 	Record                    HashFreshJobRecord    `json:"record"`
 	Work                      []HashFreshJobWork    `json:"work"`
 	ReadConsent               *HashFreshReadConsent `json:"read_consent,omitempty"`
+	Progress                  []SavedFreshHashWork  `json:"progress,omitempty"`
+	FreshBudget               *HashBudget           `json:"fresh_budget,omitempty"`
 	FreshReservedBytes        int64                 `json:"fresh_reserved_bytes"`
 	FreshRequestedBytes       int64                 `json:"fresh_requested_bytes"`
 	FreshReadBytes            int64                 `json:"fresh_read_bytes"`
@@ -236,7 +238,7 @@ func (s *HashStore) saveFreshJob(ctx context.Context, request *KeeperChoiceFresh
 		return SavedFreshJob{}, err
 	}
 	var version int
-	if err = tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil || version < 3 || version > 5 {
+	if err = tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil || version < 3 || version > 6 {
 		return SavedFreshJob{}, hashFreshJobFailure(ctx, ErrHashFreshJobCorrupt)
 	}
 	if version >= 4 {
@@ -506,7 +508,7 @@ func (s *HashStore) readFreshJob(ctx context.Context, db hashQuery, id string) (
 	if version >= 1 && version <= 3 {
 		return SavedFreshJob{}, fmt.Errorf("saved fresh job %s is unavailable: %w", id, os.ErrNotExist)
 	}
-	if version != 4 && version != 5 {
+	if version != 4 && version != 5 && version != 6 {
 		return SavedFreshJob{}, ErrHashFreshJobCorrupt
 	}
 	if _, err := hashFreshJobCount(ctx, db); err != nil {
@@ -575,9 +577,23 @@ func (s *HashStore) readFreshJob(ctx context.Context, db hashQuery, id string) (
 		record.Request.Targets[i].Target = cloneHashTarget(record.Request.Targets[i].Target)
 	}
 	job := SavedFreshJob{ID: id, Record: record, Work: work}
+	job.Progress, job.FreshBudget, err = s.readFreshProgress(ctx, db, job)
+	if err != nil {
+		return SavedFreshJob{}, err
+	}
 	job.ReadConsent, err = s.readHashFreshReadConsent(ctx, db, job)
 	if err != nil {
 		return SavedFreshJob{}, err
+	}
+	if len(job.Progress) != 0 && job.ReadConsent == nil {
+		return SavedFreshJob{}, ErrHashFreshProgressCorrupt
+	}
+	if job.FreshBudget != nil {
+		b, c := job.FreshBudget, job.ReadConsent
+		if c == nil || b.MaxNow.After(c.ClockHighWater) || b.MaxNow.Before(c.Approval.CreatedAt) || b.ReservedBytes > c.Approval.DailyReservedByteLimit || b.TotalReservedBytes > c.Approval.LifetimeReservedByteLimit {
+			return SavedFreshJob{}, ErrHashFreshProgressCorrupt
+		}
+		job.FreshReservedBytes, job.FreshRequestedBytes, job.FreshReadBytes = job.FreshBudget.TotalReservedBytes, job.FreshBudget.TotalRequestedBytes, job.FreshBudget.TotalReadBytes
 	}
 	return job, nil
 }

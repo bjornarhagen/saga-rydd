@@ -66,7 +66,7 @@ func validHashSelectionID(value string) bool {
 
 func hash(ctx context.Context, args []string, paths config.Paths) (any, error) {
 	var selectMode, confirmRead, newJobKey hashSelectOption
-	var show, directory, from, approve, run, revoke, day, total, saveChoice, checkChoice, requestChoice, keeper, saveChoiceJob, showJob, jobKey, approveJob, showJobRead, revokeJob hashOption
+	var show, directory, from, approve, run, revoke, day, total, saveChoice, checkChoice, requestChoice, keeper, saveChoiceJob, showJob, jobKey, approveJob, showJobRead, revokeJob, runJob hashOption
 	f := flag.NewFlagSet("hash", flag.ContinueOnError)
 	f.SetOutput(io.Discard)
 	f.Var(&selectMode, "select", "save an exact unapproved metadata selection")
@@ -80,6 +80,7 @@ func hash(ctx context.Context, args []string, paths config.Paths) (any, error) {
 	f.Var(&showJob, "show-job", "show one existing fresh job without source access")
 	f.Var(&approveJob, "approve-job", "record separate full-file read consent for one exact fresh job; no source read")
 	f.Var(&showJobRead, "show-job-read", "show one saved fresh read consent without evaluating current permission")
+	f.Var(&runJob, "run-job", "perform one guarded fresh step under separate exact-job consent")
 	f.Var(&revokeJob, "revoke-job", "revoke one exact fresh read consent without source access")
 	f.Var(&keeper, "keeper", "with --save-choice, one explicit keeper work ID")
 	f.Var(&directory, "d", "exact manual scan root")
@@ -95,13 +96,19 @@ func hash(ctx context.Context, args []string, paths config.Paths) (any, error) {
 		return inventory.HashProposal{}, usageError{err}
 	}
 	modes := 0
-	for _, set := range []bool{selectMode.set, show.set, approve.set, run.set, revoke.set, saveChoice.set, checkChoice.set, requestChoice.set, newJobKey.set, saveChoiceJob.set, showJob.set, approveJob.set, showJobRead.set, revokeJob.set} {
+	for _, set := range []bool{selectMode.set, show.set, approve.set, run.set, revoke.set, saveChoice.set, checkChoice.set, requestChoice.set, newJobKey.set, saveChoiceJob.set, showJob.set, approveJob.set, showJobRead.set, revokeJob.set, runJob.set} {
 		if set {
 			modes++
 		}
 	}
 	if modes != 1 {
-		return nil, usageError{errors.New("hash requires exactly one mode: --select, --show, --save-choice, --check-choice, --request-choice, --new-job-key, --save-choice-job, --show-job, --approve-job, --show-job-read, --revoke-job, --approve, --run or --revoke")}
+		return nil, usageError{errors.New("hash requires exactly one mode: --select, --show, --save-choice, --check-choice, --request-choice, --new-job-key, --save-choice-job, --show-job, --approve-job, --show-job-read, --revoke-job, --run-job, --approve, --run or --revoke")}
+	}
+	if runJob.set {
+		if directory.set || from.set || keeper.set || jobKey.set || confirmRead.set || day.set || total.set || f.NArg() != 0 || !inventory.ValidHashFreshReadApprovalID(runJob.value) {
+			return nil, usageError{errors.New("hash --run-job requires one full hash-job-read-v1 consent ID and no root, report, target, keeper, key, confirmation or budget overrides")}
+		}
+		return hashRunFreshJob(ctx, paths, runJob.value)
 	}
 	if approveJob.set || showJobRead.set || revokeJob.set {
 		if directory.set || from.set || keeper.set || jobKey.set || f.NArg() != 0 {

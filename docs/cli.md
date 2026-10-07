@@ -631,7 +631,7 @@ JSON uses the standard `hash` envelope. Key generation returns contract `fresh_h
 
 Human output shows exact roles, zero fresh progress/charges and the separately labelled original context. Failed publication/close/output or late cancellation retains the job ID and explicit key in diagnostics so the user can inspect or repeat the exact request. A failed reply can leave a published job; never replace its key implicitly. Machine output can be partial or contain one already-written result, returns exit 1 on output failure/cancellation and never appends a second envelope. Key generation and showing perform no publication; neither claims a new saved result. Capabilities include `saved_fresh_hash_jobs: true`.
 
-These commands create no read consent, evaluate no current source state, perform no interrupted-work recovery and start no source reads. Source contents and original hashing records remain unchanged. Separate fresh consent is described below. Independent durable accounting and guarded fresh dispatch remain later work. A job or key is not cleanup authority.
+These commands create no read consent, evaluate no current source state, perform no interrupted-work recovery and start no source reads. Source contents and original hashing records remain unchanged. Separate fresh consent is described below. Independent accounting and one guarded fresh step are described below. A job or key is not cleanup authority.
 
 ## Record, show and revoke fresh-job read consent
 
@@ -651,7 +651,28 @@ JSON returns `hash.mode` and `hash.read_consent`. The immutable approval has con
 
 Saved-only show never compares the wall clock, migrates storage, observes expiry or recovers work. Missing consent uses `not_found`; exact binding failures use `fresh_read_consent_required`; corrupt or incompatible consent uses `fresh_read_consent_invalid` without a partial successful result. Expiry/revocation/clock refusals use the existing lifecycle error codes. Failed/uncertain publication, closing, output or late cancellation retains the exact consent ID for `--show-job-read` inspection. Machine output never appends a second envelope after a failed or canceled result. Capabilities include `fresh_hash_read_consent: true`.
 
-These commands start no fresh reads. An approval record or historical keeper/copy role grants no cleanup permission.
+These consent commands start no fresh reads. The separate finite run mode below requires the exact fresh approval. An approval record or historical keeper/copy role grants no cleanup permission.
+
+## Run one guarded fresh-job step
+
+```sh
+rydd hash --run-job APPROVAL_ID [--json]
+rydd hash --show-job JOB_ID [--json]
+```
+
+`--run-job` accepts one full new `hash-job-read-v1-` approval ID and no root, report, target, keeper, key, confirmation, cap or allowance overrides. Repeated/mixed modes and original approval IDs fail before storage access. One five-second cooperative context covers saved preflight, current guarded configuration, exact derived inventory, writer initialization/recovery, reservation, reads and settlement. Kernel filesystem calls can outlast that cooperative deadline. Keep the original global options and private data directory.
+
+The existing-only exact-job run writer requires saved fresh consent and creates additive hash schema 6 only on explicit initialization. It writes separate progress, latest attempts, reservation budget and queue state; immutable job/seed records and every original checkpoint, reservation, approval and clock stay unchanged. Opening this writer can recover only this job's unsettled attempts, fully charging unknown usage and retaining the prior checked prefix and durable fair order. Expired or revoked consent does not remove offline recovery access, but blocks new reservations. Ordinary readers and consent/job writers perform no recovery.
+
+The core owns the frozen manual inventory; callers cannot substitute a source store or root. Before and after live work it compares full original selection evidence, including selected files outside this job. Current configuration protects all original identities before reading config or SQLite. The first fresh file read compares held stamp/volume/mount with the selected original completed observation on the same descriptor before reading bytes. Fresh SHA state starts at zero; no original offset/state is imported. Later steps revalidate the new checkpoint's own held baseline. Source changes invalidate or refuse work and cannot yield a positive digest.
+
+A still-valid approval must outlast the remaining outer operation deadline. Otherwise `fresh_read_window_too_short` refuses before opening inventory/source files or reserving bytes; it does not claim saved expiry. Explicit wall-clock expiry observations are saved within the remaining deadline. If that publication is uncertain, the handle requires recovery and expiry remains unconfirmed; no permanent cross-reopen clock guarantee is claimed.
+
+Each step durably reserves at most the fixed 1 MiB ceiling, remaining bytes and available fresh day/lifetime caps before reading. Nonterminal progress uses 64-byte durable quanta; small final tails can finish. Queue rotation is durable at reservation time. Reservations are never refunded; known usage counts only settled bytes, and recovered unknown usage retains its full charge. UTC accounting follows reservation days, not physical I/O or reads per wall-clock day. Cancellation/expiry/rollback returns no positive digest. Saving cancellation usage has at most two seconds within the remaining original deadline; if that is unavailable or publication is uncertain, keep the charged unsettled reservation and require exact-job recovery. There is no automatic loop or retry.
+
+JSON returns `hash.mode: run`, the fixed ceiling, `budget_scope: whole_fresh_job`, exact job/key/request/choice/approval bindings, selected fresh ordinal/historical work ID/role, one-step usage/durable prefix and fresh budget. Completion is `hash_observed`, a historical full-file observation. A saved job retains immutable initial `work` and separately exposes validated `progress` and `fresh_budget`; fresh counters derive only from that ledger. Saved progress status is `complete`, while unfinished/invalidated/running work and latest reserved/settled/interrupted attempts remain explicit. Reports expose no checkpoint bytes, start no read, advance no clock and recover no work, even with sources/inventory/configuration offline. All verification/execution fields stay false and savings null.
+
+Full frozen inventory mismatch uses `hash_inventory_changed`; invalid new progress uses `fresh_hash_progress_invalid`; exact job/approval binding uses `fresh_read_consent_required`. Existing consent/budget/cancellation/uncertain-recovery codes remain stable. Failed publication/close/output or late cancellation identifies the exact job for `--show-job` inspection before another explicit run. Machine replies never append a second envelope. Capabilities include `guarded_fresh_hash_steps: true`; verified duplicates and cleanup remain false.
 
 ## Save and show a hash proposal
 

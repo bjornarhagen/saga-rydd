@@ -241,9 +241,13 @@ func printHashAttempt(out io.Writer, attempt *inventory.HashAttempt) {
 }
 
 func printHashBudget(out io.Writer, budget *inventory.HashBudget) {
-	printResultBanner(out, "WHOLE-SELECTION RESERVATION BUDGET")
+	printHashBudgetScope(out, budget, "WHOLE-SELECTION RESERVATION BUDGET", "selection", "whole saved selection")
+}
+
+func printHashBudgetScope(out io.Writer, budget *inventory.HashBudget, banner, name, scope string) {
+	printResultBanner(out, banner)
 	if budget == nil {
-		printWrapped(out, "No reservation is recorded for this selection.", "")
+		printWrapped(out, "No reservation is recorded for this "+name+".", "")
 		return
 	}
 	printField(out, "Saved day (UTC)", budget.Day)
@@ -263,5 +267,5 @@ func printHashBudget(out io.Writer, budget *inventory.HashBudget) {
 	} {
 		printField(out, item.label, humanBytes(item.value))
 	}
-	printWrapped(out, "These counters cover the whole saved selection, including work not shown. Reservations are full charged allowances and are never refunded. Interrupted charges count recovered attempts with unknown usage. Unsettled reservations remain charged but are excluded from the interrupted counters. Known counters omit attempts with unknown usage. They do not measure physical I/O or reads per wall-clock day. The budget itself does not store a limit or calculate remaining quota.", "")
+	printWrapped(out, "These counters cover the "+scope+", including work not shown. Reservations are full charged allowances and are never refunded. Interrupted charges count recovered attempts with unknown usage. Unsettled reservations remain charged but are excluded from the interrupted counters. Known counters omit attempts with unknown usage. They do not measure physical I/O or reads per wall-clock day. The budget itself does not store a limit or calculate remaining quota.", "")
 }

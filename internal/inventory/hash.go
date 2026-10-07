@@ -59,13 +59,14 @@ type FullHashProgress struct {
 type FullHashSession struct{ core *fullHashCore }
 
 type fullHashCore struct {
-	mu            sync.Mutex
-	scanner       *Scanner
-	target        SavedFileTarget
-	checkpoint    fullHashCheckpoint
-	checked       atomic.Pointer[FullHashProgress]
-	invalidated   bool
-	code, message string
+	mu                   sync.Mutex
+	scanner              *Scanner
+	target               SavedFileTarget
+	checkpoint           fullHashCheckpoint
+	checked              atomic.Pointer[FullHashProgress]
+	invalidated          bool
+	code, message        string
+	initialMetadataGuard func(unix.Stat_t, string, string) error
 }
 
 type fullHashCheckpoint struct {
@@ -189,6 +190,11 @@ func (s *FullHashSession) step(ctx context.Context, allowance int64, hooks fileH
 		return core.progress(false), usage, err
 	}
 	err = core.scanner.withSavedRegularFile(ctx, core.target, func(fd int, opened unix.Stat_t, volume, mount string) error {
+		if !previous.baseline && core.initialMetadataGuard != nil {
+			if err := core.initialMetadataGuard(opened, volume, mount); err != nil {
+				return err
+			}
+		}
 		if previous.baseline && (!previous.stamp.matches(opened) || previous.volume != volume || previous.mount != mount) {
 			return blocked("file_changed", "The file's identity, metadata, link count or mount differs from the checked continuation.")
 		}
