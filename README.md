@@ -124,6 +124,17 @@ Keep the returned choice ID and the same data directory. Reopening works with so
 
 A saved choice records historical roles only. It does not hide candidates, create a keep policy, approve another content read or permit cleanup. Current equality and reclaimable space remain unverified. If a reply fails after publication, the choice may already exist; inspect its full ID or repeat the exact save request. Private state and reports belong in a private data directory, outside version control.
 
+## Check metadata for a saved choice
+
+```sh
+rydd hash --check-choice CHOICE_ID
+rydd hash --check-choice CHOICE_ID --json
+```
+
+Use the full saved choice ID and the same data directory. This checks only its keeper and ordered copies against the frozen inventory and current path metadata. The folder comes from the saved choice; root and target overrides are unavailable. Current exclusions apply. Missing or changed inventory, files, ancestors, mounts or private storage block the check.
+
+Files are checked one at a time without reading their bodies. Configuration and saved SQLite records can be read. A metadata match does not prove current content equality or authorize another content read or cleanup. Results are not saved; approval remains unavailable and reclaimable space unknown. In JSON, inspect `hash.status`: exit 0 can include a completed `blocked` result. `hashes --choice` continues to reopen saved evidence without live checks.
+
 ## Save an exact hashing proposal
 
 ```sh

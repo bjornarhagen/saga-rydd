@@ -572,6 +572,31 @@ Writer JSON uses the `hash` envelope; reopening uses `hashes`. Both expose `id` 
 
 Invalid IDs/requests are `invalid_arguments` with exit `2`. Changed displayed evidence is `hash_choice_evidence_changed`, corrupt saved choices are `hash_choice_invalid`, and full capacity is `hash_choice_capacity`, with exit `1`. Missing existing storage or a missing choice is `not_found`. Errors never imply read or cleanup permission.
 
+### Metadata check for a saved choice
+
+```sh
+rydd hash --check-choice CHOICE_ID [--json]
+```
+
+This exclusive finite mode prepares one opaque request from the exact saved choice. Require the full lowercase `hash-choice-v1-` ID; repeated/mixed modes, positional IDs, directory/report/keeper overrides, read confirmations and byte limits are invalid before storage access. Global `--data-dir` must select the original hash store. `hashes --choice` stays saved-only, and guided review does not run this check automatically.
+
+Preparation closes its existing hash reader before guarded configuration access. The command uses current exclusions, protects private state/configuration against all original proposal identities, and creates a scanner only for the frozen manual root. Configured roots do not replace that scope. The library derives and owns the exact existing manual inventory; missing storage does not initialize or fall back to another inventory. Legacy selections without a supported saved locator refuse before configuration/source access.
+
+Under one cooperative five-second deadline, compare full selected root/file/ancestor inventory evidence before and after sequential held no-follow metadata checks. Preserve the keeper and caller-ordered copies, historical observations and individual metadata check times. Compare historical full-hash stamp/volume/mount bindings; a same-inode mount change can block. Do not replace frozen ancestors with newly captured evidence. Current exclusions, changed/missing/symlinked paths, contradictory inventory or replaced private storage cannot establish a match. The 2–20 target, 1 MiB evidence, 4096-byte path and 256-level limits apply. The deadline cannot interrupt a blocked kernel call; opening paths can have platform effects.
+
+JSON uses the standard `hash` envelope with contract `historical_choice_metadata_check_v1`, source `live_metadata_with_saved_inventory`, choice/store/selection/inventory IDs, `status`, `inventory_status`, `checked_at`, reason fields and ordered `targets`. Each target retains its exact `role`, historical `observation`, `metadata_checked_at`, status and reason. Authoritative path bytes remain base64. The `selected_file_body_requested_bytes` and `selected_file_body_read_bytes` fields are zero; they exclude bounded configuration bytes and SQLite page I/O. All provenance/content/current-state/duplicate/approval/executable flags remain false and estimated reclaimable bytes remains null. Capabilities include `saved_hash_choice_metadata_checks: true`.
+
+| Result | Meaning | Exit |
+| --- | --- | --- |
+| `metadata_matches` | Each selected metadata check matched at its own check time. Current content equality is unverified. | 0 |
+| `blocked` | The screen completed with changed, missing or uncertain evidence. Inspect overall and target reasons. | 0 |
+| Error-only envelope | Invalid usage, unavailable preparation/configuration or cancellation before output; no partial report is returned. | 2 for usage, 1 for operation failure |
+| Failed or canceled output | Output can be incomplete or contain one already-written result envelope. Read stderr and the process status; no second envelope is appended. | 1 |
+
+Missing choice/storage uses `not_found`; an unsupported locator or invalid prepared request uses `hash_choice_metadata_unavailable`. Existing corruption errors remain unchanged. Human output leads with the metadata result and shows exact roles, per-file times/reasons, zero body counters, unavailable approval and unknown savings. Failed or canceled output does not imply a saved result; machine output never appends a second envelope after a completed write.
+
+The check saves no result and performs no writer opening, migration, recovery, scan, directory listing, content hash, consent evaluation or reservation. Ordinary file bodies are not read. Configuration and saved SQLite records can be read, and normal SQLite sidecars/access times can change. Path-based private-storage guards are not authentication against deliberate coherent same-user replacement. Sequential metadata matches prove neither simultaneous/current content equality, inode continuity, independent storage nor safe cleanup, and grant no further content-read or execution authority.
+
 ## Save and show a hash proposal
 
 ```sh
