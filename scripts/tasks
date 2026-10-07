@@ -13,7 +13,7 @@ case "$task" in
         (cd experiments/sqlite && go fmt ./...)
         ;;
     test) exec go test ./... "$@" ;;
-    race) exec go test -race ./... "$@" ;;
+    race) exec go test -race -timeout=15m ./... "$@" ;;
     run) exec go run ./cmd/rydd "$@" ;;
     check)
         unformatted=$(gofmt -l cmd internal experiments)

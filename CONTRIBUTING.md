@@ -43,6 +43,8 @@ Run the binary matching your host for native smoke tests, for example `./dist/ry
 
 GitHub Actions runs checks and race detection on native macOS/Linux runners, plus Docker workflow validation and four-target cross-builds on Linux. Native CI does not replace physical laptop battery/sleep testing or the read-only soak.
 
+The full race task allows fifteen minutes per test package. The accumulated instrumented inventory suite exceeded Go's default ten-minute package timeout on native Linux; the native CI job allows twenty-five minutes for compilation, checks, races and subsequent platform fixtures. These are test harness limits. Application step deadlines, consent windows and individual fixture assertions remain unchanged.
+
 Run `./scripts/worker-smoke ./dist/rydd-darwin-arm64` on Apple Silicon (or the matching binary elsewhere) for a disposable native CLI lifecycle test. It initializes a private fixture, starts the worker, checks pause/resume/status and writer exclusion, stops it, and checks offline status. It leaves logs/state in a unique ignored `.local/worker-smoke.*` directory. Native CI runs this script too; Go tests also forcibly kill a worker process while a queue lease is held, then verify restart recovery and SIGTERM shutdown.
 
 Required future coverage includes APFS/ext4 behavior, symlink/path changes, permission-denied directories, interrupted/disconnected volumes, huge directories, sparse/hardlinked files, crash recovery, policy revocation and resource budgets. Track evidence against phase gates in `PROGRESS.md`.
