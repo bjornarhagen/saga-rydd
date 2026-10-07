@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bjornarhagen/saga-rydd/internal/config"
+	"github.com/bjornarhagen/saga-rydd/internal/inventory"
 	"github.com/bjornarhagen/saga-rydd/internal/state"
 	"github.com/bjornarhagen/saga-rydd/internal/worker"
 )
@@ -48,6 +49,9 @@ Commands:
   hashes [--work WORK_ID | --groups] [--json]       Read saved hash observations or historical matches
   hashes --preview SELECTION_ID --keeper WORK_ID COPY_ID... [--json]
                                                 Preview possible roles from saved historical hashes
+  hashes --choice CHOICE_ID [--json]                  Reopen an immutable historical keeper/copy choice
+  hash --save-choice SELECTION_ID --keeper WORK_ID COPY_ID... [--json]
+                                                     Save historical roles; no source reads or cleanup
   hash --select -d ROOT --from REPORT_JSON FILE_ID... Save unapproved hash metadata; no source contents
   hash --show SELECTION_ID [--json]                 Show exact saved hash proposal; no source reads
   hash --approve SELECTION_ID --confirm-content-read --max-day-bytes N --max-total-bytes N
@@ -58,6 +62,7 @@ Commands:
   measure -d PATH [--batches N] [--json]               Resume saved compact size calculations
   review -d PATH [--min-age-days N]                   Choose a numbered subset; save unapproved evidence
   review --hashes                                     Review numbered historical hashes; no saved choice
+  review --hashes --save-choice                       Review roles, then type save to preserve the choice
   report -d PATH [--json]                             Saved directory size
   report [--limit N] [--cursor TOKEN] [--json]           Largest observed files
   report --same-size [--min-size-bytes N] [--limit N] [--cursor TOKEN]    Saved size bands; contents unchecked
@@ -173,6 +178,11 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 		r, err = hash(ctx, remaining[1:], paths)
 		if err == nil {
 			err = printHashResult(out, r)
+		}
+		if err == nil && ctx.Err() != nil {
+			if choice, ok := r.(inventory.SavedHashKeeperChoice); ok {
+				err = fmt.Errorf("choice %s was saved, but its reply was canceled; reopen with hashes --choice %s: %w", choice.ID, choice.ID, ctx.Err())
+			}
 		}
 	case "report":
 		var r reportResult

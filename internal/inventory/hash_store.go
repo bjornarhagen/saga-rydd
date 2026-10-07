@@ -171,11 +171,22 @@ func OpenExistingHashSelectionWriter(ctx context.Context, base string) (*HashSto
 	return openHashStoreMode(ctx, base, false, true, true)
 }
 
+// OpenHashChoiceWriter opens existing saved hashing storage without recovering
+// work or migrating it. A successful choice publication performs any additive
+// migration in the same transaction as its first immutable choice record.
+func OpenHashChoiceWriter(ctx context.Context, base string) (*HashStore, error) {
+	return openHashStoreMigrationMode(ctx, base, false, true, true, false)
+}
+
 func openHashStore(ctx context.Context, base string, readOnly bool) (*HashStore, error) {
 	return openHashStoreMode(ctx, base, readOnly, false, false)
 }
 
 func openHashStoreMode(ctx context.Context, base string, readOnly, selectionOnly, existingOnly bool) (*HashStore, error) {
+	return openHashStoreMigrationMode(ctx, base, readOnly, selectionOnly, existingOnly, true)
+}
+
+func openHashStoreMigrationMode(ctx context.Context, base string, readOnly, selectionOnly, existingOnly, migrate bool) (*HashStore, error) {
 	ctx, cancelOpen := context.WithTimeout(ctx, 5*time.Second)
 	defer cancelOpen()
 	if !filepath.IsAbs(base) || filepath.Clean(base) != base || len(base) > 4096 || strings.ContainsRune(base, 0) {
@@ -288,11 +299,11 @@ func openHashStoreMode(ctx context.Context, base string, readOnly, selectionOnly
 			return fail(e)
 		}
 		version = 1
-	} else if app != hashStoreApplicationID || (version != 1 && version != 2) {
+	} else if app != hashStoreApplicationID || (version != 1 && version != 2 && version != 3) {
 		return fail(ErrHashStoreCorrupt)
 	}
 	s.schemaVersion = version
-	if !readOnly && version == 1 {
+	if !readOnly && migrate && version == 1 {
 		if err = s.migrateHashReadSchema(ctx); err != nil {
 			return fail(err)
 		}

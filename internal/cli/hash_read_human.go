@@ -17,6 +17,8 @@ func printHashResult(out io.Writer, result any) error {
 		return printHashConsentResult(out, result)
 	case HashStepReport:
 		return printHashStepReport(out, result)
+	case inventory.SavedHashKeeperChoice:
+		return printHashKeeperChoice(out, result)
 	default:
 		return errors.New("unknown hash command result")
 	}

@@ -29,18 +29,22 @@ func review(ctx context.Context, args []string, paths config.Paths, in io.Reader
 	f.StringVar(&path, "d", "", "exact manual scan root")
 	f.StringVar(&path, "directory", "", "exact manual scan root")
 	age := f.Int("min-age-days", state.FindingAgeDays, "minimum saved modification age")
-	var hashMode hashSelectOption
+	var hashMode, saveChoice hashSelectOption
 	f.Var(&hashMode, "hashes", "guide an ephemeral keeper/copy preview from existing saved hashes")
+	f.Var(&saveChoice, "save-choice", "with --hashes, offer an explicit unapproved historical choice save")
 	if err := f.Parse(args); err != nil {
 		return usageError{err}
 	}
 	seen := map[string]bool{}
 	f.Visit(func(v *flag.Flag) { seen[v.Name] = true })
 	if hashMode.set {
-		if !hashMode.value || f.NArg() != 0 || seen["d"] || seen["directory"] || seen["min-age-days"] {
+		if !hashMode.value || saveChoice.set && !saveChoice.value || f.NArg() != 0 || seen["d"] || seen["directory"] || seen["min-age-days"] {
 			return usageError{errors.New("review --hashes accepts no directory, age or positional selection options; use the global data directory containing saved hashes")}
 		}
-		return reviewHashes(ctx, paths, in, out)
+		return reviewHashes(ctx, paths, in, out, saveChoice.value)
+	}
+	if saveChoice.set {
+		return usageError{errors.New("review --save-choice requires --hashes; it is unavailable for candidate review")}
 	}
 	if f.NArg() != 0 || seen["d"] && seen["directory"] || *age < 1 || *age > state.MaxFindingAgeDays {
 		return usageError{errors.New("review accepts -d PATH and --min-age-days 1–36500; do not combine directory aliases")}

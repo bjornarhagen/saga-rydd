@@ -71,7 +71,7 @@ rydd report --same-size -d /path/to/project --min-size-bytes 1048576 --limit 20 
 
 This is the first filter for duplicate discovery. It groups saved regular-file metadata by size without opening source contents. Equal sizes do not prove equal contents. The default minimum is 1 MiB. `--limit` bounds raw saved file rows per page, including rows later excluded from the report. Dependency trees named `node_modules`, skipped entries and disabled roots are excluded.
 
-Page-local counts distinguish known device/inode objects, repeated saved aliases and unknown or conflicting identities. A size band can cross pages; boundary labels preserve even a single candidate at an edge. Use the returned cursor with the same minimum and data directory. A rebuilt inventory or changed minimum refuses the cursor. Scans can change membership between pages, so this is not a frozen export. There are no verified duplicate matches, keeper choices or savings estimates yet.
+Page-local counts distinguish known device/inode objects, repeated saved aliases and unknown or conflicting identities. A size band can cross pages; boundary labels preserve even a single candidate at an edge. Use the returned cursor with the same minimum and data directory. A rebuilt inventory or changed minimum refuses the cursor. Scans can change membership between pages, so this is not a frozen export. Same-size reports do not provide verified duplicates, keeper choices or savings estimates.
 
 A separate hashing store supports bounded full hashing with private checkpoints and conservative byte reservations. `rydd hashes [--work WORK_ID] [--json]` reads its existing saved observations, consent records and whole-selection budget. This command does not create, recover or resume work. Explicit consent and one-step reads are described below; worker integration remains pending. See [durable hashing limits](docs/inventory.md#explicit-file-observations-and-durable-hashing).
 
@@ -109,6 +109,21 @@ rydd --data-dir /absolute/path/to/state review --hashes
 
 Every choice is explicit, even when there is only one group. `back` keeps the displayed evidence; `refresh` at the group menu reloads saved records. Rydd checks the selected saved evidence again before showing the preview and gives a finite command to reopen it. This text flow reads no source files, inventory or configuration. It saves no decision or consent, and cannot perform cleanup. Use the same data directory as the hashing selection. Directory/age options and JSON output are unavailable in this mode.
 
+## Save and reopen a keeper/copy choice
+
+```sh
+rydd review --hashes --save-choice
+rydd hash --save-choice SELECTION_ID --keeper 1 3 2 --json
+rydd hashes --choice CHOICE_ID
+rydd hashes --choice CHOICE_ID --json
+```
+
+The guided saving mode shows the exact preview, then asks you to type `save`, `back` or `quit`. Only `save` preserves the choice. The finite save command names the full selection ID and explicit work IDs; copy order is preserved. Saving rechecks the selected saved evidence and refuses changed or ambiguous observations. It opens no source files, inventory or configuration.
+
+Keep the returned choice ID and the same data directory. Reopening works with source folders and inventory offline. Exact retries return the first saved ID, time and evidence. There is room for 128 distinct immutable choices per hashing selection, each at most 256 KiB. Existing choices are never replaced or discarded automatically.
+
+A saved choice records historical roles only. It does not hide candidates, create a keep policy, approve another content read or permit cleanup. Current equality and reclaimable space remain unverified. If a reply fails after publication, the choice may already exist; inspect its full ID or repeat the exact save request. Private state and reports belong in a private data directory, outside version control.
+
 ## Save an exact hashing proposal
 
 ```sh
@@ -134,7 +149,7 @@ Replace the example IDs with the saved selection and returned approval IDs. Keep
 
 Each explicit run attempts one step of at most 1 MiB. Rydd rechecks consent, limits, current saved inventory, configuration exclusions and live paths before publishing checked progress. Run again explicitly to continue later; there is no automatic loop or retry. Opening the writer can recover interrupted accounting even if the new read is refused. Saved readers do not perform that recovery. Revocation works offline and blocks later reservations after taking the writer lock; it cannot interrupt a step that already holds the lock.
 
-Completed hashes are historical observations. They do not prove that files are still equal, choose a keeper or authorize cleanup. Hashing currently supports one immutable selection per state directory. Background hashing, current duplicate verification, saved keeper decisions, savings estimates and cleanup remain pending.
+Completed hashes are historical observations. They do not prove that files are still equal, choose a keeper automatically or authorize cleanup. Hashing currently supports one immutable selection per state directory. Background hashing, current duplicate verification, savings estimates and cleanup remain pending.
 
 ## Preview an exact selection
 

@@ -535,7 +535,7 @@ One bounded existing saved transaction supplies complete observations and frozen
 
 JSON uses the `hashes` envelope with `contract: "historical_keeper_preview_v1"`, `hash_contract: "full_file_sha256_v1"`, `scope: "explicit_saved_subset"`, exact store/selection/inventory IDs, logical size/hash, `keeper` and ordered `copies`. Members preserve authoritative raw `path_bytes`, work/file/root IDs, historical check times, `observation_sequence` and saved identity/change/mtime/allocation evidence. The four coverage counts, budget and saved consent cover the whole selection; `budget_scope` stays `whole_saved_selection`, and current read permission stays unevaluated. Default observations and matching-group schemas are unchanged.
 
-The human result calls these possible roles for review. Observations need not be simultaneous and cannot prove current equality, inode continuity or independent storage. No decision is saved and no source, inventory or configuration is read. There is no initialization, migration, recovery or dispatch. `approval_available` and all verification/execution flags are `false`; `estimated_reclaimable_bytes` is `null`. Capabilities include `hash_keeper_previews: true`; cleanup and duplicate verification remain unavailable. Future saved decisions and executable plans require separate durable evidence, explicit approval and fresh action-time checks.
+The human result calls these possible roles for review. Observations need not be simultaneous and cannot prove current equality, inode continuity or independent storage. No decision is saved and no source, inventory or configuration is read. There is no initialization, migration, recovery or dispatch. `approval_available` and all verification/execution flags are `false`; `estimated_reclaimable_bytes` is `null`. Capabilities include `hash_keeper_previews: true`; cleanup and duplicate verification remain unavailable. Separate commands below can preserve a historical choice. Executable plans still need distinct durable evidence, explicit approval and fresh action-time checks.
 
 ### Guided historical hash review
 
@@ -551,6 +551,26 @@ Choose a numbered group, one keeper row and 1–19 distinct other copy rows. No 
 Readers and transactions close before any prompt. Once roles are supplied, the command loads one final `PreviewKeeper` snapshot, closes it, and compares store/selection/inventory IDs, logical size/full SHA and every selected member's evidence against the frozen rows. Changed/replaced evidence refuses the preview; work ordinals cannot silently refer to a replacement store. Unrelated completion, charges and consent can advance and appear from that final snapshot. The preview includes the exact finite command to repeat the explicit subset with the same data directory.
 
 All possible roles remain ephemeral. EOF or an unterminated line, quit, cancellation, input over 4096 bytes, refusal or output failure saves nothing. Sticky output failures stop before consuming more input. No source, inventory or configuration is opened; no initialization, migration, recovery, dispatch, consent or cleanup occurs. Historical/unevaluated/false-authority and unknown-savings qualifications are the same as the finite preview. Capabilities include `guided_hash_review: true`.
+
+### Save and reopen historical roles
+
+```sh
+rydd hash --save-choice SELECTION_ID --keeper 1 3 2 --json
+rydd hashes --choice CHOICE_ID --json
+rydd review --hashes --save-choice
+```
+
+Finite save requires one full lowercase selection ID, one canonical keeper work ID from `1` to `20` and 1–19 distinct other copy IDs, with flags before positional copies. The save mode is exclusive with selection, proposal display and read-consent modes; source, directory, report, confirmation and allowance options are refused before storage access. Reopening requires the full returned `hash-choice-v1-` ID and is exclusive with group/work/preview modes. Repeated or malformed options are invalid usage. `hashes` remains read-only.
+
+The save command opens existing saved hash storage, builds an exact preview, closes its reader and opens a dedicated existing-only choice writer. Guided saving supplies the preview already displayed. The publication transaction rebuilds the preview, checks exact store/selection/inventory, logical size/hash, role order and selected observations including raw paths and sequences/times, and repeats whole-selection alias/conflict classification. Changed selected evidence refuses the choice. Unrelated progress, charges and consent may advance and are captured as save-time historical context. No source, inventory or configuration is read, no attempt is recovered, and no content work is dispatched.
+
+First successful publication atomically adds choice schema 3 with its immutable record. There are at most 128 distinct choices per selection; each payload is at most 256 KiB. Earlier records are never overwritten or removed. A stable request key preserves role order and selected evidence while excluding publication time and mutable whole-selection context. An exact retry returns the first choice's ID, time and payload, including at capacity. Reopening reads existing saved state without migration or evidence refresh, with sources/inventory/configuration offline. Private SQLite reader sidecar behavior remains separate from record writes.
+
+Writer JSON uses the `hash` envelope; reopening uses `hashes`. Both expose `id` and `record`, with version, contract `historical_hash_choice_v1`, `created_at`, status `historical_unapproved` and `evidence`. Evidence retains the historical preview contract, exact keeper/ordered copies and save-time whole-selection coverage/budget/unevaluated consent. All verification, approval and execution flags remain false; savings remains null. A saved choice is separate from `plan-v1`, read consent, an active keep policy or cleanup authority. It does not hide paths from future reports. Capabilities include `saved_hash_choices: true`, while duplicate verification and cleanup remain false.
+
+`review --hashes --save-choice` requires the saving flag once with a true value, and still rejects directory/age/positional options and JSON. After the full preview, type a complete newline-terminated `save`, `back` or `quit`. Back returns to the same frozen member list. Readers and writer locks are closed before input. EOF, partial confirmation, cancellation or sticky output failure before publication saves nothing. After publication, cancellation or failed output reports the saved choice ID; commit uncertainty identifies its candidate ID. Reopen that ID or repeat the exact save request without changing roles or recapturing evidence. No automatic retry occurs.
+
+Invalid IDs/requests are `invalid_arguments` with exit `2`. Changed displayed evidence is `hash_choice_evidence_changed`, corrupt saved choices are `hash_choice_invalid`, and full capacity is `hash_choice_capacity`, with exit `1`. Missing existing storage or a missing choice is `not_found`. Errors never imply read or cleanup permission.
 
 ## Save and show a hash proposal
 

@@ -29,16 +29,21 @@ func (e missingHashError) Unwrap() error { return e.error }
 func hashes(ctx context.Context, args []string, paths config.Paths) (any, error) {
 	f := flag.NewFlagSet("hashes", flag.ContinueOnError)
 	f.SetOutput(io.Discard)
-	var work, preview, keeper hashOption
+	var work, preview, keeper, choice hashOption
 	var groups hashSelectOption
 	f.Var(&work, "work", "show one saved work ID (1–20); whole-selection budget remains visible")
 	f.Var(&groups, "groups", "group matching completed historical hashes from the whole saved selection")
 	f.Var(&preview, "preview", "preview possible keeper/copy roles for one exact saved selection")
 	f.Var(&keeper, "keeper", "one explicitly selected possible keeper work ID (1–20)")
+	f.Var(&choice, "choice", "reopen one full saved historical keeper/copy choice ID")
 	if err := f.Parse(args); err != nil {
 		return HashReport{}, usageError{err}
 	}
-	if preview.set {
+	if choice.set {
+		if work.set || groups.set || preview.set || keeper.set || f.NArg() != 0 || !inventory.ValidHashKeeperChoiceID(choice.value) {
+			return nil, usageError{errors.New("hashes --choice requires one full saved hash-choice-v1 ID and no other report modes or selection options")}
+		}
+	} else if preview.set {
 		if work.set || groups.set || !keeper.set || !validHashSelectionID(preview.value) || f.NArg() < 1 || f.NArg() >= inventory.FileSampleTargetLimit {
 			return nil, usageError{errors.New("hashes --preview requires one full lowercase selection ID, --keeper WORK_ID and 1–19 distinct copy work IDs; modes cannot be combined and options must precede IDs")}
 		}
@@ -68,6 +73,20 @@ func hashes(ctx context.Context, args []string, paths config.Paths) (any, error)
 			err = missingHashError{fmt.Errorf("saved hash storage is unavailable; hashes only reads existing observations: %w", err)}
 		}
 		return HashReport{}, err
+	}
+	if choice.set {
+		r, readErr := reader.KeeperChoice(ctx, choice.value)
+		closeErr := reader.Close()
+		if readErr != nil {
+			return nil, readErr
+		}
+		if closeErr != nil {
+			return nil, closeErr
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return r, nil
 	}
 	if preview.set {
 		r, readErr := reader.PreviewKeeper(ctx, preview.value, keeper.value, f.Args())
@@ -134,6 +153,8 @@ func printHashes(out io.Writer, report any) error {
 		return printHashGroups(out, r)
 	case inventory.HashKeeperPreview:
 		return printHashKeeperPreview(out, r)
+	case inventory.SavedHashKeeperChoice:
+		return printHashKeeperChoice(out, r)
 	default:
 		return errors.New("unsupported saved hash report")
 	}

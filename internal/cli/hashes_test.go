@@ -406,7 +406,7 @@ func TestHashesCLICorruptOrIncompatibleStoreReturnsNoPartialReport(t *testing.T)
 			case "oversized":
 				_, err = db.Exec("PRAGMA ignore_check_constraints=1; UPDATE hash_work SET checkpoint=? WHERE id=1", bytes.Repeat([]byte{'x'}, 8193))
 			case "version":
-				_, err = db.Exec("PRAGMA user_version=3")
+				_, err = db.Exec("PRAGMA user_version=4")
 			case "missing_meta":
 				_, err = db.Exec("DELETE FROM hash_meta")
 			}

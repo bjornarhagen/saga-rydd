@@ -66,11 +66,13 @@ func validHashSelectionID(value string) bool {
 
 func hash(ctx context.Context, args []string, paths config.Paths) (any, error) {
 	var selectMode, confirmRead hashSelectOption
-	var show, directory, from, approve, run, revoke, day, total hashOption
+	var show, directory, from, approve, run, revoke, day, total, saveChoice, keeper hashOption
 	f := flag.NewFlagSet("hash", flag.ContinueOnError)
 	f.SetOutput(io.Discard)
 	f.Var(&selectMode, "select", "save an exact unapproved metadata selection")
 	f.Var(&show, "show", "show one full saved selection ID without source reads")
+	f.Var(&saveChoice, "save-choice", "save explicitly selected historical keeper/copy roles; no cleanup approval")
+	f.Var(&keeper, "keeper", "with --save-choice, one explicit keeper work ID")
 	f.Var(&directory, "d", "exact manual scan root")
 	f.Var(&directory, "directory", "exact manual scan root")
 	f.Var(&from, "from", "one existing same-size JSON report file (at most 1 MiB)")
@@ -84,13 +86,25 @@ func hash(ctx context.Context, args []string, paths config.Paths) (any, error) {
 		return inventory.HashProposal{}, usageError{err}
 	}
 	modes := 0
-	for _, set := range []bool{selectMode.set, show.set, approve.set, run.set, revoke.set} {
+	for _, set := range []bool{selectMode.set, show.set, approve.set, run.set, revoke.set, saveChoice.set} {
 		if set {
 			modes++
 		}
 	}
 	if modes != 1 {
-		return nil, usageError{errors.New("hash requires exactly one of --select, --show, --approve, --run or --revoke")}
+		return nil, usageError{errors.New("hash requires exactly one of --select, --show, --save-choice, --approve, --run or --revoke")}
+	}
+	if saveChoice.set {
+		if directory.set || from.set || confirmRead.set || day.set || total.set || !keeper.set {
+			return nil, usageError{errors.New("hash --save-choice requires --keeper WORK_ID and explicit copy IDs; no source, read confirmation or budget options are accepted")}
+		}
+		if err := validateHashChoiceCLIRequest(saveChoice.value, keeper.value, f.Args()); err != nil {
+			return nil, err
+		}
+		return hashSaveKeeperChoice(ctx, paths, saveChoice.value, keeper.value, f.Args())
+	}
+	if keeper.set {
+		return nil, usageError{errors.New("--keeper requires hash --save-choice")}
 	}
 	if approve.set || run.set || revoke.set {
 		if directory.set || from.set || f.NArg() != 0 {
