@@ -281,6 +281,14 @@ Return the ephemeral `historical_keeper_preview_v1` contract with exact store/se
 
 Validate explicit subsets, wrong selections/reused ordinals, mismatched or unfinished observations, whole-selection aliases/conflicts, raw paths, caller mutation, cancellation, concurrent publication, offline/legacy storage and unchanged records under human/JSON output failures on generated fixtures and native platforms.
 
+### Guided historical hash review (P3-04c)
+
+Add text-only `review --hashes`, exclusive with directory, age and positional options. Reuse the existing bounded/cancellable input and sticky output guards. Load one existing historical group report and close the reader before prompts. Number groups and member rows from that frozen finite selection. Require an explicit group choice even for one group, one keeper row and 1–19 unique other rows; do not select all matches or supply a default. Show repeated/conflicting saved identity qualifications before selection. `back` retains the frozen report; only an explicit `refresh` at the group prompt loads new saved evidence. Empty groups exit with qualified whole-selection coverage.
+
+After the user supplies roles, reopen existing storage for `PreviewKeeper`, using the frozen selection ID and mapped work IDs. Compare returned store/selection/inventory IDs, logical size/full SHA and every selected member's displayed evidence before showing the preview; refuse changed or replaced stores, without silently recapturing reusable ordinals. Unselected completion, charges or consent may advance and must be displayed from the final one-transaction preview. Close the reader before output or waiting. Show a finite `hashes --preview` command that preserves the data directory and exact selected IDs. No decision is saved and no source/inventory/configuration access, initialization, migration, recovery, dispatch, read/cleanup approval or cleanup occurs.
+
+EOF, unterminated lines, quit, cancellation, oversized input and output failures save nothing. Validate explicit nonfirst/subset choices, multiple groups/back/refresh, empty and ambiguous reports, replaced stores while awaiting input, unrelated publication, offline storage, raw paths and early short-write stops on generated native fixtures. JSON review remains unsupported; finite `hashes` commands provide machine output.
+
 ## 7. Review, cleanup and recovery
 
 Background discovery does not itself authorize deletion. The action executor requires an approved plan or a matching, explicitly enabled automatic policy.

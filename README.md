@@ -95,6 +95,20 @@ Use the full selection ID and work IDs from the saved reports. This example prev
 
 This reads saved records only, so it works with source folders and inventory offline. It preserves observation sequences/times and whole-selection coverage, budget and saved consent. No decision is saved, no approval is available, and reclaimable space remains unknown. Current file verification and executable cleanup plans remain separate.
 
+For a guided review of saved historical matches:
+
+```sh
+rydd review --hashes
+rydd --data-dir /absolute/path/to/state review --hashes
+```
+
+1. Choose a numbered matching group.
+2. Choose one numbered possible keeper.
+3. Choose the other numbered paths to review as possible copies.
+4. Read the exact preview and its whole-selection coverage and charges.
+
+Every choice is explicit, even when there is only one group. `back` keeps the displayed evidence; `refresh` at the group menu reloads saved records. Rydd checks the selected saved evidence again before showing the preview and gives a finite command to reopen it. This text flow reads no source files, inventory or configuration. It saves no decision or consent, and cannot perform cleanup. Use the same data directory as the hashing selection. Directory/age options and JSON output are unavailable in this mode.
+
 ## Save an exact hashing proposal
 
 ```sh

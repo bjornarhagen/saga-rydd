@@ -537,6 +537,21 @@ JSON uses the `hashes` envelope with `contract: "historical_keeper_preview_v1"`,
 
 The human result calls these possible roles for review. Observations need not be simultaneous and cannot prove current equality, inode continuity or independent storage. No decision is saved and no source, inventory or configuration is read. There is no initialization, migration, recovery or dispatch. `approval_available` and all verification/execution flags are `false`; `estimated_reclaimable_bytes` is `null`. Capabilities include `hash_keeper_previews: true`; cleanup and duplicate verification remain unavailable. Future saved decisions and executable plans require separate durable evidence, explicit approval and fresh action-time checks.
 
+### Guided historical hash review
+
+```sh
+rydd review --hashes
+rydd --data-dir /absolute/path/to/state review --hashes
+```
+
+This text-only mode loads the existing finite historical hash groups from the global data directory. It requires `--hashes` once with a true value, and rejects directory/age options, positional IDs and mode combinations before storage access. `review --json` remains `unsupported_output`; use finite `hashes` commands for JSON.
+
+Choose a numbered group, one keeper row and 1–19 distinct other copy rows. No default or automatic all-match selection is provided, even for one group. Numbers refer only to the frozen displayed report. Repeated/conflicting identities are marked unavailable and cannot receive a role. `back` at the keeper prompt returns to the frozen groups; `back` at the copy prompt returns to the same member list. Only explicit `refresh` at the group prompt reloads saved evidence. Empty groups exit without requesting input and retain qualified whole-selection coverage.
+
+Readers and transactions close before any prompt. Once roles are supplied, the command loads one final `PreviewKeeper` snapshot, closes it, and compares store/selection/inventory IDs, logical size/full SHA and every selected member's evidence against the frozen rows. Changed/replaced evidence refuses the preview; work ordinals cannot silently refer to a replacement store. Unrelated completion, charges and consent can advance and appear from that final snapshot. The preview includes the exact finite command to repeat the explicit subset with the same data directory.
+
+All possible roles remain ephemeral. EOF or an unterminated line, quit, cancellation, input over 4096 bytes, refusal or output failure saves nothing. Sticky output failures stop before consuming more input. No source, inventory or configuration is opened; no initialization, migration, recovery, dispatch, consent or cleanup occurs. Historical/unevaluated/false-authority and unknown-savings qualifications are the same as the finite preview. Capabilities include `guided_hash_review: true`.
+
 ## Save and show a hash proposal
 
 ```sh
