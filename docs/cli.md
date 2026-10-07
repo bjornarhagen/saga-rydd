@@ -473,11 +473,11 @@ Recovery paths are capped at 4096 bytes and 256 components each, with at most 51
 ## Saved hash observations
 
 ```sh
-rydd hashes [--work WORK_ID] [--json]
+rydd hashes [--work WORK_ID | --groups] [--json]
 rydd --data-dir /absolute/path/to/state hashes --work 1 --json
 ```
 
-`hashes` reads the one finite saved hashing selection, its work records and its reservation budget. `--work` optionally selects one canonical decimal work ID from `1` to `20` within that selection. Repeated work flags, positional IDs, directory/source options, pagination and operation flags are rejected before storage access. Global `--data-dir` selects the hashing store; it must precede the command. The standard `--json` placement rules apply.
+`hashes` reads the one finite saved hashing selection, its work records and its reservation budget. `--work` optionally selects one canonical decimal work ID from `1` to `20` within that selection. `--groups` selects the historical matching view below; it cannot be combined with `--work`. Repeated mode flags, `--groups=false`, positional IDs, directory/source options, pagination and operation flags are rejected before storage access. Global `--data-dir` selects the hashing store; it must precede the command. The standard `--json` placement rules apply.
 
 The command opens only existing `hashes/hashes.sqlite3` storage under the selected data directory. It does not load configuration or inventory, access source paths, initialize or migrate storage, recover interrupted work, record consent or dispatch a read. Sources and inventory can be unavailable. Readers do not take the hashing writer lock. Opening and loading use a shared cooperative five-second context. No source files or saved records are changed; normal SQLite reader sidecars may change.
 
@@ -497,6 +497,30 @@ JSON uses the standard envelope with a `hashes` object. It retains the saved sna
 The budget contains the saved UTC reservation day, clock high-water, charged allowances, settled known usage and interrupted charges, for that day and across all reservation days. The unchanged JSON keys `unknown_reserved_bytes` and `total_unknown_reserved_bytes` count only recovered `interrupted_unknown` attempts. A currently unsettled `reserved` attempt has null usage and remains fully charged, but is excluded from those interrupted counters until writer recovery. The human view labels them as interrupted charges. The budget describes the whole saved selection, including work hidden by `--work`. Full reservations are never refunded; known usage counters omit unknown attempts. These are not physical I/O measurements or reads per wall-clock day. The budget itself stores no limit; a separate saved read consent can state fixed approved limits. This view does not infer remaining quota.
 
 Exit `0` means the saved snapshot was read, including a present store with no selection. Missing storage or work uses `not_found` and exit `1`; corrupt/incompatible records use `hash_invalid` without partially trusted record output. Cancellation and storage permissions use the standard failures. Invalid arguments use exit `2`; output-write failures use exit `1`. Capabilities include `saved_hash_reports: true`. Separate `hash` modes save a proposal, record read consent, perform one guarded step or revoke consent. Duplicate detection and cleanup remain false.
+
+### Matching historical hashes
+
+```sh
+rydd hashes --groups
+rydd --data-dir /absolute/path/to/state hashes --groups --json
+```
+
+This mode compares only completed full-file observations in the existing finite selection. A group contains at least two recorded paths with the same logical size and full SHA-256 digest. Groups are ordered by descending size, then digest; members retain saved work order. The size is per file. Observations can come from different times and do not establish current equality. Sources, inventory and configuration can be offline; there is no live path check, new read consent, recovery or source read.
+
+JSON retains the standard `hashes` envelope. This mode uses `source: "saved_hash_observations"`, `contract: "historical_full_sha256_groups_v1"`, `hash_contract: "full_file_sha256_v1"`, and `scope`/`budget_scope: "whole_saved_selection"`. It includes store/selection/inventory IDs, saved budget/consent and `groups`, without changing the default observations schema. All verification/execution flags remain `false`, and `estimated_reclaimable_bytes` remains `null`.
+
+| Whole-selection count | Meaning |
+| --- | --- |
+| `selected_work` | All records in the one saved selection, at most 20. |
+| `completed_observations` | Records with a validated completed full-file observation. |
+| `unfinished_work` | Records without a completed observation, including pending, running and invalidated states. |
+| `unmatched_completed_observations` | Completed observations outside every displayed matching group. |
+
+`groups` is always an array, including `[]` when no matches are saved. Empty groups do not establish complete scan coverage or absence of duplicate files. Each group includes `logical_bytes`, `sha256`, `members`, `saved_identities`, `repeated_saved_paths` and `conflicting_saved_identities`. Each member retains exact work/file/root IDs, authoritative `path_bytes`, its individual `checked_at`, saved device/inode/change/mtime/allocation evidence and repetition/conflict flags.
+
+Identity counts describe recorded device/inode values. Repeated identities and conflicts are classified across the whole selection, including unfinished records and observations outside the displayed group. Differing saved size, change time, modification time, allocation or completed digests makes an identity conflicting. Group counts cover only its members; member flags retain the wider context. Multiple paths to one recorded identity can still form a group, with an explicit alias qualification. These records do not prove current hardlinks, inode continuity or independent storage.
+
+The human view quotes paths, shows historical check times and labels sizes per file. It provides no keeper or savings recommendation. Saved budget and consent retain their existing semantics; current read permission remains unevaluated. Both the immutable selection and observed work come from one bounded read transaction. Argument/error/output contracts are the same as the default saved view. `saved_hash_groups` is true; `duplicates` and cleanup remain false.
 
 ## Save and show a hash proposal
 

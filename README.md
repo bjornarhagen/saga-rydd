@@ -75,6 +75,15 @@ Page-local counts distinguish known device/inode objects, repeated saved aliases
 
 A separate hashing store supports bounded full hashing with private checkpoints and conservative byte reservations. `rydd hashes [--work WORK_ID] [--json]` reads its existing saved observations, consent records and whole-selection budget. This command does not create, recover or resume work. Explicit consent and one-step reads are described below; worker integration remains pending. See [durable hashing limits](docs/inventory.md#explicit-file-observations-and-durable-hashing).
 
+To group matching completed observations from that saved selection:
+
+```sh
+rydd hashes --groups
+rydd hashes --groups --json
+```
+
+Groups contain equal recorded logical sizes and full SHA-256 hashes. They show exact paths, each historical check time and qualified saved identities, including aliases and conflicts. Counts show how much selected work has a full observation and how many completed observations have no match. The command reads saved hash storage only. The observations need not be simultaneous and do not establish current duplicates, a keeper or reclaimable space. `--groups` cannot be combined with `--work`.
+
 ## Save an exact hashing proposal
 
 ```sh
@@ -100,7 +109,7 @@ Replace the example IDs with the saved selection and returned approval IDs. Keep
 
 Each explicit run attempts one step of at most 1 MiB. Rydd rechecks consent, limits, current saved inventory, configuration exclusions and live paths before publishing checked progress. Run again explicitly to continue later; there is no automatic loop or retry. Opening the writer can recover interrupted accounting even if the new read is refused. Saved readers do not perform that recovery. Revocation works offline and blocks later reservations after taking the writer lock; it cannot interrupt a step that already holds the lock.
 
-Completed hashes are historical observations. They do not prove that files are still equal, choose a keeper or authorize cleanup. Hashing currently supports one immutable selection per state directory. Background hashing, duplicate-group reports and cleanup remain pending.
+Completed hashes are historical observations. They do not prove that files are still equal, choose a keeper or authorize cleanup. Hashing currently supports one immutable selection per state directory. Background hashing, current duplicate verification, keeper choices, savings estimates and cleanup remain pending.
 
 ## Preview an exact selection
 

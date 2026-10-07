@@ -45,7 +45,7 @@ Commands:
   plan --revoke PLAN_ID                               Revoke review consent; no inventory needed
   journal --show INTENT_ID [--json]                 Read saved preparation/history; no operations
   journal --observe INTENT_ID [--json]              Observe recovery locations; no operations
-  hashes [--work WORK_ID] [--json]                  Read saved hash observations and whole-selection budget
+  hashes [--work WORK_ID | --groups] [--json]       Read saved hash observations or historical matches
   hash --select -d ROOT --from REPORT_JSON FILE_ID... Save unapproved hash metadata; no source contents
   hash --show SELECTION_ID [--json]                 Show exact saved hash proposal; no source reads
   hash --approve SELECTION_ID --confirm-content-read --max-day-bytes N --max-total-bytes N
@@ -160,7 +160,7 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 			printJournal(out, r)
 		}
 	case "hashes":
-		var r HashReport
+		var r any
 		r, err = hashes(ctx, remaining[1:], paths)
 		if err == nil {
 			err = printHashes(out, r)

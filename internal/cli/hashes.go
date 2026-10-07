@@ -27,21 +27,25 @@ type missingHashError struct{ error }
 
 func (e missingHashError) Unwrap() error { return e.error }
 
-func hashes(ctx context.Context, args []string, paths config.Paths) (HashReport, error) {
+func hashes(ctx context.Context, args []string, paths config.Paths) (any, error) {
 	f := flag.NewFlagSet("hashes", flag.ContinueOnError)
 	f.SetOutput(io.Discard)
 	workID := f.String("work", "", "show one saved work ID (1–20); whole-selection budget remains visible")
+	groups := f.Bool("groups", false, "group matching completed historical hashes from the whole saved selection")
 	if err := f.Parse(args); err != nil {
 		return HashReport{}, usageError{err}
 	}
-	workFlags := 0
+	workFlags, groupFlags := 0, 0
 	for _, arg := range args {
 		if arg == "--work" || arg == "-work" || strings.HasPrefix(arg, "--work=") || strings.HasPrefix(arg, "-work=") {
 			workFlags++
 		}
+		if arg == "--groups" || arg == "-groups" || strings.HasPrefix(arg, "--groups=") || strings.HasPrefix(arg, "-groups=") {
+			groupFlags++
+		}
 	}
-	if f.NArg() != 0 || workFlags > 1 {
-		return HashReport{}, usageError{errors.New("hashes accepts only one optional --work WORK_ID; no directory or source options")}
+	if f.NArg() != 0 || workFlags > 1 || groupFlags > 1 || (workFlags != 0 && groupFlags != 0) || (groupFlags != 0 && !*groups) {
+		return nil, usageError{errors.New("hashes accepts one optional --work WORK_ID or --groups; modes cannot be repeated or combined, and no directory or source options are allowed")}
 	}
 	if workFlags != 0 {
 		ordinal, err := strconv.Atoi(*workID)
@@ -60,6 +64,20 @@ func hashes(ctx context.Context, args []string, paths config.Paths) (HashReport,
 			err = missingHashError{fmt.Errorf("saved hash storage is unavailable; hashes only reads existing observations: %w", err)}
 		}
 		return HashReport{}, err
+	}
+	if *groups {
+		r, readErr := reader.Groups(ctx)
+		closeErr := reader.Close()
+		if readErr != nil {
+			return nil, readErr
+		}
+		if closeErr != nil {
+			return nil, closeErr
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return r, nil
 	}
 	snapshot, err := reader.Snapshot(ctx)
 	closeErr := reader.Close()
@@ -85,7 +103,18 @@ func hashes(ctx context.Context, args []string, paths config.Paths) (HashReport,
 	return r, nil
 }
 
-func printHashes(out io.Writer, r HashReport) error {
+func printHashes(out io.Writer, report any) error {
+	switch r := report.(type) {
+	case HashReport:
+		return printHashObservations(out, r)
+	case inventory.HashGroupsReport:
+		return printHashGroups(out, r)
+	default:
+		return errors.New("unsupported saved hash report")
+	}
+}
+
+func printHashObservations(out io.Writer, r HashReport) error {
 	guard := &reviewOutput{writer: out}
 	printWrapped(guard, "Saga — Rydd: saved hash observations", "")
 	printResultBanner(guard, "SAVED HASH OBSERVATIONS - CURRENT FILES NOT CHECKED")
