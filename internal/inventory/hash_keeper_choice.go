@@ -143,7 +143,7 @@ func (s *HashStore) saveKeeperChoice(ctx context.Context, expected HashKeeperPre
 		return SavedHashKeeperChoice{}, err
 	}
 	var version int
-	if err = tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil || version < 1 || version > 4 {
+	if err = tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil || version < 1 || version > 5 {
 		return SavedHashKeeperChoice{}, hashKeeperChoiceFailure(ctx, ErrHashKeeperChoiceCorrupt)
 	}
 	if version >= 3 {
@@ -300,7 +300,7 @@ func (s *HashStore) readHashKeeperChoice(ctx context.Context, db hashQuery, id s
 	if version < 3 {
 		return SavedHashKeeperChoice{}, fmt.Errorf("saved historical choice %s is unavailable: %w", id, os.ErrNotExist)
 	}
-	if version != 3 && version != 4 {
+	if version != 3 && version != 4 && version != 5 {
 		return SavedHashKeeperChoice{}, ErrHashKeeperChoiceCorrupt
 	}
 	if _, err = hashKeeperChoiceCount(ctx, db); err != nil {

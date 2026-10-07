@@ -25,6 +25,8 @@ func printHashResult(out io.Writer, result any) error {
 		return printHashKeeperChoiceFreshRequest(out, result)
 	case HashFreshJobKeyResult:
 		return printHashFreshJobKey(out, result)
+	case HashFreshReadConsentResult:
+		return printHashFreshReadConsentResult(out, result)
 	case HashFreshChoiceJobResult:
 		return printHashFreshChoiceJob(out, result)
 	default:

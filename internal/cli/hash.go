@@ -66,7 +66,7 @@ func validHashSelectionID(value string) bool {
 
 func hash(ctx context.Context, args []string, paths config.Paths) (any, error) {
 	var selectMode, confirmRead, newJobKey hashSelectOption
-	var show, directory, from, approve, run, revoke, day, total, saveChoice, checkChoice, requestChoice, keeper, saveChoiceJob, showJob, jobKey hashOption
+	var show, directory, from, approve, run, revoke, day, total, saveChoice, checkChoice, requestChoice, keeper, saveChoiceJob, showJob, jobKey, approveJob, showJobRead, revokeJob hashOption
 	f := flag.NewFlagSet("hash", flag.ContinueOnError)
 	f.SetOutput(io.Discard)
 	f.Var(&selectMode, "select", "save an exact unapproved metadata selection")
@@ -78,6 +78,9 @@ func hash(ctx context.Context, args []string, paths config.Paths) (any, error) {
 	f.Var(&saveChoiceJob, "save-choice-job", "save a separate unapproved fresh job from one exact saved choice")
 	f.Var(&jobKey, "job-key", "with --save-choice-job, one explicit stable job retry key")
 	f.Var(&showJob, "show-job", "show one existing fresh job without source access")
+	f.Var(&approveJob, "approve-job", "record separate full-file read consent for one exact fresh job; no source read")
+	f.Var(&showJobRead, "show-job-read", "show one saved fresh read consent without evaluating current permission")
+	f.Var(&revokeJob, "revoke-job", "revoke one exact fresh read consent without source access")
 	f.Var(&keeper, "keeper", "with --save-choice, one explicit keeper work ID")
 	f.Var(&directory, "d", "exact manual scan root")
 	f.Var(&directory, "directory", "exact manual scan root")
@@ -92,13 +95,43 @@ func hash(ctx context.Context, args []string, paths config.Paths) (any, error) {
 		return inventory.HashProposal{}, usageError{err}
 	}
 	modes := 0
-	for _, set := range []bool{selectMode.set, show.set, approve.set, run.set, revoke.set, saveChoice.set, checkChoice.set, requestChoice.set, newJobKey.set, saveChoiceJob.set, showJob.set} {
+	for _, set := range []bool{selectMode.set, show.set, approve.set, run.set, revoke.set, saveChoice.set, checkChoice.set, requestChoice.set, newJobKey.set, saveChoiceJob.set, showJob.set, approveJob.set, showJobRead.set, revokeJob.set} {
 		if set {
 			modes++
 		}
 	}
 	if modes != 1 {
-		return nil, usageError{errors.New("hash requires exactly one of --select, --show, --save-choice, --check-choice, --request-choice, --new-job-key, --save-choice-job, --show-job, --approve, --run or --revoke")}
+		return nil, usageError{errors.New("hash requires exactly one mode: --select, --show, --save-choice, --check-choice, --request-choice, --new-job-key, --save-choice-job, --show-job, --approve-job, --show-job-read, --revoke-job, --approve, --run or --revoke")}
+	}
+	if approveJob.set || showJobRead.set || revokeJob.set {
+		if directory.set || from.set || keeper.set || jobKey.set || f.NArg() != 0 {
+			return nil, usageError{errors.New("fresh consent modes accept no root, report, target, keeper or generation-key overrides")}
+		}
+		mode, id := "approve", approveJob.value
+		if showJobRead.set {
+			mode, id = "show", showJobRead.value
+		}
+		if revokeJob.set {
+			mode, id = "revoke", revokeJob.value
+		}
+		var dayCap, totalCap int64
+		if approveJob.set {
+			if !inventory.ValidHashFreshJobID(id) || !confirmRead.set || !confirmRead.value || !day.set || !total.set {
+				return nil, usageError{errors.New("hash --approve-job requires one full saved job ID, --confirm-content-read, --max-day-bytes N and --max-total-bytes N; there are no default caps")}
+			}
+			var err error
+			dayCap, err = parseHashReservationCap(day.value, "--max-day-bytes")
+			if err != nil {
+				return nil, err
+			}
+			totalCap, err = parseHashReservationCap(total.value, "--max-total-bytes")
+			if err != nil {
+				return nil, err
+			}
+		} else if !inventory.ValidHashFreshReadApprovalID(id) || confirmRead.set || day.set || total.set {
+			return nil, usageError{errors.New("hash --show-job-read and --revoke-job require one full hash-job-read-v1 consent ID and no confirmation or cap changes")}
+		}
+		return hashFreshReadCommand(ctx, paths, mode, id, dayCap, totalCap)
 	}
 	if newJobKey.set || saveChoiceJob.set || showJob.set {
 		if directory.set || from.set || keeper.set || confirmRead.set || day.set || total.set || f.NArg() != 0 {

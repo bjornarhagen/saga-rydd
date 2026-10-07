@@ -74,19 +74,20 @@ type HashFreshJobWork struct {
 }
 
 type SavedFreshJob struct {
-	ID                        string             `json:"id"`
-	Record                    HashFreshJobRecord `json:"record"`
-	Work                      []HashFreshJobWork `json:"work"`
-	FreshReservedBytes        int64              `json:"fresh_reserved_bytes"`
-	FreshRequestedBytes       int64              `json:"fresh_requested_bytes"`
-	FreshReadBytes            int64              `json:"fresh_read_bytes"`
-	ApprovalAvailable         bool               `json:"approval_available"`
-	ProvenanceVerified        bool               `json:"provenance_verified"`
-	ContentVerified           bool               `json:"content_verified"`
-	CurrentStateVerified      bool               `json:"current_state_verified"`
-	DuplicatesVerified        bool               `json:"duplicates_verified"`
-	Executable                bool               `json:"executable"`
-	EstimatedReclaimableBytes *int64             `json:"estimated_reclaimable_bytes"`
+	ID                        string                `json:"id"`
+	Record                    HashFreshJobRecord    `json:"record"`
+	Work                      []HashFreshJobWork    `json:"work"`
+	ReadConsent               *HashFreshReadConsent `json:"read_consent,omitempty"`
+	FreshReservedBytes        int64                 `json:"fresh_reserved_bytes"`
+	FreshRequestedBytes       int64                 `json:"fresh_requested_bytes"`
+	FreshReadBytes            int64                 `json:"fresh_read_bytes"`
+	ApprovalAvailable         bool                  `json:"approval_available"`
+	ProvenanceVerified        bool                  `json:"provenance_verified"`
+	ContentVerified           bool                  `json:"content_verified"`
+	CurrentStateVerified      bool                  `json:"current_state_verified"`
+	DuplicatesVerified        bool                  `json:"duplicates_verified"`
+	Executable                bool                  `json:"executable"`
+	EstimatedReclaimableBytes *int64                `json:"estimated_reclaimable_bytes"`
 }
 
 const hashFreshJobSchema = `
@@ -235,10 +236,10 @@ func (s *HashStore) saveFreshJob(ctx context.Context, request *KeeperChoiceFresh
 		return SavedFreshJob{}, err
 	}
 	var version int
-	if err = tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil || version < 3 || version > 4 {
+	if err = tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil || version < 3 || version > 5 {
 		return SavedFreshJob{}, hashFreshJobFailure(ctx, ErrHashFreshJobCorrupt)
 	}
-	if version == 4 {
+	if version >= 4 {
 		var id string
 		err = tx.QueryRowContext(ctx, "SELECT substr(CAST(id AS BLOB),1,84) FROM hash_fresh_job WHERE job_key=?", key).Scan(&id)
 		if err == nil {
@@ -313,7 +314,10 @@ func (s *HashStore) saveFreshJob(ctx context.Context, request *KeeperChoiceFresh
 		s.poisoned = true
 		return saved, fmt.Errorf("fresh job %s with key %s publication is uncertain; close storage, inspect this ID or repeat the exact key/request: %w", id, key, ErrHashRecoveryRequired)
 	}
-	s.schemaVersion = 4
+	if version < 4 {
+		version = 4
+	}
+	s.schemaVersion = version
 	if hooks.afterCommit != nil {
 		hooks.afterCommit()
 	}
@@ -502,7 +506,7 @@ func (s *HashStore) readFreshJob(ctx context.Context, db hashQuery, id string) (
 	if version >= 1 && version <= 3 {
 		return SavedFreshJob{}, fmt.Errorf("saved fresh job %s is unavailable: %w", id, os.ErrNotExist)
 	}
-	if version != 4 {
+	if version != 4 && version != 5 {
 		return SavedFreshJob{}, ErrHashFreshJobCorrupt
 	}
 	if _, err := hashFreshJobCount(ctx, db); err != nil {
@@ -570,7 +574,12 @@ func (s *HashStore) readFreshJob(ctx context.Context, db hashQuery, id string) (
 	for i := range record.Request.Targets {
 		record.Request.Targets[i].Target = cloneHashTarget(record.Request.Targets[i].Target)
 	}
-	return SavedFreshJob{ID: id, Record: record, Work: work}, nil
+	job := SavedFreshJob{ID: id, Record: record, Work: work}
+	job.ReadConsent, err = s.readHashFreshReadConsent(ctx, db, job)
+	if err != nil {
+		return SavedFreshJob{}, err
+	}
+	return job, nil
 }
 
 func hashFreshJobCount(ctx context.Context, db hashQuery) (int, error) {

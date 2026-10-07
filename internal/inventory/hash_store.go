@@ -301,7 +301,7 @@ func openHashStoreMigrationMode(ctx context.Context, base string, readOnly, sele
 			return fail(e)
 		}
 		version = 1
-	} else if app != hashStoreApplicationID || (version != 1 && version != 2 && version != 3 && version != 4) {
+	} else if app != hashStoreApplicationID || (version != 1 && version != 2 && version != 3 && version != 4 && version != 5) {
 		return fail(ErrHashStoreCorrupt)
 	}
 	s.schemaVersion = version

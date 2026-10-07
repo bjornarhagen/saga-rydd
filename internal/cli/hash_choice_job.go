@@ -128,15 +128,17 @@ func printHashFreshChoiceJob(out io.Writer, result HashFreshChoiceJobResult) err
 	guard := &reviewOutput{writer: out}
 	job, record := result.Job, result.Job.Record
 	printWrapped(guard, "Saga — Rydd: independent fresh full-file job", "")
-	if result.Mode == "save" {
+	if job.ReadConsent != nil {
+		printResultBanner(guard, "SAVED FRESH JOB - PERMISSION NOT EVALUATED")
+	} else if result.Mode == "save" {
 		printResultBanner(guard, "FRESH JOB SAVED - READ CONSENT UNAVAILABLE")
 	} else {
 		printResultBanner(guard, "SAVED FRESH JOB - READ CONSENT UNAVAILABLE")
 	}
 	fmt.Fprintf(guard, "Job: %s\nJob key: %s\nRequest: %s\nChoice: %s\nOriginal store: %s\nOriginal selection: %s\nInventory: %s\n", job.ID, record.JobKey, record.Request.RequestID, record.Request.ChoiceID, record.Request.StoreID, record.Request.SelectionID, record.Request.InventoryID)
 	printField(guard, "Job saved at", record.CreatedAt.UTC().Format(time.RFC3339Nano))
-	printField(guard, "Job status", record.Status)
-	printWrapped(guard, "This is a separate unapproved job. Its selected files start with zero fresh progress. Historical digests and old read approvals are context only; no SHA continuation state or allowance was copied into this job.", "")
+	printField(guard, "Job creation status", record.Status)
+	printWrapped(guard, "This separate job was created unapproved. Its selected files start with zero fresh progress. Historical digests and old read approvals are context only; no SHA continuation state or allowance was copied into this job.", "")
 	for i, work := range job.Work {
 		target := record.Request.Targets[i]
 		role := "Selected copy for review"
@@ -159,9 +161,13 @@ func printHashFreshChoiceJob(out io.Writer, result HashFreshChoiceJobResult) err
 	printWrapped(guard, "These whole-original-selection charges and consent were captured when this job was first saved. They are not this job's accounting or permission. Exact retries retain the first context.", "")
 	printHashBudget(guard, record.OriginalContext.Budget)
 	printHashReadConsent(guard, record.OriginalContext.ReadConsent)
-	printField(guard, "Fresh read approval", "Unavailable")
+	if job.ReadConsent == nil {
+		printField(guard, "Fresh read approval", "Unavailable")
+	} else {
+		printHashFreshReadConsent(guard, job.ReadConsent)
+	}
 	printField(guard, "Reclaimable space", "Unknown")
-	printWrapped(guard, "Only existing saved hash records were accessed. No source files, configuration or inventory were opened. Original hashing work, consent and charges were unchanged. This job grants no content read or cleanup permission. Keep the same global options and private data directory when reopening it with:", "")
+	printWrapped(guard, "Only existing saved hash records were accessed. No source files, configuration or inventory were opened. Original hashing work, consent and charges were unchanged. This saved view evaluates no current read permission and grants no cleanup permission. Keep the same global options and private data directory when reopening it with:", "")
 	fmt.Fprintf(guard, "  rydd hash --show-job %s\n", job.ID)
 	if guard.err != nil {
 		return fmt.Errorf("write existing fresh job %s; reopen with hash --show-job %s or repeat the exact choice with --job-key %s: %w", job.ID, job.ID, record.JobKey, guard.err)

@@ -631,7 +631,27 @@ JSON uses the standard `hash` envelope. Key generation returns contract `fresh_h
 
 Human output shows exact roles, zero fresh progress/charges and the separately labelled original context. Failed publication/close/output or late cancellation retains the job ID and explicit key in diagnostics so the user can inspect or repeat the exact request. A failed reply can leave a published job; never replace its key implicitly. Machine output can be partial or contain one already-written result, returns exit 1 on output failure/cancellation and never appends a second envelope. Key generation and showing perform no publication; neither claims a new saved result. Capabilities include `saved_fresh_hash_jobs: true`.
 
-These commands create no read consent, evaluate no current source state, perform no interrupted-work recovery and start no source reads. Source contents and original hashing records remain unchanged. New consent, independent durable accounting and guarded fresh dispatch remain separate work. A job or key is not cleanup authority.
+These commands create no read consent, evaluate no current source state, perform no interrupted-work recovery and start no source reads. Source contents and original hashing records remain unchanged. Separate fresh consent is described below. Independent durable accounting and guarded fresh dispatch remain later work. A job or key is not cleanup authority.
+
+## Record, show and revoke fresh-job read consent
+
+```sh
+rydd hash --approve-job JOB_ID --confirm-content-read --max-day-bytes N --max-total-bytes N [--json]
+rydd hash --show-job-read APPROVAL_ID [--json]
+rydd hash --revoke-job APPROVAL_ID [--json]
+```
+
+Choose exactly one mode. Approving requires one full `hash-choice-job-v1-` job ID, explicit true full-read confirmation and both canonical decimal caps in 1–1125899906842624 bytes. Show/revoke require the separate full `hash-job-read-v1-` approval ID. Original 64-character approval IDs are invalid. Repeated/mixed modes, positional targets and root/report/keeper/key overrides fail before storage access; show/revoke accept no confirmation or cap changes. The immutable saved job supplies its exact key, request, manual locator and ordered role/target scope. No override or metadata-screen token is accepted.
+
+One five-second context covers existing saved preflight, reader closure and request-bound metadata publication. Missing storage/job/consent never initializes. First approval atomically adds hash schema 5 with separate per-job approval, revocation and clock tables. It starts with zero fresh charges, fixes expiry at 24 hours and fixes the step ceiling at 1 MiB. Original approvals, clocks, charges, checkpoints and reservations remain unchanged. No source, configuration or inventory is opened; no work is recovered or dispatched.
+
+Exact approval retries preserve the first ID, creation time, expiry and caps. Changed caps use `fresh_read_consent_conflict`. Expiry and revocation cannot renew. First approval refuses wall time before the job's creation. Writer retries observe only the fresh job's monotone clock and permanent expiry; original clocks provide no fresh authority. Revocation remains available under expiry/clock rollback and preserves its first record. It blocks later reservations after the writer lock is acquired, without preempting an operation already holding that lock or a blocked kernel operation.
+
+JSON returns `hash.mode` and `hash.read_consent`. The immutable approval has contract `explicit_choice_bound_fresh_full_file_hash_read_v1`, exact job/key/request/original refs/manual locator, ordered scope digest, fixed times/ceiling/caps and zero initial reservations. Saved lifecycle exposes status, fresh clock high-water, observed expiry and optional revocation. Current permission is unevaluated, all verification/executable flags remain false and reclaimable bytes null. `--show-job` and exact save-job retries include optional fresh `read_consent` separately from the immutable creation record and original historical context. A creation status of `unapproved` describes publication time, not the current saved consent lifecycle.
+
+Saved-only show never compares the wall clock, migrates storage, observes expiry or recovers work. Missing consent uses `not_found`; exact binding failures use `fresh_read_consent_required`; corrupt or incompatible consent uses `fresh_read_consent_invalid` without a partial successful result. Expiry/revocation/clock refusals use the existing lifecycle error codes. Failed/uncertain publication, closing, output or late cancellation retains the exact consent ID for `--show-job-read` inspection. Machine output never appends a second envelope after a failed or canceled result. Capabilities include `fresh_hash_read_consent: true`.
+
+These commands start no fresh reads. An approval record or historical keeper/copy role grants no cleanup permission.
 
 ## Save and show a hash proposal
 

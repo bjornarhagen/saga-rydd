@@ -158,7 +158,19 @@ Generate and keep an explicit key before saving. Reuse that key with the same ch
 
 The job preserves exact selected roles and frozen targets, with zero fresh progress and byte charges. Original hashing records and approvals remain unchanged. Archived choice context and original context at first job publication are labelled separately from new work. Saving and reopening work with source files, inventory and configuration offline. Up to 128 immutable jobs fit in one hash store, each at most 2 MiB.
 
-Job creation does not authorize or start a read. Fresh consent and guarded dispatch remain later work. Keep the job ID, key and original private data directory. Failed output can leave a saved job; inspect the ID or repeat the exact key before creating another generation.
+Job creation does not authorize or start a read. Separate fresh consent can be recorded below. Guarded fresh dispatch remains later work. Keep the job ID, key and original private data directory. Failed output can leave a saved job; inspect the ID or repeat the exact key before creating another generation.
+
+## Record separate fresh-job read consent
+
+```sh
+rydd hash --approve-job JOB_ID --confirm-content-read --max-day-bytes 1048576 --max-total-bytes 1048576
+rydd hash --show-job-read APPROVAL_ID --json
+rydd hash --revoke-job APPROVAL_ID
+```
+
+Choose both caps explicitly. The example permits at most 1 MiB of fresh reservations per UTC reservation day and across the job's lifetime. Consent binds the exact job, key, request and ordered roles. It expires after 24 hours and fixes each step at at most 1 MiB. Original approvals and charges provide no fresh allowance.
+
+These commands work with sources, inventory and configuration offline. They record or show consent without starting reads or recovering work. Exact retries preserve the first limits and expiry; expired or revoked consent cannot renew. Saved views do not evaluate current read permission. Consent never authorizes cleanup.
 
 ## Save an exact hashing proposal
 
