@@ -23,6 +23,8 @@ The controlled trial procedure is in [docs/mvp-trial.md](docs/mvp-trial.md). The
 
 **Why this order:** useful outputs test whether the inventory, size model and recommendations answer real questions. Infrastructure improvements should follow observed needs as well as safety requirements, rather than delaying that feedback until every supporting feature is finished.
 
+P4-03a is complete as a bounded source-move feasibility decision; [ADR 003](docs/decisions/003-source-namespace-boundary.md) records a no-go for ordinary project moves under the current selected-object invariant. Existing destination-exclusive rename plus a held source supplies no conditional source identity or continuous ancestor scope. Linux 6.19 delegation is retained as an unproven protocol candidate, not a supported portable executor boundary. Choose a new restricted authority/platform scope before another implementation experiment; extra checks, fresh hashes, approval or post-move rollback cannot substitute for source authority. This decision enables no original operation, policy change or default service/resource work.
+
 ## 1. Product direction
 
 Install a small terminal application, enable its background worker, and let it gradually build an inventory over days or weeks. Opening the terminal app should immediately show useful findings from its saved inventory, even while scanning is incomplete or the worker is stopped.
