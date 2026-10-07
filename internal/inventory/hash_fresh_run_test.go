@@ -838,16 +838,18 @@ func TestHashFreshRunCorruptAggregateAccountingAndBoundsRefuseWholeJob(t *testin
 func TestHashFreshRunExhaustedOuterDeadlinePreservesUnknownChargeAndRequiresRecovery(t *testing.T) {
 	f := freshRunFiles(t, 65, 2, "2", "1")
 	w := f.open(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	// Keep the production-sized window for instrumented preparation. Exhaust
+	// that same deadline only after the fixture has observed a source read.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	deadline, _ := ctx.Deadline()
 	read := false
-	started := time.Now()
 	r, err := w.runFreshConsented(ctx, f.consent.ID, f.fresh.m.f.scanner, hashFreshRunHooks{file: fileHashHooks{afterRead: func(int) { read = true; <-ctx.Done() }}})
 	if !read || err == nil || r.ReservedBytes != 65 || r.Usage.ReadBytes != 65 || r.DurableOffset != 0 || r.Progress.SHA256 != "" {
 		t.Fatal("deadline fixture did not preserve charged tentative read without digest", r, err)
 	}
-	if elapsed := time.Since(started); elapsed > 1250*time.Millisecond {
-		t.Fatal("settlement started a new two-second window after exhausting original deadline", elapsed)
+	if overdue := time.Since(deadline); overdue > time.Second {
+		t.Fatal("settlement started a new two-second window after exhausting original deadline", overdue)
 	}
 	if _, e := w.RunFreshConsented(context.Background(), f.consent.ID, f.fresh.m.f.scanner); !errors.Is(e, ErrHashRecoveryRequired) {
 		t.Fatal("exhausted settlement deadline left dispatchable writer", e)

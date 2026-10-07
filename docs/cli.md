@@ -674,6 +674,28 @@ JSON returns `hash.mode: run`, the fixed ceiling, `budget_scope: whole_fresh_job
 
 Full frozen inventory mismatch uses `hash_inventory_changed`; invalid new progress uses `fresh_hash_progress_invalid`; exact job/approval binding uses `fresh_read_consent_required`. Existing consent/budget/cancellation/uncertain-recovery codes remain stable. Failed publication/close/output or late cancellation identifies the exact job for `--show-job` inspection before another explicit run. Machine replies never append a second envelope. Capabilities include `guarded_fresh_hash_steps: true`; verified duplicates and cleanup remain false.
 
+## Compare saved fresh keeper/copy observations
+
+```sh
+rydd hash --show-job JOB_ID
+rydd hash --show-job JOB_ID --json
+```
+
+The existing exact-job view includes derived `hash.job.comparison` from the same validated saved snapshot. It preserves the selected keeper and caller-ordered copies, exact job/key/request/choice/original references, raw paths and full frozen-target digests. `progress_initialized: false` and null member observations mean untouched initial seeds. Genuine fresh observations retain their own status, sequence, checked time, full digest and latest attempt; original hashes are never substituted.
+
+| Pair relation | Meaning |
+| --- | --- |
+| `historical_hashes_match` | Both fresh full-file observations are complete and settled, with matching sizes and hashes. |
+| `historical_hashes_differ` | Both are complete and settled, but their sizes or hashes differ. |
+| `incomplete` | At least one fresh observation is missing, pending or running. Unknown unfinished usage supplies no inferred digest. |
+| `blocked` | At least one selected work item was invalidated. Its saved code remains visible. |
+
+Each ordered copy has its own relation to the keeper. Aggregate status uses blocked before incomplete before differing before matching, and counts preserve every individual outcome. A blocked or incomplete job can retain a known historical relation for another copy. Earlier unknown charges do not erase a later genuine completed head; those charges remain in the separate fresh budget.
+
+Human output shows a concise copy table, exact paths and individual observation times. JSON uses contract `historical_fresh_job_hash_comparison_v1`, source `saved_fresh_job_observations` and scope `exact_saved_fresh_job`. All current-permission, approval, verification and executable fields remain false, with reclaimable bytes null. Matching observations were made at separate times and prove no current equality or safe cleanup.
+
+This adds no command, persisted decision, schema, read consent or automatic run. The view opens only existing saved hash records, works with source/inventory/configuration offline and with a writer held, and changes no clocks, charges or progress. Corrupt evidence is a read error, never a blocked successful comparison. Cancellation or failed output produces no second JSON envelope; inspect the same exact saved job after a failed reply. Capabilities include `fresh_hash_choice_comparisons: true`.
+
 ## Save and show a hash proposal
 
 ```sh

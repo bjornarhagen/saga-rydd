@@ -184,6 +184,9 @@ func printHashFreshChoiceJob(out io.Writer, result HashFreshChoiceJobResult) err
 		printWrapped(guard, "These observations were made at separate times. They prove no current equality, duplicate verification or safe cleanup. Viewing them starts no read and recovers no work.", "")
 		printHashBudgetScope(guard, job.FreshBudget, "FRESH-JOB RESERVATION BUDGET", "fresh job", "whole exact fresh job")
 	}
+	if job.Comparison != nil {
+		printHashFreshComparison(guard, *job.Comparison)
+	}
 	fmt.Fprintln(guard)
 	printField(guard, "Fresh reserved bytes", fmt.Sprintf("%d bytes", job.FreshReservedBytes))
 	printField(guard, "Fresh requested bytes", fmt.Sprintf("%d bytes", job.FreshRequestedBytes))

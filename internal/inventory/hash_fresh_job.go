@@ -74,22 +74,23 @@ type HashFreshJobWork struct {
 }
 
 type SavedFreshJob struct {
-	ID                        string                `json:"id"`
-	Record                    HashFreshJobRecord    `json:"record"`
-	Work                      []HashFreshJobWork    `json:"work"`
-	ReadConsent               *HashFreshReadConsent `json:"read_consent,omitempty"`
-	Progress                  []SavedFreshHashWork  `json:"progress,omitempty"`
-	FreshBudget               *HashBudget           `json:"fresh_budget,omitempty"`
-	FreshReservedBytes        int64                 `json:"fresh_reserved_bytes"`
-	FreshRequestedBytes       int64                 `json:"fresh_requested_bytes"`
-	FreshReadBytes            int64                 `json:"fresh_read_bytes"`
-	ApprovalAvailable         bool                  `json:"approval_available"`
-	ProvenanceVerified        bool                  `json:"provenance_verified"`
-	ContentVerified           bool                  `json:"content_verified"`
-	CurrentStateVerified      bool                  `json:"current_state_verified"`
-	DuplicatesVerified        bool                  `json:"duplicates_verified"`
-	Executable                bool                  `json:"executable"`
-	EstimatedReclaimableBytes *int64                `json:"estimated_reclaimable_bytes"`
+	ID                        string                        `json:"id"`
+	Record                    HashFreshJobRecord            `json:"record"`
+	Work                      []HashFreshJobWork            `json:"work"`
+	ReadConsent               *HashFreshReadConsent         `json:"read_consent,omitempty"`
+	Progress                  []SavedFreshHashWork          `json:"progress,omitempty"`
+	FreshBudget               *HashBudget                   `json:"fresh_budget,omitempty"`
+	Comparison                *HashFreshJobComparisonReport `json:"comparison,omitempty"`
+	FreshReservedBytes        int64                         `json:"fresh_reserved_bytes"`
+	FreshRequestedBytes       int64                         `json:"fresh_requested_bytes"`
+	FreshReadBytes            int64                         `json:"fresh_read_bytes"`
+	ApprovalAvailable         bool                          `json:"approval_available"`
+	ProvenanceVerified        bool                          `json:"provenance_verified"`
+	ContentVerified           bool                          `json:"content_verified"`
+	CurrentStateVerified      bool                          `json:"current_state_verified"`
+	DuplicatesVerified        bool                          `json:"duplicates_verified"`
+	Executable                bool                          `json:"executable"`
+	EstimatedReclaimableBytes *int64                        `json:"estimated_reclaimable_bytes"`
 }
 
 const hashFreshJobSchema = `
@@ -595,6 +596,14 @@ func (s *HashStore) readFreshJob(ctx context.Context, db hashQuery, id string) (
 		}
 		job.FreshReservedBytes, job.FreshRequestedBytes, job.FreshReadBytes = job.FreshBudget.TotalReservedBytes, job.FreshBudget.TotalRequestedBytes, job.FreshBudget.TotalReadBytes
 	}
+	comparison, err := compareFreshJob(job)
+	if err != nil {
+		return SavedFreshJob{}, err
+	}
+	if err = ctx.Err(); err != nil {
+		return SavedFreshJob{}, err
+	}
+	job.Comparison = &comparison
 	return job, nil
 }
 
