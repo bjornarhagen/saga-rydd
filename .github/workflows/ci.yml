@@ -71,6 +71,7 @@ jobs:
         env:
           SCALE_FILES: ${{ inputs.scale_files || '100000' }}
         run: |
+          set -o pipefail
           mkdir -p dist
           go build -trimpath -o dist/rydd ./cmd/rydd
           go build -trimpath -o dist/compactscale ./experiments/compactscale
