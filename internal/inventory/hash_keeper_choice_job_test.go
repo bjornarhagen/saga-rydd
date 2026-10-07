@@ -237,10 +237,13 @@ func TestHashKeeperChoiceFreshJobReservedOriginalWorkAndOfflineStorageAreUntouch
 		t.Fatal(err)
 	}
 	m.f.scanner.Close()
-	if err = os.RemoveAll(m.f.root); err != nil {
+	// Keep frozen identities allocated while removing their original names.
+	// Deleting them permits Linux to reuse an inode for a SQLite sidecar,
+	// which correctly triggers the production alias guard.
+	if err = os.Rename(m.f.root, m.f.root+".offline"); err != nil {
 		t.Fatal(err)
 	}
-	if err = os.RemoveAll(m.f.stateDir); err != nil {
+	if err = os.Rename(m.f.stateDir, m.f.stateDir+".offline"); err != nil {
 		t.Fatal(err)
 	}
 	configPath := filepath.Join(m.f.base, "config.toml")
@@ -867,7 +870,7 @@ func TestHashKeeperChoiceFreshJobProcessDeathAtomicPublicationAndExactRetry(t *t
 			}
 			m.f.scanner.Close()
 			for _, path := range []string{m.f.root, m.f.stateDir} {
-				if err := os.RemoveAll(path); err != nil {
+				if err := os.Rename(path, path+".offline"); err != nil {
 					t.Fatal(err)
 				}
 			}
