@@ -154,14 +154,28 @@ func OpenHashReader(ctx context.Context, base string) (*HashStore, error) {
 // OpenHashSelectionWriter may initialize private storage, but never reconciles
 // existing attempts. It cannot dispatch source reads or restore continuations.
 func OpenHashSelectionWriter(ctx context.Context, base string) (*HashStore, error) {
-	return openHashStoreMode(ctx, base, false, true)
+	return openHashStoreMode(ctx, base, false, true, false)
+}
+
+// OpenExistingHashWriter requires initialized private storage. It may migrate a
+// valid older schema and reconcile existing attempts, but never creates the
+// data directory or database.
+func OpenExistingHashWriter(ctx context.Context, base string) (*HashStore, error) {
+	return openHashStoreMode(ctx, base, false, false, true)
+}
+
+// OpenExistingHashSelectionWriter requires initialized private storage. It may
+// migrate a valid older schema, but never creates the data directory or database,
+// reconciles attempts, or dispatches source reads.
+func OpenExistingHashSelectionWriter(ctx context.Context, base string) (*HashStore, error) {
+	return openHashStoreMode(ctx, base, false, true, true)
 }
 
 func openHashStore(ctx context.Context, base string, readOnly bool) (*HashStore, error) {
-	return openHashStoreMode(ctx, base, readOnly, false)
+	return openHashStoreMode(ctx, base, readOnly, false, false)
 }
 
-func openHashStoreMode(ctx context.Context, base string, readOnly, selectionOnly bool) (*HashStore, error) {
+func openHashStoreMode(ctx context.Context, base string, readOnly, selectionOnly, existingOnly bool) (*HashStore, error) {
 	ctx, cancelOpen := context.WithTimeout(ctx, 5*time.Second)
 	defer cancelOpen()
 	if !filepath.IsAbs(base) || filepath.Clean(base) != base || len(base) > 4096 || strings.ContainsRune(base, 0) {
@@ -169,7 +183,7 @@ func openHashStoreMode(ctx context.Context, base string, readOnly, selectionOnly
 	}
 	dir := filepath.Join(base, "hashes")
 	for _, p := range []string{base, dir} {
-		if !readOnly {
+		if !readOnly && !existingOnly {
 			if err := localfs.EnsurePrivateDir(p); err != nil {
 				return nil, err
 			}
@@ -202,7 +216,7 @@ func openHashStoreMode(ctx context.Context, base string, readOnly, selectionOnly
 		}
 	}
 	path := filepath.Join(dir, hashStoreFilename)
-	if !readOnly {
+	if !readOnly && !existingOnly {
 		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 		if err == nil {
 			err = f.Close()
@@ -240,7 +254,7 @@ func openHashStoreMode(ctx context.Context, base string, readOnly, selectionOnly
 	if err = s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return fail(err)
 	}
-	if !readOnly && app == 0 && version == 0 {
+	if !readOnly && !existingOnly && app == 0 && version == 0 {
 		var tables int
 		if err = s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'").Scan(&tables); err != nil {
 			return fail(err)

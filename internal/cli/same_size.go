@@ -50,5 +50,5 @@ func printSameSizeReport(out io.Writer, r state.SameSizeReport, command string) 
 	} else {
 		printWrapped(out, "End of saved file rows above the minimum. This does not prove complete scan coverage.", "")
 	}
-	printWrapped(out, "Dependency trees named node_modules and saved skipped entries are excluded. Other generated categories remain outside this first filter. Full-content verification is not available yet.", "")
+	printWrapped(out, "Dependency trees named node_modules and saved skipped entries are excluded. Other generated categories remain outside this first filter. Hashing requires a separate exact selection and explicit full-file read consent. This report does not read file contents.", "")
 }

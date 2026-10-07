@@ -337,14 +337,18 @@ func TestHashReadConsentedFreshReservationGate(t *testing.T) {
 }
 
 func TestHashReadConsentedExpiryDuringReadRetainsChargeAndOldPrefix(t *testing.T) {
-	for _, phase := range []string{"timer_after_read", "clock_before_settle"} {
+	for _, phase := range []string{"clock_after_read", "clock_before_settle"} {
 		t.Run(phase, func(t *testing.T) {
 			f, req := hashReadFixture(t, []byte("abc"))
 			c := hashReadApprove(t, f, req)
 			hooks := hashStoreHooks{}
-			if phase == "timer_after_read" {
-				f.store.now = func() time.Time { return c.Approval.ExpiresAt.Add(-40 * time.Millisecond) }
-				hooks.file.afterRead = func(int) { time.Sleep(80 * time.Millisecond) }
+			if phase == "clock_after_read" {
+				hooks.file.afterRead = func(n int) {
+					if n != 3 {
+						t.Fatal("expiry hook did not follow the complete fixture read", n)
+					}
+					f.store.now = func() time.Time { return c.Approval.ExpiresAt }
+				}
 			} else {
 				hooks.beforeSettleCommit = func() { f.store.now = func() time.Time { return c.Approval.ExpiresAt } }
 			}
@@ -359,7 +363,7 @@ func TestHashReadConsentedExpiryDuringReadRetainsChargeAndOldPrefix(t *testing.T
 			f.reopen(t)
 			f.store.now = func() time.Time { return c.Approval.CreatedAt }
 			if _, err = f.store.RunConsented(context.Background(), c.ID, f.source, f.scanner); !errors.Is(err, ErrHashReadExpired) {
-				t.Fatal("timer-observed expiry reactivated after reopen", err)
+				t.Fatal("observed expiry reactivated after reopen", err)
 			}
 		})
 	}

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -102,5 +103,58 @@ func TestPathBoundariesAndPrivateFiles(t *testing.T) {
 	}
 	if _, err := Load(link, dir); err == nil {
 		t.Fatal("symlink config accepted")
+	}
+}
+
+func TestDecodeParityDefaultsStrictnessAndValidation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	for index, content := range []string{
+		"roots=['~/dev']\nexcludes=['~/dev/private']\n[scan]\npause_on_battery=false\n",
+		"roots=['/offline-root']\n[scan]\nread_bytes_per_day=1024\n",
+		"roots=['/offline-root']\nunknown=true\n",
+		"roots=['/offline-root']\n[scan]\nread_bytes_per_dayy=1024\n",
+		"roots=['/offline-root']\nroots=['/other-root']\n",
+		"version=99\nroots=['/offline-root']\n",
+		"roots=['/offline-root','/offline-root/sub']\n",
+		"roots=['/offline-root']\nexcludes=['/']\n",
+		"roots=['relative']\n",
+		"roots=['/offline-root']\n[scan]\nwork_seconds=0\n",
+		strings.Repeat("#", maxConfigBytes+1),
+	} {
+		data := []byte(content)
+		if err := os.WriteFile(path, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		loaded, loadErr := Load(path, "/offline-home")
+		decoded, decodeErr := Decode(data, "/offline-home")
+		if (decodeErr == nil) != (index < 2) {
+			t.Fatalf("unexpected byte-decoder validity for %.100q: %v", content, decodeErr)
+		}
+		if !reflect.DeepEqual(loaded, decoded) || (loadErr == nil) != (decodeErr == nil) || (loadErr != nil && loadErr.Error() != decodeErr.Error()) {
+			t.Fatalf("held-byte decoding differs from file loading for %.100q: %+v/%v versus %+v/%v", content, decoded, decodeErr, loaded, loadErr)
+		}
+	}
+}
+
+func TestDecodeOfflineBytesAndSizeBoundary(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	data := []byte("roots=['~/dev']\n[scan]\npause_on_battery=false\n")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Decode(data, "/offline-home")
+	if err != nil || len(c.Roots) != 1 || c.Roots[0] != "/offline-home/dev" || c.Scan.PauseOnBattery || c.Scan.WorkSeconds != 30 || c.Scan.ReadBytesPerDay != 5<<30 {
+		t.Fatal("offline held bytes lost defaults or path normalization", c, err)
+	}
+	prefix := "roots=['/offline-root']\n#"
+	boundary := []byte(prefix + strings.Repeat("x", maxConfigBytes-len(prefix)))
+	if c, err = Decode(boundary, "/offline-home"); err != nil || c.Roots[0] != "/offline-root" {
+		t.Fatal("valid exactly1MiB configuration rejected", err)
+	}
+	if _, err = Decode(append(boundary, 'x'), "/offline-home"); err == nil || err.Error() != "configuration exceeds 1 MiB" {
+		t.Fatal("oversized held bytes accepted", err)
 	}
 }

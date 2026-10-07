@@ -218,7 +218,7 @@ func TestHashCLIInvalidArgumentsBeforeStorage(t *testing.T) {
 		{}, {"--select"}, {"--show", "short"}, {"--show", strings.ToUpper(fullID)}, {"--show", fullID, "1"}, {"--show", fullID, "--show", fullID}, {"--show", fullID, "-d", "/missing"}, {"--show", fullID, "--from", "/missing"}, {"--show", fullID, "--select"}, {"--select=false", "-d", "/missing", "--from", "/missing", "1"},
 		{"--select", "--select", "-d", "/missing", "--from", "/missing", "1"}, {"--select", "-d", "/missing", "--directory", "/missing", "--from", "/missing", "1"}, {"--select", "-d", "/missing", "--from", "/missing", "--from", "/missing", "1"},
 		{"--select", "-d", "/missing", "--from", "/missing", "1", "1"}, {"--select", "-d", "/missing", "--from", "/missing", "01"}, {"--select", "-d", "/missing", "--from", "/missing", "+1"}, {"--select", "-d", "/missing", "--from", "/missing", "0"}, {"--select", "-d", "/missing", "--from", "/missing", "9223372036854775808"},
-		{"--approve", fullID}, {"--run", fullID}, {"--revoke", fullID}, {"--select", "-d", "/missing", "--from", "/missing", "1", "--show", fullID},
+		{"--approve", fullID}, {"--run", "short"}, {"--revoke", "short"}, {"--select", "-d", "/missing", "--from", "/missing", "1", "--show", fullID},
 		{"--show", "--json"}, {"-show", "--json"}, {"--select", "-d", "/missing", "--from", "--json", "01"},
 	}
 	tooMany := []string{"--select", "-d", "/missing", "--from", "/missing"}
@@ -521,7 +521,7 @@ func TestHashCLIShowCorruptionAndCapabilities(t *testing.T) {
 	code, raw, stderr = f.run(context.Background(), "hash", "--show", p.SelectionID, "--json")
 	hashProposalFailure(t, code, raw, stderr, "hash_invalid", 1)
 	code, raw, stderr = f.run(context.Background(), "capabilities", "--json")
-	if code != 0 || stderr != "" || !strings.Contains(raw, `"saved_hash_proposals":true`) || !strings.Contains(raw, `"full_hashing":false`) || !strings.Contains(raw, `"name":"hash"`) {
+	if code != 0 || stderr != "" || !strings.Contains(raw, `"saved_hash_proposals":true`) || !strings.Contains(raw, `"full_hashing":true`) || !strings.Contains(raw, `"name":"hash"`) {
 		t.Fatal(code, raw, stderr)
 	}
 }

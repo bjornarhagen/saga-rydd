@@ -386,7 +386,7 @@ func TestHashesCLIArgumentsMissingCancellationAndCapabilities(t *testing.T) {
 	}
 	code, raw, capStderr := f.run(context.Background(), "capabilities", "--json")
 	var capabilities struct{ Features map[string]bool }
-	if err := json.Unmarshal([]byte(raw), &capabilities); err != nil || code != 0 || capStderr != "" || !capabilities.Features["saved_hash_reports"] || capabilities.Features["full_hashing"] || capabilities.Features["duplicates"] || capabilities.Features["cleanup"] || !strings.Contains(raw, "--work WORK_ID") || !strings.Contains(raw, "hash_invalid") {
+	if err := json.Unmarshal([]byte(raw), &capabilities); err != nil || code != 0 || capStderr != "" || !capabilities.Features["saved_hash_reports"] || !capabilities.Features["full_hashing"] || capabilities.Features["duplicates"] || capabilities.Features["cleanup"] || !strings.Contains(raw, "--work WORK_ID") || !strings.Contains(raw, "hash_invalid") {
 		t.Fatal(code, raw, capStderr, err)
 	}
 }

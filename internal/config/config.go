@@ -3,6 +3,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -156,10 +157,18 @@ func Load(path, home string) (Config, error) {
 	if err != nil {
 		return c, err
 	}
+	return Decode(data, home)
+}
+
+// Decode reads bounded configuration bytes with the same defaults, strict TOML
+// fields and path/budget validation as Load. It performs no filesystem access,
+// so a caller can validate bytes read from an already held file descriptor.
+func Decode(data []byte, home string) (Config, error) {
+	c := Default()
 	if len(data) > maxConfigBytes {
 		return c, errors.New("configuration exceeds 1 MiB")
 	}
-	if err := toml.NewDecoder(strings.NewReader(string(data))).DisallowUnknownFields().Decode(&c); err != nil {
+	if err := toml.NewDecoder(bytes.NewReader(data)).DisallowUnknownFields().Decode(&c); err != nil {
 		return c, fmt.Errorf("decode config: %w", err)
 	}
 	return c, c.Validate(home)

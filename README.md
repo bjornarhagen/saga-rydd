@@ -4,7 +4,7 @@ A quiet storage cleanup companion for macOS and Linux. Part of Saga.
 
 Rydd will gradually discover developer clutter and duplicate files, explain what can be removed, and help reclaim space through reviewed actions or explicitly enabled automatic policies.
 
-**Status: experimental metadata inventory.** The worker can scan explicitly selected fixture directories in bounded, resumable batches and save metadata, skip reasons and directory reconciliation markers in SQLite. Use `scan -d PATH` for a foreground scan, or `daemon --experimental-scan` for configured roots; ordinary `daemon` stays idle. Durable dispatch cadence, a daily batch cap, child-entry pacing and WAL backpressure are enforced; saved largest-file and selected-directory size reports and review-required `node_modules` candidates are available. Fine-grained CPU/I/O/power budgets, cleanup and service installation are not implemented. Nothing runs in the background when you clone, build or initialize this repository.
+**Status: experimental read-only inventory and explicit hashing.** The worker can scan explicitly selected fixture directories in bounded, resumable batches and save metadata, skip reasons and directory reconciliation markers in SQLite. Use `scan -d PATH` for a foreground scan, or `daemon --experimental-scan` for configured roots; ordinary `daemon` stays idle. Durable dispatch cadence, a daily batch cap, child-entry pacing and WAL backpressure are enforced; saved largest-file and selected-directory size reports and review-required `node_modules` candidates are available. Explicit full-file hashing requires separate exact consent and one bounded invocation at a time. Fine-grained CPU/I/O/power budgets, cleanup and service installation are not implemented. Nothing runs in the background when you clone, build or initialize this repository.
 
 For humans and AI: readable output by default, versioned JSON with `--json`, and `rydd capabilities --json` for discovery. Live status also reports scanner metadata API counters to help inspect background work. See the [CLI contract](docs/cli.md).
 
@@ -73,7 +73,7 @@ This is the first filter for duplicate discovery. It groups saved regular-file m
 
 Page-local counts distinguish known device/inode objects, repeated saved aliases and unknown or conflicting identities. A size band can cross pages; boundary labels preserve even a single candidate at an edge. Use the returned cursor with the same minimum and data directory. A rebuilt inventory or changed minimum refuses the cursor. Scans can change membership between pages, so this is not a frozen export. There are no verified duplicate matches, keeper choices or savings estimates yet.
 
-A separate library foundation supports bounded full hashing with private checkpoints and conservative byte reservations. `rydd hashes [--work WORK_ID] [--json]` reads its existing saved observations and whole-selection budget. This command does not create, recover or resume work; CLI content reads and worker integration remain pending. See [durable hashing limits](docs/inventory.md#explicit-file-observations-and-durable-hashing).
+A separate hashing store supports bounded full hashing with private checkpoints and conservative byte reservations. `rydd hashes [--work WORK_ID] [--json]` reads its existing saved observations, consent records and whole-selection budget. This command does not create, recover or resume work. Explicit consent and one-step reads are described below; worker integration remains pending. See [durable hashing limits](docs/inventory.md#explicit-file-observations-and-durable-hashing).
 
 ## Save an exact hashing proposal
 
@@ -83,7 +83,24 @@ rydd hash --select -d /path/to/project --from /path/to/private/same-size.json 12
 rydd hash --show SELECTION_ID --json
 ```
 
-Use the saved file IDs from that report and the returned selection ID. The report file contains private paths. This captures one immutable unapproved proposal and shows its complete saved evidence. Changed rows or a different selection are refused. Selection and display open no selected file contents, start no scanner and recover no hashing work. CLI read approval and execution remain pending.
+Use the saved file IDs from that report and the returned selection ID. The report file contains private paths. This captures one immutable unapproved proposal and shows its complete saved evidence. Changed rows or a different selection are refused. Selection and display open no selected file contents, start no scanner and recover no hashing work.
+
+## Approve and read one hashing step
+
+After reviewing the exact proposal, choose explicit byte limits:
+
+```sh
+rydd hash --approve SELECTION_ID --confirm-content-read --max-day-bytes 8388608 --max-total-bytes 33554432
+rydd hash --run APPROVAL_ID
+rydd hashes
+rydd hash --revoke APPROVAL_ID
+```
+
+Replace the example IDs with the saved selection and returned approval IDs. Keep the same global `--data-dir` throughout. Approval permits full-file hashing of that exact selection for 24 hours, within both limits. It opens no source files. The limits cover byte reservations, including canceled or interrupted attempts and charges recorded before approval. Retrying approval cannot extend expiry or raise limits.
+
+Each explicit run attempts one step of at most 1 MiB. Rydd rechecks consent, limits, current saved inventory, configuration exclusions and live paths before publishing checked progress. Run again explicitly to continue later; there is no automatic loop or retry. Opening the writer can recover interrupted accounting even if the new read is refused. Saved readers do not perform that recovery. Revocation works offline and blocks later reservations after taking the writer lock; it cannot interrupt a step that already holds the lock.
+
+Completed hashes are historical observations. They do not prove that files are still equal, choose a keeper or authorize cleanup. Hashing currently supports one immutable selection per state directory. Background hashing, duplicate-group reports and cleanup remain pending.
 
 ## Preview an exact selection
 

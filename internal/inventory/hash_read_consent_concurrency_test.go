@@ -77,10 +77,10 @@ func TestHashReadConsentRemainingLifetimeCancelsSliceAndSettlesUsage(t *testing.
 	// an absolute OS deadline based on this historical timestamp cannot satisfy
 	// the test by accident.
 	started := time.Now()
-	nearExpiry := approval.Approval.ExpiresAt.Add(-time.Second)
+	nearExpiry := approval.Approval.ExpiresAt.Add(-3 * time.Second)
 	f.store.now = func() time.Time { return nearExpiry.Add(time.Since(started)) }
 	release, done := holdHashConsentedRead(t, f, approval.ID)
-	timer := time.NewTimer(1200 * time.Millisecond)
+	timer := time.NewTimer(3200 * time.Millisecond)
 	defer timer.Stop()
 	<-timer.C
 	close(release)

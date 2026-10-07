@@ -40,7 +40,7 @@ func (v *hashSelectOption) String() string   { return strconv.FormatBool(v.value
 func (v *hashSelectOption) IsBoolFlag() bool { return true }
 func (v *hashSelectOption) Set(value string) error {
 	if v.set {
-		return errors.New("--select cannot be repeated")
+		return errors.New("hash boolean options cannot be repeated")
 	}
 	parsed, err := strconv.ParseBool(value)
 	if err != nil {
@@ -64,9 +64,9 @@ func validHashSelectionID(value string) bool {
 	return true
 }
 
-func hash(ctx context.Context, args []string, paths config.Paths) (inventory.HashProposal, error) {
-	var selectMode hashSelectOption
-	var show, directory, from hashOption
+func hash(ctx context.Context, args []string, paths config.Paths) (any, error) {
+	var selectMode, confirmRead hashSelectOption
+	var show, directory, from, approve, run, revoke, day, total hashOption
 	f := flag.NewFlagSet("hash", flag.ContinueOnError)
 	f.SetOutput(io.Discard)
 	f.Var(&selectMode, "select", "save an exact unapproved metadata selection")
@@ -74,8 +74,59 @@ func hash(ctx context.Context, args []string, paths config.Paths) (inventory.Has
 	f.Var(&directory, "d", "exact manual scan root")
 	f.Var(&directory, "directory", "exact manual scan root")
 	f.Var(&from, "from", "one existing same-size JSON report file (at most 1 MiB)")
+	f.Var(&approve, "approve", "record full-file read consent for an exact selection")
+	f.Var(&run, "run", "perform one guarded step for an exact read consent ID")
+	f.Var(&revoke, "revoke", "revoke exact read consent without source access")
+	f.Var(&confirmRead, "confirm-content-read", "explicitly confirm full-file reads of the frozen selection")
+	f.Var(&day, "max-day-bytes", "approved reservation-day byte cap (1–1125899906842624)")
+	f.Var(&total, "max-total-bytes", "absolute lifetime byte cap including prior charges (1–1125899906842624)")
 	if err := f.Parse(args); err != nil {
 		return inventory.HashProposal{}, usageError{err}
+	}
+	modes := 0
+	for _, set := range []bool{selectMode.set, show.set, approve.set, run.set, revoke.set} {
+		if set {
+			modes++
+		}
+	}
+	if modes != 1 {
+		return nil, usageError{errors.New("hash requires exactly one of --select, --show, --approve, --run or --revoke")}
+	}
+	if approve.set || run.set || revoke.set {
+		if directory.set || from.set || f.NArg() != 0 {
+			return nil, usageError{errors.New("hash read-consent modes do not accept root, report, file ID or target overrides")}
+		}
+		mode, id := "approve", approve.value
+		if run.set {
+			mode, id = "run", run.value
+		}
+		if revoke.set {
+			mode, id = "revoke", revoke.value
+		}
+		if !validHashSelectionID(id) {
+			return nil, usageError{errors.New("hash read-consent modes require one full lowercase 64-character selection or read consent ID")}
+		}
+		var dayCap, totalCap int64
+		if approve.set {
+			if !confirmRead.set || !confirmRead.value || !day.set || !total.set {
+				return nil, usageError{errors.New("hash --approve requires --confirm-content-read, --max-day-bytes N and --max-total-bytes N; there are no default caps")}
+			}
+			var err error
+			dayCap, err = parseHashReservationCap(day.value, "--max-day-bytes")
+			if err != nil {
+				return nil, err
+			}
+			totalCap, err = parseHashReservationCap(total.value, "--max-total-bytes")
+			if err != nil {
+				return nil, err
+			}
+		} else if confirmRead.set || day.set || total.set {
+			return nil, usageError{errors.New("hash --run and --revoke do not accept confirmation, allowance or cap changes")}
+		}
+		return hashReadCommand(ctx, mode, id, dayCap, totalCap, paths)
+	}
+	if confirmRead.set || day.set || total.set {
+		return nil, usageError{errors.New("read confirmation and caps require hash --approve")}
 	}
 	var ids []int64
 	var root string

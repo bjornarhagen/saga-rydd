@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/bjornarhagen/saga-rydd/internal/config"
-	"github.com/bjornarhagen/saga-rydd/internal/inventory"
 	"github.com/bjornarhagen/saga-rydd/internal/state"
 	"github.com/bjornarhagen/saga-rydd/internal/worker"
 )
@@ -49,6 +48,10 @@ Commands:
   hashes [--work WORK_ID] [--json]                  Read saved hash observations and whole-selection budget
   hash --select -d ROOT --from REPORT_JSON FILE_ID... Save unapproved hash metadata; no source contents
   hash --show SELECTION_ID [--json]                 Show exact saved hash proposal; no source reads
+  hash --approve SELECTION_ID --confirm-content-read --max-day-bytes N --max-total-bytes N
+                                                     Record fixed full-file read consent; no content read
+  hash --run APPROVAL_ID [--json]                    One guarded hash step (at most 1 MiB; no cleanup)
+  hash --revoke APPROVAL_ID [--json]                 Revoke read consent; no source or inventory needed
   report --candidates [--min-age-days N] [--cursor TOKEN] [--json]         Node modules review candidates
   measure -d PATH [--batches N] [--json]               Resume saved compact size calculations
   review -d PATH [--min-age-days N]                   Choose a numbered subset; save unapproved evidence
@@ -163,10 +166,10 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 			err = printHashes(out, r)
 		}
 	case "hash":
-		var r inventory.HashProposal
+		var r any
 		r, err = hash(ctx, remaining[1:], paths)
 		if err == nil {
-			err = printHashProposal(out, r)
+			err = printHashResult(out, r)
 		}
 	case "report":
 		var r reportResult
