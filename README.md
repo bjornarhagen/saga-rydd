@@ -8,7 +8,7 @@ Rydd will gradually discover developer clutter and duplicate files, explain what
 
 For humans and AI: readable output by default, versioned JSON with `--json`, and `rydd capabilities --json` for discovery. Live status also reports scanner metadata API counters to help inspect background work. See the [CLI contract](docs/cli.md).
 
-**Next milestone: joint read-only testing and a cleanup scope decision.** Saved reports, review-required `node_modules` candidates, guided review and separately consented fresh hashing with historical comparisons are available and verified on native macOS/Linux. Linux clone acceptance remains open. Cleanup needs an operation that preserves the exact reviewed source object and ancestor scope; the reviewed rename operations do not provide that boundary. See [ADR 003](docs/decisions/003-source-namespace-boundary.md), the [current handoff](PROGRESS.md#current-state) and [trial lessons](docs/mvp-trial-results.md). Numbered phases are not a strict work order, and the full plan remains unfinished.
+**Next milestone: review usability and reversible finding controls.** The generated owner read-only walkthrough passed, including guided review and separately consented fresh hashing with historical comparisons. Human-output corrections and exact finding dismissal are next. Linux clone acceptance remains open. Cleanup needs an operation that preserves the exact reviewed source object and ancestor scope; the reviewed rename operations do not provide that boundary. See [ADR 003](docs/decisions/003-source-namespace-boundary.md), the [current handoff](PROGRESS.md#current-state) and [trial lessons](docs/mvp-trial-results.md). Numbered phases are not a strict work order, and the full plan remains unfinished.
 
 ## Scan a chosen folder
 

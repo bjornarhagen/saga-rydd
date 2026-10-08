@@ -94,12 +94,19 @@ func hashFreshReadCommand(ctx context.Context, paths config.Paths, mode, id stri
 }
 
 func printHashFreshReadConsent(out io.Writer, consent *inventory.HashFreshReadConsent) {
+	printHashFreshReadConsentDetails(out, consent, true)
+}
+
+func printHashFreshReadConsentDetails(out io.Writer, consent *inventory.HashFreshReadConsent, includeJob bool) {
 	if consent == nil {
-		printField(out, "Fresh read consent", "Not recorded")
+		printField(out, "Fresh read consent", "NOT RECORDED")
 		return
 	}
 	a := consent.Approval
-	fmt.Fprintf(out, "Fresh read consent: %s\nJob: %s\nJob key: %s\nRequest: %s\n", consent.ID, a.JobID, a.JobKey, a.RequestID)
+	fmt.Fprintf(out, "Fresh read consent: %s\n", consent.ID)
+	if includeJob {
+		fmt.Fprintf(out, "Job: %s\nJob key: %s\nRequest: %s\n", a.JobID, a.JobKey, a.RequestID)
+	}
 	printField(out, "Saved consent status", consent.Status)
 	printField(out, "Consent saved at", a.CreatedAt.UTC().Format(time.RFC3339Nano))
 	printField(out, "Fixed expiry", a.ExpiresAt.UTC().Format(time.RFC3339Nano))

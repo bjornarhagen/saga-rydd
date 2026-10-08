@@ -106,8 +106,10 @@ func printHashFreshStepReport(out io.Writer, report HashFreshStepReport) error {
 	printWrapped(guard, "Saga — Rydd: one guarded fresh-job hash step", "")
 	printResultBanner(guard, "ONE FRESH HASH STEP - NO CLEANUP")
 	r := report.Result
-	fmt.Fprintf(guard, "Job: %s\nJob key: %s\nRequest: %s\nChoice: %s\nFresh read consent: %s\n", r.JobID, r.JobKey, r.RequestID, r.ChoiceID, r.ApprovalID)
 	printField(guard, "Recorded step state", r.Status)
+	if r.Code != "" {
+		printField(guard, "Recorded reason", r.Code)
+	}
 	if r.Ordinal != 0 {
 		printField(guard, "Fresh work ordinal", r.Ordinal)
 		printField(guard, "Historical work ID", r.HistoricalWorkID)
@@ -127,9 +129,9 @@ func printHashFreshStepReport(out io.Writer, report HashFreshStepReport) error {
 	printField(guard, "Fresh requested bytes", r.Usage.RequestedBytes)
 	printField(guard, "Fresh read bytes", r.Usage.ReadBytes)
 	printField(guard, "Observed elapsed", r.Usage.Elapsed.String())
-	printResultBanner(guard, "ACCOUNTING FOR THIS FRESH JOB")
+	fmt.Fprintf(guard, "Job: %s\nJob key: %s\nRequest: %s\nChoice: %s\nFresh read consent: %s\n", r.JobID, r.JobKey, r.RequestID, r.ChoiceID, r.ApprovalID)
 	printHashBudgetScope(guard, r.FreshBudget, "FRESH-JOB RESERVATION BUDGET", "fresh job", "whole exact fresh job")
-	printWrapped(guard, "This command performs one step and exits. Each reservation stays charged. Only this exact job can be recovered by an explicit run writer. Original work, approvals, checkpoints and charges remain separate. Completed digests are sequential historical observations; they prove no current equality or safe cleanup.", "")
+	printWrapped(guard, "One step runs and exits. Only this exact job can be recovered by an explicit run writer; original work and charges stay separate. Historical digests prove no current equality or safe cleanup.", "")
 	printWrapped(guard, "Keep the same global options and private data directory when inspecting saved progress with:", "")
 	fmt.Fprintf(guard, "  rydd hash --show-job %s\n", r.JobID)
 	if guard.err != nil {

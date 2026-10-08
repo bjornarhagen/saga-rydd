@@ -128,83 +128,48 @@ func printHashFreshChoiceJob(out io.Writer, result HashFreshChoiceJobResult) err
 	guard := &reviewOutput{writer: out}
 	job, record := result.Job, result.Job.Record
 	printWrapped(guard, "Saga — Rydd: independent fresh full-file job", "")
-	if job.ReadConsent != nil {
-		printResultBanner(guard, "SAVED FRESH JOB - PERMISSION NOT EVALUATED")
-	} else if result.Mode == "save" {
-		printResultBanner(guard, "FRESH JOB SAVED - READ CONSENT UNAVAILABLE")
-	} else {
-		printResultBanner(guard, "SAVED FRESH JOB - READ CONSENT UNAVAILABLE")
+	printResultBanner(guard, "SAVED FRESH KEEPER/COPY COMPARISON - HISTORICAL")
+	if result.Mode == "save" {
+		printField(guard, "Job record", "Saved")
 	}
-	fmt.Fprintf(guard, "Job: %s\nJob key: %s\nRequest: %s\nChoice: %s\nOriginal store: %s\nOriginal selection: %s\nInventory: %s\n", job.ID, record.JobKey, record.Request.RequestID, record.Request.ChoiceID, record.Request.StoreID, record.Request.SelectionID, record.Request.InventoryID)
-	printField(guard, "Job saved at", record.CreatedAt.UTC().Format(time.RFC3339Nano))
-	printField(guard, "Job creation status", record.Status)
-	printWrapped(guard, "This separate job was created unapproved. Its immutable initial scope starts at zero. Saved fresh progress, when present, is shown separately below. Historical digests and old read approvals are context only; no SHA continuation state or allowance was copied into this job.", "")
-	for i, work := range job.Work {
-		target := record.Request.Targets[i]
-		role := "Selected copy for review"
-		if target.Role == "keeper" {
-			role = "Selected keeper for review"
-		}
-		printHashPreviewMember(guard, role, target.Observation)
-		printField(guard, "Fresh work ordinal", work.Ordinal)
-		if len(job.Progress) == 0 {
-			printField(guard, "Fresh work status", work.Status)
-			printField(guard, "Fresh checked offset", fmt.Sprintf("%d bytes", work.CheckedOffset))
-		} else {
-			printField(guard, "Initial work status", work.Status)
-			printField(guard, "Initial checked offset", fmt.Sprintf("%d bytes", work.CheckedOffset))
+	completed := 0
+	for _, work := range job.Progress {
+		if work.Status == "complete" {
+			completed++
 		}
 	}
-	if len(job.Progress) != 0 {
-		printResultBanner(guard, "SAVED FRESH PROGRESS - HISTORICAL OBSERVATIONS")
-		completed := 0
-		for _, work := range job.Progress {
-			fmt.Fprintf(guard, "Fresh work %d (historical work %s, selected %s)\n  %q\n", work.Ordinal, work.HistoricalWorkID, work.Role, string(work.PathBytes))
-			printField(guard, "Saved fresh work status", work.Status)
-			printField(guard, "Saved fresh prefix", fmt.Sprintf("%d bytes", work.DurableOffset))
-			printField(guard, "Fresh sequence", work.Sequence)
-			if !work.CheckedAt.IsZero() {
-				printField(guard, "Checked at", work.CheckedAt.UTC().Format(time.RFC3339Nano))
-			}
-			if work.SHA256 != "" {
-				fmt.Fprintf(guard, "Historical fresh SHA-256: %s\n", work.SHA256)
-			}
-			if work.Code != "" {
-				printField(guard, "Saved work code", work.Code)
-			}
-			if work.LatestAttempt != nil {
-				printField(guard, "Latest fresh attempt", work.LatestAttempt.Status)
-				printField(guard, "Latest charged allowance", fmt.Sprintf("%d bytes", work.LatestAttempt.ReservedBytes))
-			}
-			if work.Status == "complete" {
-				completed++
-			}
-		}
-		printField(guard, "Completed fresh observations", fmt.Sprintf("%d of %d", completed, len(job.Progress)))
-		printWrapped(guard, "These observations were made at separate times. They prove no current equality, duplicate verification or safe cleanup. Viewing them starts no read and recovers no work.", "")
-		printHashBudgetScope(guard, job.FreshBudget, "FRESH-JOB RESERVATION BUDGET", "fresh job", "whole exact fresh job")
-	}
+	printField(guard, "Completed fresh observations", fmt.Sprintf("%d of %d", completed, len(job.Work)))
 	if job.Comparison != nil {
-		printHashFreshComparison(guard, *job.Comparison)
+		printHashFreshComparisonSummary(guard, *job.Comparison)
 	}
-	fmt.Fprintln(guard)
+	fmt.Fprintf(guard, "\nJob: %s\nJob key: %s\nRequest: %s\nChoice: %s\nOriginal store: %s\nOriginal selection: %s\nInventory: %s\n", job.ID, record.JobKey, record.Request.RequestID, record.Request.ChoiceID, record.Request.StoreID, record.Request.SelectionID, record.Request.InventoryID)
+	printField(guard, "Job saved at", record.CreatedAt.UTC().Format(time.RFC3339Nano))
+	printResultBanner(guard, "SAVED FRESH PROGRESS - HISTORICAL OBSERVATIONS")
+	if job.Comparison != nil {
+		printHashFreshComparisonMembers(guard, *job.Comparison)
+	}
+	printResultBanner(guard, "FRESH-JOB READ CONSENT")
+	printHashFreshReadConsentDetails(guard, job.ReadConsent, false)
+	if job.ReadConsent == nil {
+		printField(guard, "Current read permission", "Not evaluated")
+	}
+	printResultBanner(guard, "FRESH-JOB ACCOUNTING")
 	printField(guard, "Fresh reserved bytes", fmt.Sprintf("%d bytes", job.FreshReservedBytes))
 	printField(guard, "Fresh requested bytes", fmt.Sprintf("%d bytes", job.FreshRequestedBytes))
 	printField(guard, "Fresh read bytes", fmt.Sprintf("%d bytes", job.FreshReadBytes))
+	if job.FreshBudget != nil {
+		printHashBudgetScope(guard, job.FreshBudget, "FRESH-JOB RESERVATION BUDGET", "fresh job", "whole exact fresh job")
+	}
 	printResultBanner(guard, "ORIGINAL HASHING CONTEXT AT FIRST JOB PUBLICATION")
 	printField(guard, "Original selected work", record.OriginalContext.SelectedWork)
 	printField(guard, "Original completed observations", record.OriginalContext.CompletedObservations)
 	printField(guard, "Original unfinished work", record.OriginalContext.UnfinishedWork)
-	printWrapped(guard, "These whole-original-selection charges and consent were captured when this job was first saved. They are not this job's accounting or permission. Exact retries retain the first context.", "")
+	printWrapped(guard, "These archived charges and consent cover the original selection when this job was first saved. They grant no fresh allowance. Exact retries retain this context; fresh SHA progress and accounting start separately.", "")
 	printHashBudget(guard, record.OriginalContext.Budget)
 	printHashReadConsent(guard, record.OriginalContext.ReadConsent)
-	if job.ReadConsent == nil {
-		printField(guard, "Fresh read approval", "Unavailable")
-	} else {
-		printHashFreshReadConsent(guard, job.ReadConsent)
-	}
 	printField(guard, "Reclaimable space", "Unknown")
-	printWrapped(guard, "Only existing saved hash records were accessed. No source files, configuration or inventory were opened. Original hashing work, consent and charges were unchanged. This saved view evaluates no current read permission and grants no cleanup permission. Keep the same global options and private data directory when reopening it with:", "")
+	printHashFreshComparisonQualification(guard)
+	printWrapped(guard, "No source files, configuration or inventory were opened. Original hashing work, consent and charges were unchanged. Keep the same global options and private data directory when reopening it with:", "")
 	fmt.Fprintf(guard, "  rydd hash --show-job %s\n", job.ID)
 	if guard.err != nil {
 		return fmt.Errorf("write existing fresh job %s; reopen with hash --show-job %s or repeat the exact choice with --job-key %s: %w", job.ID, job.ID, record.JobKey, guard.err)

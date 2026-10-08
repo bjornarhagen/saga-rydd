@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -189,9 +190,17 @@ func TestHashFreshJobCLIOfflinePublicationRetryAndSeparateContexts(t *testing.T)
 	}
 	code, human, stderr := f.run(context.Background(), "hash", "--show-job", first.ID)
 	flat := strings.Join(strings.Fields(human), " ")
-	for _, want := range []string{first.ID, key, "SAVED FRESH JOB - READ CONSENT UNAVAILABLE", "Selected keeper for review", "Selected copy for review", "Fresh checked offset 0 bytes", "Fresh reserved bytes 0 bytes", "ORIGINAL HASHING CONTEXT AT FIRST JOB PUBLICATION", "Fresh read approval Unavailable", "Reclaimable space Unknown", "No source files, configuration or inventory were opened"} {
+	for _, want := range []string{first.ID, key, "SAVED FRESH KEEPER/COPY COMPARISON - HISTORICAL", "Completed fresh observations 0 of 3", "Comparison Incomplete", "Selected keeper for review", "Selected copy for review", "Fresh observation NOT RECORDED", "Fresh reserved bytes 0 bytes", "FRESH-JOB READ CONSENT", "Fresh read consent NOT RECORDED", "ORIGINAL HASHING CONTEXT AT FIRST JOB PUBLICATION", "Reclaimable space Unknown", "No source files, configuration or inventory were opened"} {
 		if code != 0 || stderr != "" || !strings.Contains(flat, want) {
 			t.Fatal("human job report omitted zero progress/exact roles/context", want, code, human, stderr)
+		}
+	}
+	if strings.Index(human, "Completed fresh observations") > strings.Index(human, "Job:") || strings.Index(human, "FRESH-JOB READ CONSENT") > strings.Index(human, "ORIGINAL HASHING CONTEXT") || strings.Contains(flat, "UNAVAILABLE") || strings.Contains(flat, "Saved fresh prefix") || strings.Contains(flat, "Initial work status") {
+		t.Fatal("human seed report buried the result or invented a fresh observation", human)
+	}
+	for _, target := range first.Record.Request.Targets {
+		if strings.Count(human, fmt.Sprintf("%q", string(target.Target.File.PathBytes))) != 1 {
+			t.Fatal("human seed report repeated or omitted an exact selected path", human)
 		}
 	}
 }

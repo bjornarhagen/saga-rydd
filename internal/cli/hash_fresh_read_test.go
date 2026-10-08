@@ -115,10 +115,13 @@ func TestHashFreshReadCLIExactOfflineLifecycleAndOriginalContext(t *testing.T) {
 	}
 	code, human, diagnostic := f.run(context.Background(), "hash", "--show-job", job.ID)
 	flat := strings.Join(strings.Fields(human), " ")
-	for _, want := range []string{c.ID, "SAVED FRESH JOB - PERMISSION NOT EVALUATED", "Fresh read consent:", "Fresh reserved bytes 0 bytes", "Current read permission Not evaluated"} {
+	for _, want := range []string{c.ID, "SAVED FRESH KEEPER/COPY COMPARISON - HISTORICAL", "FRESH-JOB READ CONSENT", "Fresh read consent:", "Fresh reserved bytes 0 bytes", "Current read permission Not evaluated"} {
 		if code != 0 || diagnostic != "" || !strings.Contains(flat, want) {
 			t.Fatal("human saved job hid fresh consent", want, code, human, diagnostic)
 		}
+	}
+	if strings.Index(human, "FRESH-JOB READ CONSENT") > strings.Index(human, "ORIGINAL HASHING CONTEXT") || strings.Count(human, "Job: "+job.ID) != 1 || strings.Contains(flat, "Fresh read consent NOT RECORDED") {
+		t.Fatal("human job report mixed fresh consent with archived original context", human)
 	}
 	code, raw, diagnostic = f.run(context.Background(), "hash", "--show-job", job.ID, "--json")
 	shown := hashFreshJobCLIReport(t, code, raw, diagnostic, "show").Job

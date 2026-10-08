@@ -696,6 +696,8 @@ Human output shows a concise copy table, exact paths and individual observation 
 
 This adds no command, persisted decision, schema, read consent or automatic run. The view opens only existing saved hash records, works with source/inventory/configuration offline and with a writer held, and changes no clocks, charges or progress. Corrupt evidence is a read error, never a blocked successful comparison. Cancellation or failed output produces no second JSON envelope; inspect the same exact saved job after a failed reply. Capabilities include `fresh_hash_choice_comparisons: true`.
 
+Human output leads with the actual completed-observation count and historical comparison. Each selected path appears once with its saved fresh observation and latest attempt; missing observations and consent say `NOT RECORDED`. Fresh consent and accounting have their own sections before archived original context. Unknown attempt usage stays unknown. One-step output leads with that step's result and gives a saved-progress command; the ordinal does not establish overall completion. These presentation changes leave JSON unchanged. Guided role prompts request row numbers and show only available nonkeeper rows as copy examples.
+
 ## Save and show a hash proposal
 
 ```sh

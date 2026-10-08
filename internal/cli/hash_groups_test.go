@@ -126,7 +126,7 @@ func TestHashesGroupsCLICompletedMatchesConsentAndOfflineReadOnly(t *testing.T) 
 	}
 	code, human, stderr := f.run(ctx, "hashes", "--groups")
 	flat := strings.Join(strings.Fields(human), " ")
-	for _, want := range []string{"HISTORICAL HASH MATCHES - CURRENT FILES NOT CHECKED", wantSHA, "observations need not be simultaneous", "do not prove current duplicate files or safe cleanup", "whole selection", "Current read permission Not evaluated", "No source files or saved records were changed"} {
+	for _, want := range []string{"HISTORICAL HASH MATCHES - CURRENT FILES NOT CHECKED", wantSHA, "observations need not be simultaneous", "do not prove current duplicate files or safe cleanup", "whole selection", "Current read permission Not evaluated", "No source files or saved records were changed", "rydd review --hashes --save-choice", "rydd hashes --preview " + proposal.SelectionID} {
 		if code != 0 || stderr != "" || !strings.Contains(flat, want) {
 			t.Fatal(want, code, human, stderr)
 		}

@@ -64,7 +64,6 @@ func printHashStepReport(out io.Writer, report HashStepReport) error {
 	printWrapped(guard, "Saga — Rydd: one guarded hash step", "")
 	printResultBanner(guard, "ONE HASH STEP - NO CLEANUP")
 	approval := report.ReadConsent.Approval
-	fmt.Fprintf(guard, "Read consent ID: %s\nStore: %s\nSelection: %s\nInventory: %s\n", report.ApprovalID, approval.StoreID, approval.SelectionID, approval.InventoryID)
 	result := report.Result
 	if result.WorkID == "" {
 		printWrapped(guard, "No pending hashing work was selected. This does not prove current files are unchanged or that duplicates exist.", "")
@@ -78,6 +77,9 @@ func printHashStepReport(out io.Writer, report HashStepReport) error {
 			state = "Historical full-file hash observed"
 		}
 		printField(guard, "Recorded step state", state)
+		if result.Code != "" {
+			printField(guard, "Recorded reason", result.Code)
+		}
 		printField(guard, "Observed prefix", fmt.Sprintf("%d bytes", result.Progress.Offset))
 		printField(guard, "Saved prefix", fmt.Sprintf("%d bytes", result.DurableOffset))
 		if result.Progress.SHA256 != "" {
@@ -92,12 +94,15 @@ func printHashStepReport(out io.Writer, report HashStepReport) error {
 	printField(guard, "Requested bytes", result.Usage.RequestedBytes)
 	printField(guard, "Read bytes", result.Usage.ReadBytes)
 	printField(guard, "Observed elapsed", result.Usage.Elapsed.String())
+	fmt.Fprintf(guard, "Read consent ID: %s\nStore: %s\nSelection: %s\nInventory: %s\n", report.ApprovalID, approval.StoreID, approval.SelectionID, approval.InventoryID)
 	printHashBudget(guard, result.Budget)
 	if result.Status == "pending" {
 		printWrapped(guard, "To continue, explicitly run the following command with the same global options:", "")
 		fmt.Fprintf(guard, "  rydd hash --run %s\n", report.ApprovalID)
 	}
-	printWrapped(guard, "This command performs one step and exits. It does not loop or retry. Reservations are never refunded. Normal writer opening can also recover a previous interruption as metadata. A saved digest is a historical observation; it does not prove current contents, duplicate files or safe cleanup.", "")
+	printWrapped(guard, "Inspect whole-selection progress with the same global options before another explicit step:", "")
+	fmt.Fprintln(guard, "  rydd hashes")
+	printWrapped(guard, "One step runs and exits; no automatic loop or retry occurs. Opening a run writer can recover interrupted accounting. This historical digest proves no current equality or safe cleanup.", "")
 	if guard.err != nil {
 		return fmt.Errorf("write hash step result (publication may have completed; inspect hashes before another explicit run): %w", guard.err)
 	}
@@ -143,5 +148,5 @@ func printHashReadConsent(out io.Writer, consent *inventory.HashReadConsent) {
 		printWrapped(out, "A writer recorded that this approval expired. This view does not make a new expiry observation.", "")
 	}
 	printField(out, "Current read permission", "Not evaluated by this saved-only view")
-	printWrapped(out, "These fixed caps cover the whole saved selection. Lifetime charges include earlier, canceled and unknown reservations. Day charges follow the saved reservation day; they do not measure reads per wall-clock day. This view does not calculate remaining quota or time to expiry, and it does not start or recover reads. Read consent does not authorize cleanup.", "")
+	printWrapped(out, "Fixed caps cover the whole saved selection, including earlier, canceled and unknown reservations. Day charges follow reservation days, not wall-clock-day reads. This view calculates no remaining quota or time to expiry, starts or recovers no reads, and grants no cleanup permission.", "")
 }

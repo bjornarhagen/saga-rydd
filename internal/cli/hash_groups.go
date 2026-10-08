@@ -54,8 +54,10 @@ func printHashGroups(out io.Writer, r inventory.HashGroupsReport) error {
 	}
 	printWrapped(guard, "Member identity flags cover the whole selection, including paths outside the displayed group. Saved identities do not establish inode continuity or independent storage. File sizes are per file; no keeper or reclaimable-space estimate is provided.", "")
 	if len(r.Groups) != 0 {
+		printWrapped(guard, "To choose and explicitly save historical keeper/copy roles, use the guided review with the same global options and private data directory:", "")
+		fmt.Fprintln(guard, "  rydd review --hashes --save-choice")
 		printWrapped(guard, "For a possible keeper/copy preview, use the same data directory and explicitly name the full selection ID, keeper work ID and copy work IDs. No decision is saved.", "")
-		fmt.Fprintln(guard, "  hashes --preview SELECTION_ID --keeper WORK_ID COPY_ID...")
+		fmt.Fprintf(guard, "  rydd hashes --preview %s --keeper WORK_ID COPY_ID...\n", r.SelectionID)
 	}
 	printHashBudget(guard, r.Budget)
 	printHashReadConsent(guard, r.ReadConsent)

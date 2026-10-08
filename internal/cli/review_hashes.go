@@ -66,7 +66,7 @@ refreshGroups:
 			}
 		keepers:
 			for {
-				line, err = readHashReviewResponse(ctx, lines, display, "Choose one keeper row, back, or quit: ")
+				line, err = readHashReviewResponse(ctx, lines, display, "Choose one keeper row number, back, or quit: ")
 				if errors.Is(err, io.EOF) || err == nil && line == "quit" {
 					return endHashReview(ctx, display)
 				}
@@ -79,7 +79,7 @@ refreshGroups:
 				}
 				numbers, err = parseReviewNumbers(line)
 				if err != nil || len(numbers) != 1 || numbers[0] > len(group.Members) {
-					fmt.Fprintln(display, "\nChoose exactly one available keeper row from this frozen group. Use back to return to the groups. Nothing saved.")
+					fmt.Fprintln(display, "\nChoose exactly one available keeper row number from this frozen group. Use back to return to the groups. Nothing saved.")
 					continue
 				}
 				keeper := group.Members[numbers[0]-1]
@@ -88,8 +88,9 @@ refreshGroups:
 					continue
 				}
 				fmt.Fprintf(display, "\nPossible keeper you selected: row %d\n  %q\n", numbers[0], string(keeper.PathBytes))
+				copyPrompt := hashReviewCopyPrompt(group, keeper)
 				for {
-					line, err = readHashReviewResponse(ctx, lines, display, "Choose copy rows (for example 1,3), back, or quit: ")
+					line, err = readHashReviewResponse(ctx, lines, display, copyPrompt)
 					if errors.Is(err, io.EOF) || err == nil && line == "quit" {
 						return endHashReview(ctx, display)
 					}
@@ -102,7 +103,7 @@ refreshGroups:
 					}
 					numbers, err = parseReviewNumbers(line)
 					if err != nil || len(numbers) >= inventory.FileSampleTargetLimit {
-						fmt.Fprintln(display, "\nChoose 1–19 unique available copy rows, separated by spaces or commas. Ranges and all are not accepted. Nothing saved.")
+						fmt.Fprintln(display, "\nChoose 1–19 unique available copy row numbers, separated by spaces or commas. Ranges and all are not accepted. Nothing saved.")
 						continue
 					}
 					copies, err := selectHashReviewCopies(group, keeper, numbers)
@@ -234,6 +235,20 @@ func hashReviewAvailableMembers(group inventory.SavedHashGroup) int {
 	return available
 }
 
+func hashReviewCopyPrompt(group inventory.SavedHashGroup, keeper inventory.SavedHashGroupMember) string {
+	examples := make([]string, 0, 2)
+	for i, member := range group.Members {
+		if member.WorkID == keeper.WorkID || !hashReviewMemberAvailable(member) {
+			continue
+		}
+		examples = append(examples, fmt.Sprint(i+1))
+		if len(examples) == 2 {
+			break
+		}
+	}
+	return fmt.Sprintf("Choose copy row numbers (for example %s), back, or quit: ", strings.Join(examples, ","))
+}
+
 func selectHashReviewCopies(group inventory.SavedHashGroup, keeper inventory.SavedHashGroupMember, numbers []int) ([]inventory.SavedHashGroupMember, error) {
 	if len(numbers) < 1 || len(numbers) >= inventory.FileSampleTargetLimit {
 		return nil, inventory.ErrHashKeeperRequest
@@ -300,7 +315,7 @@ func printHashReviewMembers(out io.Writer, group inventory.SavedHashGroup, saveC
 			printField(out, "Role preview", "Unavailable: repeated or conflicting saved identity")
 		}
 	}
-	printWrapped(out, "Choose one available keeper row, then explicitly choose other available rows as possible copies. Other matching paths are not selected. Saved identities do not prove current hardlinks, inode continuity or independent storage.", "")
+	printWrapped(out, "Choose one available keeper row number, then explicitly choose other available row numbers as possible copies. Other matching paths are not selected. Saved identities do not prove current hardlinks, inode continuity or independent storage.", "")
 	if saveChoice {
 		printWrapped(out, "Saving requires a separate save response after the exact preview. Only historical roles can be saved; approval and reclaimable space remain unavailable.", "")
 	} else {

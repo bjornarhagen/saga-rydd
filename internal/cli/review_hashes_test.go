@@ -91,17 +91,27 @@ func TestGuidedHashReviewExplicitRolesOfflineAndCopyOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := hashCLIBytes(t, f.base, f.root+".offline")
-	for _, copies := range []string{"1", "3,1"} {
-		t.Run(copies, func(t *testing.T) {
-			input := &guidedReviewLineReader{lines: []string{"1\n", "2\n", copies + "\n"}}
+	for _, tc := range []struct {
+		name, keeper, copies, example string
+	}{
+		{"first_keeper", "1", "2,3", "2,3"},
+		{"nonfirst_keeper_subset", "2", "1", "1,3"},
+		{"nonfirst_keeper_copy_order", "2", "3,1", "1,3"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			filename := filepath.Base(string(f.proposal.Targets[0].File.PathBytes))
+			input := &guidedReviewLineReader{lines: []string{"1\n", filename + "\n", tc.keeper + "\n", tc.copies + "\n"}}
 			code, output, stderr := runHashGuidedReview(t, ctx, f.base, input)
-			if code != 0 || stderr != "" || input.index != 3 || !strings.Contains(output, "Choose a group number") || !strings.Contains(output, "Choose one keeper row") || !strings.Contains(output, "Choose copy rows") {
+			if code != 0 || stderr != "" || input.index != 4 || !strings.Contains(output, "Choose a group number") || strings.Count(output, "Choose one keeper row number, back, or quit: ") != 2 || !strings.Contains(output, "Choose copy row numbers (for example "+tc.example+"), back, or quit: ") {
 				t.Fatal("group or role choice was automatic or retained extra input", code, output, stderr, input.index)
+			}
+			if !strings.Contains(output, "Choose exactly one available keeper row number from this frozen group") || strings.Count(output, "Possible keeper you selected:") != 1 {
+				t.Fatal("filename input selected a keeper instead of requesting a row number", output)
 			}
 			preview := hashReviewFinalPreview(t, output)
 			flat := strings.Join(strings.Fields(preview), " ")
-			ordered := strings.ReplaceAll(copies, ",", " ")
-			command := hashReviewExactCommand(t, f.base, f.proposal.SelectionID, "2", ordered)
+			ordered := strings.ReplaceAll(tc.copies, ",", " ")
+			command := hashReviewExactCommand(t, f.base, f.proposal.SelectionID, tc.keeper, ordered)
 			for _, want := range []string{command, fmt.Sprintf("%x", sha256.Sum256(f.contents)), "Possible keeper", "Possible copy for review", "No decision was saved", "Approval Unavailable", "Reclaimable space Unknown", "Selected work 4", "Completed observations 4", "Completed without a match 1", "Total reserved " + humanBytes(4*int64(len(f.contents))), "Revocation recorded", "Current read permission Not evaluated"} {
 				if !strings.Contains(preview, want) && !strings.Contains(flat, want) {
 					t.Fatal("guided preview lost scope, accounting or authority qualification", want, preview)
@@ -110,7 +120,7 @@ func TestGuidedHashReviewExplicitRolesOfflineAndCopyOrder(t *testing.T) {
 			if strings.Count(preview, "Possible copy for review") != len(strings.Fields(ordered)) || strings.Contains(preview, fmt.Sprintf("%q", string(f.proposal.Targets[3].File.PathBytes))) {
 				t.Fatal("guided review added an unrequested copy", preview)
 			}
-			if copies == "1" && strings.Contains(preview, fmt.Sprintf("%q", string(f.proposal.Targets[2].File.PathBytes))) {
+			if tc.copies == "1" && strings.Contains(preview, fmt.Sprintf("%q", string(f.proposal.Targets[2].File.PathBytes))) {
 				t.Fatal("one-copy choice expanded to the third matching file", preview)
 			}
 			if !strings.Contains(preview, fmt.Sprintf("%q", string(f.proposal.Targets[1].File.PathBytes))) || strings.Contains(output, "nested\nfolder") || strings.ContainsRune(output, '\x1b') || !utf8.ValidString(output) {
@@ -179,7 +189,7 @@ func TestGuidedHashReviewSecondGroupRemapsOnlyExplicitRows(t *testing.T) {
 	preview := hashReviewFinalPreview(t, output)
 	chosen := groups.Groups[1]
 	keeper, copy := chosen.Members[1], chosen.Members[0]
-	if code != 0 || stderr != "" || input.index != 5 || strings.Count(output, "Choose a group number") != 2 || strings.Count(output, "Choose one keeper row") != 2 || !strings.Contains(preview, hashReviewExactCommand(t, f.base, p.SelectionID, keeper.WorkID, copy.WorkID)) || !strings.Contains(preview, chosen.SHA256) || strings.Count(preview, "Possible copy for review") != 1 {
+	if code != 0 || stderr != "" || input.index != 5 || strings.Count(output, "Choose a group number") != 2 || strings.Count(output, "Choose one keeper row number") != 2 || !strings.Contains(preview, hashReviewExactCommand(t, f.base, p.SelectionID, keeper.WorkID, copy.WorkID)) || !strings.Contains(preview, chosen.SHA256) || strings.Count(preview, "Possible copy for review") != 1 {
 		t.Fatal("second-group row choices reused first-group ordinals or automatic roles", code, output, stderr, input.index)
 	}
 	for _, member := range []inventory.SavedHashGroupMember{keeper, copy} {
@@ -234,7 +244,7 @@ func TestGuidedHashReviewBackRetainsFrozenRowsAndRefreshIsExplicit(t *testing.T)
 			if code != 0 || stderr != "" || input.index != len(tc.lines) || !strings.Contains(preview, hashReviewExactCommand(t, f.base, f.proposal.SelectionID, tc.keeper, "1")) || !strings.Contains(strings.Join(strings.Fields(preview), " "), "Completed observations 3") || !reflect.DeepEqual(afterChange, hashCLIBytes(t, f.base, f.root)) {
 				t.Fatal("back silently refreshed rows or explicit refresh reused old rows", code, output, stderr, input.index)
 			}
-			if strings.HasSuffix(tc.name, "_back") && !strings.Contains(output, "Choose exactly one available keeper row from this frozen group") {
+			if strings.HasSuffix(tc.name, "_back") && !strings.Contains(output, "Choose exactly one available keeper row number from this frozen group") {
 				t.Fatal("newly completed row entered a frozen member list", output)
 			}
 			flat := strings.Join(strings.Fields(preview), " ")
@@ -267,27 +277,50 @@ func TestGuidedHashReviewEmptyGroupsExitWithoutInput(t *testing.T) {
 }
 
 func TestGuidedHashReviewAliasOutsideGroupIsUnavailable(t *testing.T) {
-	f := newHashProposalCLIFixture(t)
-	if err := os.Remove(f.base + "/config.toml"); err != nil {
-		t.Fatal(err)
+	for _, extraCopy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("extra_copy_%t", extraCopy), func(t *testing.T) {
+			f := newHashProposalCLIFixture(t)
+			if err := os.Remove(f.base + "/config.toml"); err != nil {
+				t.Fatal(err)
+			}
+			parent := filepath.Dir(string(f.page.Bands[0].Files[0].PathBytes))
+			if err := os.Link(filepath.Join(parent, "peer"), filepath.Join(parent, "unselected alias")); err != nil {
+				t.Fatal(err)
+			}
+			names := []string{"peer", "quote\"雪", "unselected alias"}
+			work := []string{"1", "2"}
+			lines := []string{"1\n", "quit\n"}
+			if extraCopy {
+				if err := os.WriteFile(filepath.Join(parent, "independent copy"), bytes.Repeat([]byte("generated"), 17), 0600); err != nil {
+					t.Fatal(err)
+				}
+				names = []string{"peer", "quote\"雪", "independent copy", "unselected alias"}
+				work = []string{"1", "2", "3"}
+				lines = []string{"1\n", "2\n", "3\n"}
+			}
+			p := hashKeeperRescanAndSelect(t, f, names)
+			c := hashKeeperApprove(t, f, p)
+			for _, id := range work {
+				hashKeeperRun(t, f, c, id)
+			}
+			before := hashCLIBytes(t, f.base, f.root)
+			input := &guidedReviewLineReader{lines: lines}
+			code, output, stderr := runHashGuidedReview(t, context.Background(), f.base, input)
+			flat := strings.Join(strings.Fields(output), " ")
+			if code != 0 || stderr != "" || input.index != len(lines) || !strings.Contains(flat, "Unavailable: repeated or conflicting saved identity") || !reflect.DeepEqual(before, hashCLIBytes(t, f.base, f.root)) {
+				t.Fatal("known alias was omitted or review changed evidence", code, output, stderr)
+			}
+			if extraCopy {
+				preview := hashReviewFinalPreview(t, output)
+				if !strings.Contains(output, "Choose copy row numbers (for example 3), back, or quit: ") || !strings.Contains(preview, hashReviewExactCommand(t, f.base, p.SelectionID, "2", "3")) || strings.Count(preview, "Possible copy for review") != 1 || strings.Contains(preview, fmt.Sprintf("%q", string(p.Targets[0].File.PathBytes))) {
+					t.Fatal("one-copy example included the keeper or an unavailable row", output)
+				}
+			} else if !strings.Contains(flat, "A role preview is unavailable") || !strings.Contains(flat, "No alternative paths were chosen") || strings.Contains(output, "Choose one keeper") || strings.Contains(output, hashReviewPreviewBanner) {
+				t.Fatal("known alias was replaced or allowed as an independent role", output)
+			}
+			hashReviewNoSavedDecision(t, f.base)
+		})
 	}
-	parent := filepath.Dir(string(f.page.Bands[0].Files[0].PathBytes))
-	if err := os.Link(filepath.Join(parent, "peer"), filepath.Join(parent, "unselected alias")); err != nil {
-		t.Fatal(err)
-	}
-	p := hashKeeperRescanAndSelect(t, f, []string{"peer", "quote\"雪", "unselected alias"})
-	c := hashKeeperApprove(t, f, p)
-	for _, work := range []string{"1", "2"} {
-		hashKeeperRun(t, f, c, work)
-	}
-	before := hashCLIBytes(t, f.base, f.root)
-	input := &guidedReviewLineReader{lines: []string{"1\n", "quit\n"}}
-	code, output, stderr := runHashGuidedReview(t, context.Background(), f.base, input)
-	flat := strings.Join(strings.Fields(output), " ")
-	if code != 0 || stderr != "" || input.index != 2 || !strings.Contains(flat, "Unavailable: repeated or conflicting saved identity") || !strings.Contains(flat, "A role preview is unavailable") || !strings.Contains(flat, "No alternative paths were chosen") || strings.Contains(output, "Choose one keeper") || strings.Contains(output, hashReviewPreviewBanner) || !reflect.DeepEqual(before, hashCLIBytes(t, f.base, f.root)) {
-		t.Fatal("known alias was omitted, replaced or allowed as an independent role", code, output, stderr)
-	}
-	hashReviewNoSavedDecision(t, f.base)
 }
 
 func TestGuidedHashReviewReplacedStoreCannotRemapFrozenOrdinals(t *testing.T) {
@@ -373,7 +406,7 @@ type hashReviewPipePromptWriter struct {
 
 func (w *hashReviewPipePromptWriter) Write(p []byte) (int, error) {
 	n, err := w.Buffer.Write(p)
-	if strings.Contains(string(p), "Choose copy rows") {
+	if strings.Contains(string(p), "Choose copy row numbers") {
 		w.once.Do(func() { close(w.ready) })
 	}
 	return n, err
@@ -425,7 +458,7 @@ func TestGuidedHashReviewInputOutputAndPipeControls(t *testing.T) {
 			}
 		})
 	}
-	for stage, prompt := range []string{"Choose a group number", "Choose one keeper row", "Choose copy rows", hashReviewPreviewBanner} {
+	for stage, prompt := range []string{"Choose a group number", "Choose one keeper row number", "Choose copy row numbers", hashReviewPreviewBanner} {
 		for _, short := range []bool{false, true} {
 			t.Run(fmt.Sprintf("output_%d_short_%t", stage, short), func(t *testing.T) {
 				out := &hashReviewFailAtWriter{match: prompt, short: short}

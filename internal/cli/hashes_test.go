@@ -316,7 +316,7 @@ func TestHashesCLIUnknownAndReservedUsageNoRecovery(t *testing.T) {
 			if code != 0 || stderr != "" || !strings.Contains(flat, "Observed requested Unknown") || !strings.Contains(flat, "Observed read Unknown") || !strings.Contains(flat, "does not prove a process is active") {
 				t.Fatal(code, human, stderr)
 			}
-			if !strings.Contains(flat, "Total interrupted charge "+humanBytes(wantUnknown)) || !strings.Contains(flat, "Unsettled reservations remain charged but are excluded from the interrupted counters") {
+			if !strings.Contains(flat, "Total interrupted charge "+humanBytes(wantUnknown)) || !strings.Contains(flat, "Unsettled reservations stay charged but are excluded from interrupted charges") || !strings.Contains(flat, "Interrupted charges have unknown usage") {
 				t.Fatal("unsettled charge was described as recovered interrupted usage", human)
 			}
 			if !reflect.DeepEqual(before, hashCLIBytes(t, f.base, f.sourceDir, f.root)) {

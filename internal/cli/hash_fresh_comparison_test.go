@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bjornarhagen/saga-rydd/internal/inventory"
 )
@@ -69,6 +70,11 @@ func TestHashFreshComparisonCLIInitialPartialAndGenuineEqualHeads(t *testing.T) 
 	if partial.Comparison.Status != "incomplete" || !partial.Comparison.ProgressInitialized || partial.Comparison.Keeper.Observation.Status != "complete" || partial.Comparison.Copies[0].Copy.Observation.Status != "pending" || partial.Comparison.MatchingCopies != 0 {
 		t.Fatal("single completed head implied equal copies", raw)
 	}
+	code, human, diagnostic := f.run(ctx, "hash", "--show-job", job.ID)
+	flat := strings.Join(strings.Fields(human), " ")
+	if code != 0 || diagnostic != "" || !strings.Contains(flat, "Completed fresh observations 1 of 2") || !strings.Contains(flat, "Comparison Incomplete") || strings.Contains(flat, "Initial work status") || strings.Count(flat, "Saved fresh state complete") != 1 || strings.Count(flat, "Saved fresh state pending") != 1 {
+		t.Fatal("human partial report replaced actual saved progress with initial seed states", code, human, diagnostic)
+	}
 	code, raw, diagnostic = f.run(ctx, "hash", "--run-job", consent.ID, "--json")
 	_ = hashFreshRunCLIReport(t, code, raw, diagnostic)
 	code, raw, diagnostic = f.run(ctx, "hash", "--show-job", job.ID, "--json")
@@ -77,10 +83,18 @@ func TestHashFreshComparisonCLIInitialPartialAndGenuineEqualHeads(t *testing.T) 
 	if complete.Comparison.Status != "historical_hashes_match" || complete.Comparison.MatchingCopies != 1 || complete.Comparison.Copies[0].Relation != "historical_hashes_match" || complete.Comparison.Keeper.Observation.SHA256 != wantSHA || complete.Comparison.Copies[0].Copy.Observation.SHA256 != wantSHA {
 		t.Fatal("genuine fresh observations did not compare independent content", raw)
 	}
-	code, human, diagnostic := f.run(ctx, "hash", "--show-job", job.ID)
-	for _, text := range []string{"SAVED FRESH KEEPER/COPY COMPARISON - HISTORICAL", "Historical hashes match", "Copy work", "Saved copy state", "Observed at", "Reclaimable space remains unknown."} {
+	code, human, diagnostic = f.run(ctx, "hash", "--show-job", job.ID)
+	for _, text := range []string{"SAVED FRESH KEEPER/COPY COMPARISON - HISTORICAL", "Completed fresh observations 2 of 2", "Historical hashes match", "Comparison with keeper", "Saved fresh state complete", "Observed at", "Reclaimable space remains unknown."} {
 		if code != 0 || diagnostic != "" || !strings.Contains(strings.Join(strings.Fields(human), " "), text) {
 			t.Fatal("human comparison lost historical labels", code, human, diagnostic, text)
+		}
+	}
+	if strings.Index(human, "Completed fresh observations") > strings.Index(human, "Job:") || strings.Index(human, "Comparison ") > strings.Index(human, "Job:") || strings.Contains(human, "Initial work status") || strings.Contains(human, "Initial checked offset") {
+		t.Fatal("human complete report hid the result behind stale initial work", human)
+	}
+	for _, work := range complete.Progress {
+		if strings.Count(human, fmt.Sprintf("%q", string(work.PathBytes))) != 1 || !strings.Contains(human, work.SHA256) || !strings.Contains(human, work.CheckedAt.UTC().Format(time.RFC3339Nano)) {
+			t.Fatal("human completed report repeated a path or omitted its historical evidence", human)
 		}
 	}
 	// Formatter-only variants are authored report shapes, not live mismatch evidence.
@@ -92,6 +106,26 @@ func TestHashFreshComparisonCLIInitialPartialAndGenuineEqualHeads(t *testing.T) 
 		printHashFreshComparison(&out, comparison)
 		if !strings.Contains(out.String(), hashFreshComparisonLabel(status)) || !strings.Contains(out.String(), "saved observations made at separate times") {
 			t.Fatal("human relation label lost qualified meaning", out.String())
+		}
+	}
+	for _, state := range []struct {
+		work, attempt, label string
+	}{
+		{"running", "reserved", "Reserved; usage not settled"},
+		{"pending", "interrupted_unknown", "Interrupted; usage unknown"},
+	} {
+		member := complete.Comparison.Keeper
+		observation := *member.Observation
+		observation.Status, observation.SHA256 = state.work, ""
+		observation.LatestAttempt = &inventory.HashAttempt{Status: state.attempt, ReservationDay: "2026-01-01", ReservedBytes: 64}
+		member.Observation = &observation
+		var out bytes.Buffer
+		printHashFreshComparisonMember(&out, member)
+		flat := strings.Join(strings.Fields(out.String()), " ")
+		for _, want := range []string{state.label, "Observed requested Unknown", "Observed read Unknown", "Observed elapsed Unknown"} {
+			if !strings.Contains(flat, want) || strings.Contains(flat, "Historical fresh SHA-256") {
+				t.Fatal("human unsettled attempt reported known usage or a full digest", want, out.String())
+			}
 		}
 	}
 	code, after, diagnostic := f.run(ctx, "hashes", "--json")

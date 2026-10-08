@@ -177,6 +177,10 @@ func TestHashCLIRunOneMiBStepFairContinuationAndIndependentDigest(t *testing.T) 
 	if err := printHashStepReport(&human, last); err != nil || !strings.Contains(human.String(), "Historical SHA-256: "+last.Result.Progress.SHA256) || !strings.Contains(human.String(), fmt.Sprintf("%q", string(last.Result.Progress.PathBytes))) {
 		t.Fatal(human.String(), err)
 	}
+	stateIndex := strings.Index(human.String(), "Historical full-file hash observed")
+	if stateIndex < 0 || stateIndex > strings.Index(human.String(), "Read consent ID:") || !strings.Contains(human.String(), "rydd hashes") {
+		t.Fatal("completed step hid its result or omitted saved progress command", human.String())
+	}
 	code, raw, stderr = f.run(ctx, "hash", "--run", consent.ID, "--json")
 	idle := hashCLIStepResult(t, code, raw, stderr)
 	if idle.Result.Status != "idle" || idle.Result.WorkID != "" || idle.Result.ReservedBytes != 0 || idle.Result.Budget.TotalReservedBytes != 2*int64(len(contents)) {

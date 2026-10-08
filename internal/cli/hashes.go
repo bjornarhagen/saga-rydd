@@ -267,5 +267,6 @@ func printHashBudgetScope(out io.Writer, budget *inventory.HashBudget, banner, n
 	} {
 		printField(out, item.label, humanBytes(item.value))
 	}
-	printWrapped(out, "These counters cover the "+scope+", including work not shown. Reservations are full charged allowances and are never refunded. Interrupted charges count recovered attempts with unknown usage. Unsettled reservations remain charged but are excluded from the interrupted counters. Known counters omit attempts with unknown usage. They do not measure physical I/O or reads per wall-clock day. The budget itself does not store a limit or calculate remaining quota.", "")
+	printWrapped(out, "Counts cover the "+scope+", including work not shown. Reservations are never refunded. Interrupted charges have unknown usage; known requested/read counters exclude that usage. Unsettled reservations stay charged but are excluded from interrupted charges.", "")
+	printWrapped(out, "Day counters follow reservation days, not wall-clock-day reads. These are not physical I/O measurements or remaining quota.", "")
 }
