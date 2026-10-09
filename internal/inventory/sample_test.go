@@ -751,6 +751,7 @@ func TestFileSamplesFromProductionInventory(t *testing.T) {
 			if !finished {
 				t.Fatal("bounded production fixture did not finish")
 			}
+			finishSelectionFixtureMaintenance(t, ctx, writer, s)
 			if err := writer.Close(); err != nil {
 				t.Fatal(err)
 			}

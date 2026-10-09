@@ -82,6 +82,7 @@ func hashStoreFixtureFromFiles(t *testing.T, scanner *Scanner, targets []SavedFi
 	if !finished {
 		t.Fatal("synthetic scan did not finish")
 	}
+	finishSelectionFixtureMaintenance(t, ctx, f.source, scanner)
 	db, err := sql.Open("sqlite", filepath.Join(f.stateDir, state.Filename))
 	if err != nil {
 		t.Fatal(err)

@@ -70,6 +70,17 @@ func TestCompactLegacyReplayAndRetirement(t *testing.T) {
 	ctx := context.Background()
 	s, dir := compactFixture(t, false)
 	compactBatch(t, s, 1, true, compactFile("old", "a", 99), compactFile("old2", "b", 99))
+	// Detailed passes now retain bounded reconciliation work too; finish that
+	// saved-state work before switching the pinned inventory mode.
+	for {
+		worked, err := s.RetireSubtrees(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !worked {
+			break
+		}
+	}
 	on := true
 	if _, err := s.ConfigureCompact(ctx, &on); err != nil {
 		t.Fatal(err)

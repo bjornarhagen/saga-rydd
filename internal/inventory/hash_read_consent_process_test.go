@@ -83,6 +83,7 @@ func newHashConsentFixture(t *testing.T) *hashConsentFixture {
 	if !finished {
 		t.Fatal("manual consent fixture did not drain its bounded inventory")
 	}
+	finishSelectionFixtureMaintenance(t, ctx, writer, scanner)
 	if err = writer.Close(); err != nil {
 		t.Fatal(err)
 	}

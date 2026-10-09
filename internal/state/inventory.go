@@ -162,7 +162,7 @@ func (s *Store) CommitScan(ctx context.Context, j Job, b ScanBatch) error {
 	}
 	if b.Complete {
 		_, err = tx.ExecContext(ctx, `INSERT INTO subtree_reconcile(root_id,path,generation)
- SELECT ?,?,? WHERE EXISTS(SELECT 1 FROM settings WHERE key='inventory.compact' AND value=X'31')
+ VALUES(?,?,?)
  ON CONFLICT(root_id,path) DO UPDATE SET generation=excluded.generation,cursor=X''`, j.RootID, j.Path, b.Generation)
 		if err != nil {
 			return err

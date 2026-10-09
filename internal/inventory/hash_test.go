@@ -570,6 +570,7 @@ func TestFullHashFromProductionInventory(t *testing.T) {
 	if !finished {
 		t.Fatal("bounded production hash fixture did not finish scanning")
 	}
+	finishSelectionFixtureMaintenance(t, ctx, writer, s)
 	if err := writer.Close(); err != nil {
 		t.Fatal(err)
 	}

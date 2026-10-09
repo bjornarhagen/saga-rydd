@@ -68,6 +68,10 @@ const allocationPendingMemberQuery = `SELECT path,generation FROM allocation_mem
 // Reports never call this writer. Retained caches are scalars; deduplication
 // scratch is retired durably after publication or invalidation.
 func (s *Store) ReduceAllocations(ctx context.Context) (bool, error) {
+	return s.reduceAllocationsForRoot(ctx, 0)
+}
+
+func (s *Store) reduceAllocationsForRoot(ctx context.Context, rootID int64) (bool, error) {
 	if s.readOnly {
 		return false, errors.New("state is read-only")
 	}
@@ -79,14 +83,20 @@ func (s *Store) ReduceAllocations(ctx context.Context) (bool, error) {
 	var w allocationWork
 	var current int64
 	var coverage []byte
-	err = tx.QueryRowContext(ctx, `SELECT c.root_id,c.path,c.revision,c.phase,c.entry_cursor,c.inode_device,c.inode_number,
+	query := `SELECT c.root_id,c.path,c.revision,c.phase,c.entry_cursor,c.inode_device,c.inode_number,
  c.examined,c.allocated,c.repeated,c.unknown,c.conflicting,c.ready,v.revision,c.coverage
  FROM allocation_cache c JOIN allocation_revisions v ON v.root_id=c.root_id JOIN roots r ON r.id=c.root_id
  WHERE r.enabled=1 AND (c.revision!=v.revision OR c.phase!='done')
  AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.root_id=c.root_id AND j.kind=?)
  AND NOT EXISTS(SELECT 1 FROM subtree_reconcile t WHERE t.root_id=c.root_id)
- AND NOT EXISTS(SELECT 1 FROM subtree_retirement t WHERE t.root_id=c.root_id)
- ORDER BY c.root_id,c.path LIMIT 1`, ScanKind).Scan(&w.root, &w.path, &w.revision, &w.phase, &w.cursor, &w.device, &w.inode,
+ AND NOT EXISTS(SELECT 1 FROM subtree_retirement t WHERE t.root_id=c.root_id)`
+	args := []any{ScanKind}
+	if rootID > 0 {
+		query += " AND c.root_id=?"
+		args = append(args, rootID)
+	}
+	query += " ORDER BY c.root_id,c.path LIMIT 1"
+	err = tx.QueryRowContext(ctx, query, args...).Scan(&w.root, &w.path, &w.revision, &w.phase, &w.cursor, &w.device, &w.inode,
 		&w.examined, &w.allocated, &w.repeated, &w.unknown, &w.conflicting, &w.ready, &current, &coverage)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil

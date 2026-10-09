@@ -568,8 +568,11 @@ func TestWorkerCPUWindowIncludesProgressCommit(t *testing.T) {
 			}
 			if mode == "scan commit" {
 				due, err := r.NextJobDue(context.Background(), []string{state.ScanKind})
-				if err != nil || saved.summary.Entries != 1 || saved.summary.CompleteDirectories != 1 || saved.summary.PendingJobs != 1 || !due.After(time.Now().Add(23*time.Hour)) {
-					t.Fatal("inventory completion/revisit not committed before CPU observation", saved.summary, due, err)
+				if err != nil || saved.summary.Entries != 1 || saved.summary.CompleteDirectories != 1 || saved.summary.PendingJobs != 0 || !due.IsZero() {
+					t.Fatal("inventory completion not committed before CPU observation", saved.summary, due, err)
+				}
+				if pending, err := r.HasSubtreeRetirement(context.Background()); err != nil || !pending {
+					t.Fatal("future revisit bypassed saved maintenance", pending, err)
 				}
 			}
 			if (mode == "handler error" || mode == "canceled") && saved.summary.PendingJobs != 1 {

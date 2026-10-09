@@ -38,6 +38,15 @@ The owning loop settles known counts before saving job progress. Unused charge i
 
 Quota waits preserve status, pause and stop. Current scanner metrics are absent until construction, then include only actually admitted APIs. The saved budget and live observations are separate snapshots. Manual scans and explicit read/inspection contracts are unchanged. These allowances count scanner source APIs, not every syscall, physical I/O, configuration/SQLite/runtime work or a universal operation rate. Existing cadence, daily dispatch, WAL, CPU and job-retry gates still apply. See the [configuration and output contract](cli.md#durable-scanner-api-allowances).
 
+
+## Saved-only inventory maintenance (P1-08d1)
+
+Completed detailed and compact parent listings queue reconciliation of saved children. Once an enabled root has no inventory jobs, including delayed or future work, an exact-root maintenance step advances at most one worked bounded transaction. It retires obsolete compact generations, then revision-fenced absent/replaced subtrees, then invalidated detailed allocation cache/scratch state. Current observations and revision-matched completed caches stay intact. New scan observations cancel old retirement proofs.
+
+The experimental owning loop discovers maintenance roots in pages of at most 128 raw roots plus one continuation row and serves controls between pages. Due source work takes priority in this version. Each mutation turn uses the same durable dispatch/day reservation, CPU backoff, WAL and cadence gates as other background work. It opens no source scanner, spends no source API allowance and touches no owner plans, consent, hashes, actions or restore history. Revisit scheduling waits for maintenance to drain; restart rediscovers unfinished work without idle polling. Manual scans finish their saved maintenance before a later invocation starts another pass.
+
+The batch bounds apply to returned roots and changed payload records, not every SQL row examined. Cooperative database deadlines remain required. SQLite can reuse freed pages without shrinking its file. Physical size admission, disabled-root retention and fair/adaptive scheduling remain separate.
+
 ## Next integrations
 
 - **P1-05 implemented:** `--experimental-scan` registers metadata inventory, seeds root jobs and commits bounded batches atomically. Schema v3 adds directory watermarks and skip reasons. See [inventory design](inventory.md). Keep experimental activation explicit until budget enforcement is verified.

@@ -70,6 +70,7 @@ func nativeHashStoreFixture(t *testing.T, manual ...bool) (*Scanner, *state.Stor
 	if !finished {
 		t.Fatal("production fixture inventory did not drain")
 	}
+	finishSelectionFixtureMaintenance(t, ctx, w, s)
 	if err = w.Close(); err != nil {
 		t.Fatal(err)
 	}

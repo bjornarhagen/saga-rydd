@@ -92,6 +92,31 @@ func newHashCLIFixture(t *testing.T) *hashCLIFixture {
 	if !finished {
 		t.Fatal("bounded production hash CLI fixture did not finish metadata scan")
 	}
+	before, err := f.source.Summary(ctx)
+	if err != nil || before.PendingJobs != 0 || before.RunningJobs != 0 {
+		t.Fatal("hash CLI fixture still had source work before saved maintenance", before, err)
+	}
+	metrics := f.scanner.Metrics()
+	maintenanceDrained := false
+	for step := 0; step < 1024; step++ {
+		worked, e := f.source.RetireSubtrees(ctx)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if worked {
+			continue
+		}
+		pending, e := f.source.HasSubtreeRetirement(ctx)
+		if e != nil || pending {
+			t.Fatal("hash CLI fixture retained saved lifecycle work", pending, e)
+		}
+		maintenanceDrained = true
+		break
+	}
+	after, err := f.source.Summary(ctx)
+	if !maintenanceDrained || err != nil || before.Entries != after.Entries || after.PendingJobs != 0 || after.RunningJobs != 0 || metrics != f.scanner.Metrics() {
+		t.Fatal("hash CLI fixture maintenance failed or changed source observations", before, after, err)
+	}
 	report, err := f.source.SameSizeCandidates(ctx, 20, "", 1)
 	if err != nil || len(report.Bands) != 1 || len(report.Bands[0].Files) != 2 {
 		t.Fatal(report, err)

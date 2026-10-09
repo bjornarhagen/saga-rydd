@@ -184,8 +184,18 @@ func TestDismissalCandidateFilterChangedScanResurfacesAndReadersDoNotInitialize(
 	}
 	f.seed(1, false)
 	after := dismissalCandidateReport(t, f)
-	if len(after.Findings) != 1 || after.Findings[0].ID != before.Findings[0].ID || diagnosticCount(after, "dismissed") != 0 {
-		t.Fatal("changed observations stayed hidden under a reused finding ID", before, after)
+	if len(after.Findings) != 1 || !bytes.Equal(after.Findings[0].PathBytes, before.Findings[0].PathBytes) || diagnosticCount(after, "dismissed") != 0 || !after.Findings[0].DirectoryObservedAt.After(before.Findings[0].DirectoryObservedAt) {
+		t.Fatal("changed observations at the exact path did not resurface", before, after)
+	}
+	reader, err := state.OpenReader(context.Background(), f.state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection, readErr := reader.SnapshotSelection(context.Background(), []string{after.Findings[0].ID}, 30)
+	closeErr := reader.Close()
+	canonical, canonicalErr := state.CanonicalDismissalSelection(selection)
+	if readErr != nil || closeErr != nil || canonicalErr != nil || reflect.DeepEqual(canonical, saved.Record.Request.Selection) {
+		t.Fatal("resurfaced finding did not carry distinct complete bound historical evidence", canonical, readErr, closeErr, canonicalErr)
 	}
 	shown, err := plans.ShowDismissal(context.Background(), f.base, saved.ID)
 	if err != nil || shown.Status != "dismissed" || shown.CurrentEvidenceMatchEvaluated {

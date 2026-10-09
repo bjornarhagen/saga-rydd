@@ -78,12 +78,14 @@ func (f guidedReviewFixture) seed(count int, partial bool) {
 		return state.Entry{Path: []byte(path), Kind: kind, Device: "fixture-device", Inode: path, Size: 12, Allocated: 4096, MtimeNS: 1, CtimeNS: 2}
 	}
 	committedProjects := 0
+	sourceDrained := false
 	for {
 		job, err := w.ClaimJob(ctx, []string{state.ScanKind}, time.Now(), time.Minute)
 		if err != nil {
 			f.t.Fatal(err)
 		}
 		if job == nil {
+			sourceDrained = true
 			break
 		}
 		path := string(job.Path)
@@ -107,6 +109,25 @@ func (f guidedReviewFixture) seed(count int, partial bool) {
 		if partial && committedProjects == count {
 			break
 		}
+	}
+	if sourceDrained {
+		// Complete the saved-only lifecycle before another fixture scan can
+		// start. Partial fixtures deliberately retain unfinished source jobs.
+		for step := 0; step < 1024; step++ {
+			worked, err := w.RetireSubtrees(ctx)
+			if err != nil {
+				f.t.Fatal(err)
+			}
+			if worked {
+				continue
+			}
+			pending, err := w.HasSubtreeRetirement(ctx)
+			if err != nil || pending {
+				f.t.Fatal("guided fixture retained saved lifecycle work after source EOF", pending, err)
+			}
+			return
+		}
+		f.t.Fatal("guided fixture exceeded bounded saved reconciliation setup")
 	}
 }
 

@@ -134,6 +134,8 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 	var startupAllowance int64
 	var revisitCursor int64
 	var revisitMore bool
+	var retirementCursor, retirementRoot int64
+	var retirementMore, retirementTurn bool
 	scannerNew := options.scannerNew
 	if scannerNew == nil {
 		scannerNew = inventory.NewPermitted
@@ -172,6 +174,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 			return err
 		}
 		revisitCursor, revisitMore = page.Cursor, page.More
+		retirementMore = true
 	}
 	// Writer-owned restart recovery retains full unknown charges. Status and
 	// ordinary store opening never perform this mutation, including idle mode.
@@ -278,6 +281,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 			}
 			tick = nil
 			reschedule = false
+			retirementTurn = false
 			if live.Paused {
 				live.WaitReason = "paused"
 			}
@@ -305,10 +309,21 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						}
 						return err
 					}
+					// Existing due source jobs keep priority. Otherwise inspect or
+					// advance saved-state work before this root gets a future job.
+					if options.ExperimentalScan && (retirementMore || retirementRoot != 0) && (due.IsZero() || due.After(time.Now())) {
+						retirementTurn = true
+						due = time.Now()
+					}
 					if !due.IsZero() {
 						live.WaitReason = ""
 						now := time.Now()
-						if due.After(now) {
+						if retirementTurn {
+							live.WaitReason = "inventory_maintenance"
+							if retirementRoot == 0 {
+								live.WaitReason = "inventory_maintenance_setup"
+							}
+						} else if due.After(now) {
 							live.WaitReason = "job_retry"
 							if options.ExperimentalScan && len(kinds) == 1 && kinds[0] == state.ScanKind {
 								revisit, err := w.InventoryRevisitPending(ctx, due, revisitInterval)
@@ -326,7 +341,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						} else {
 							due = now
 						}
-						if options.ExperimentalScan {
+						if options.ExperimentalScan && !(retirementTurn && retirementRoot == 0) {
 							budget, err := w.DispatchBudget(ctx, time.Now(), cfg.Scan.MaxScanChunksPerDay)
 							if err != nil {
 								if ctx.Err() != nil {
@@ -340,26 +355,28 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 								due = budget.NextAllowed
 								live.WaitReason = budget.Reason
 							}
-							if err := refreshMetadata(ctx, now); err != nil {
-								if ctx.Err() != nil {
-									stop()
-									continue
+							if !retirementTurn {
+								if err := refreshMetadata(ctx, now); err != nil {
+									if ctx.Err() != nil {
+										stop()
+										continue
+									}
+									return err
 								}
-								return err
-							}
-							neededStartup := int64(0)
-							if source.value.Load() == nil {
-								neededStartup = startupAllowance
-							}
-							allowed, reason, err := metadataReadiness(*live.Metadata, now, neededStartup)
-							if err != nil {
-								return err
-							}
-							if reason != "" && !allowed.Before(due) {
-								due, live.WaitReason = allowed, reason
+								neededStartup := int64(0)
+								if source.value.Load() == nil {
+									neededStartup = startupAllowance
+								}
+								allowed, reason, err := metadataReadiness(*live.Metadata, now, neededStartup)
+								if err != nil {
+									return err
+								}
+								if reason != "" && !allowed.Before(due) {
+									due, live.WaitReason = allowed, reason
+								}
 							}
 						}
-						if due.Before(nextAllowed) {
+						if !(retirementTurn && retirementRoot == 0) && due.Before(nextAllowed) {
 							due = nextAllowed
 							live.WaitReason = "cadence"
 						}
@@ -452,6 +469,77 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						return fmt.Errorf("schedule root-listing revisits: %w", err)
 					}
 					revisitCursor, revisitMore = page.Cursor, page.More
+					after, cpuErr := observeCPU()
+					cpu.finish(window, time.Now(), after, cpuErr)
+					refreshMetrics()
+					reschedule = true
+					continue
+				}
+				if retirementTurn {
+					// A retry can become due while cadence/CPU/WAL delays this
+					// timer. Recheck before maintenance consumes a shared slot.
+					due, err := w.NextJobDue(ctx, kinds)
+					if err != nil {
+						if ctx.Err() != nil {
+							stop()
+							continue
+						}
+						return err
+					}
+					if !due.IsZero() && !due.After(time.Now()) {
+						retirementTurn = false
+						reschedule = true
+						continue
+					}
+					maintenanceCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+					if retirementRoot == 0 {
+						page, err := w.NextInventoryRetirementPage(maintenanceCtx, retirementCursor)
+						cancel()
+						if err != nil {
+							if ctx.Err() != nil {
+								stop()
+								continue
+							}
+							return fmt.Errorf("discover inventory maintenance: %w", err)
+						}
+						retirementRoot, retirementCursor, retirementMore = page.RootID, page.Cursor, page.More
+					} else {
+						now := time.Now()
+						budget, err := w.ReserveScanChunk(maintenanceCtx, now, interval, cfg.Scan.MaxScanChunksPerDay)
+						live.Dispatch = &budget
+						if errors.Is(err, state.ErrDispatchDeferred) {
+							cancel()
+							reschedule = true
+							continue
+						}
+						if err != nil {
+							cancel()
+							if ctx.Err() != nil {
+								stop()
+								continue
+							}
+							return fmt.Errorf("reserve inventory maintenance: %w", err)
+						}
+						nextAllowed = now.Add(interval)
+						step, err := w.RetireInventoryForRoot(maintenanceCtx, retirementRoot)
+						if err == nil && step.Eligible && !step.Remaining {
+							_, err = w.ScheduleInventoryRevisit(maintenanceCtx, retirementRoot, time.Now(), revisitInterval)
+						}
+						cancel()
+						if err != nil {
+							if ctx.Err() != nil {
+								stop()
+								continue
+							}
+							return fmt.Errorf("retire saved inventory: %w", err)
+						}
+						if !step.Eligible || !step.Remaining {
+							retirementRoot = 0
+						}
+						if step.Eligible && step.Remaining && !step.Worked {
+							return state.ErrInventoryRetirementCorrupt
+						}
+					}
 					after, cpuErr := observeCPU()
 					cpu.finish(window, time.Now(), after, cpuErr)
 					refreshMetrics()
@@ -641,6 +729,9 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 					cancel()
 					return fmt.Errorf("schedule completed root-listing work: %w", err)
 				}
+				// A completed source pass can leave saved proofs with no queue
+				// row. Rediscover them in bounded turns, including after restart.
+				retirementCursor, retirementMore = 0, true
 			}
 			if err := refreshMetadata(finishCtx, time.Now()); err != nil {
 				cancel()

@@ -65,6 +65,7 @@ func processHashStoreFixture(t *testing.T) (*Scanner, *state.Store, *HashStore, 
 	if !finished {
 		t.Fatal("production crash fixture did not drain bounded inventory")
 	}
+	finishSelectionFixtureMaintenance(t, ctx, writer, scanner)
 	if err = writer.Close(); err != nil {
 		t.Fatal(err)
 	}

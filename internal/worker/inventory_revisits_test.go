@@ -144,8 +144,27 @@ func TestWorkerPeriodicRevisitKeepsOfflineEvidenceAndHealthyRootActive(t *testin
 	}
 	defer r.Close()
 	summary, err := r.Summary(context.Background())
-	if err != nil || summary.Entries != 3 || summary.DirectoryErrors != 1 || summary.PendingJobs != 2 || summary.RunningJobs != 0 || failed.Load() != 1 {
+	if err != nil || summary.Entries != 3 || summary.DirectoryErrors != 1 || summary.PendingJobs < 1 || summary.PendingJobs > 2 || summary.RunningJobs != 0 || failed.Load() != 1 {
 		t.Fatal("offline retry erased evidence/blocked healthy revisit", summary, failed.Load(), err)
+	}
+	// Pause can land after the healthy listing committed but before its bounded
+	// reconciliation step has published the future revisit. The offline retry
+	// remains queued, and the healthy root retains one of those exact states.
+	if summary.PendingJobs == 1 {
+		report, err := r.LargestFiles(context.Background(), 1, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var healthyID int64
+		for _, root := range report.Roots {
+			if string(root.PathBytes) == healthy {
+				healthyID = root.ID
+			}
+		}
+		ready, err := r.InventoryRetirementRootPending(context.Background(), healthyID)
+		if err != nil || !ready {
+			t.Fatal("healthy root lost maintenance/revisit", ready, err)
+		}
 	}
 	control(t, dir, "stop")
 	waitExit(t, done)
@@ -231,10 +250,19 @@ func TestWorkerPeriodicRevisitCannotBypassDailyQuotas(t *testing.T) {
 			}
 			_, done := start(t, dir, c, options)
 			waitUntil(t, func() bool { return calls.Load() == 1 && control(t, dir, "status").WaitReason == want })
+			used := control(t, dir, "status").Dispatch.Used
+			if used != 1 && quota == "dispatch" {
+				t.Fatal("source dispatch exceeded cap", used)
+			}
+			// Metadata denial still permits saved-only maintenance. Such work
+			// shares dispatch charges, without another scanner reservation/call.
+			if quota == "metadata" && used <= 1 {
+				t.Fatal("saved maintenance was not dispatched", used)
+			}
 			control(t, dir, "pause")
 			control(t, dir, "resume")
 			snapshot := control(t, dir, "status")
-			if calls.Load() != 1 || snapshot.Dispatch.Used != 1 || snapshot.ActiveJob != 0 {
+			if calls.Load() != 1 || snapshot.Dispatch.Used != used || snapshot.ActiveJob != 0 {
 				t.Fatal("revisit bypassed durable quota", snapshot, calls.Load())
 			}
 			control(t, dir, "stop")

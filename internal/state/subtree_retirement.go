@@ -18,22 +18,63 @@ func (s *Store) HasSubtreeRetirement(ctx context.Context) (bool, error) {
 // A separate scan revision fences new observations without confusing our own
 // allocated-cache invalidations with filesystem scan commits.
 func (s *Store) RetireSubtrees(ctx context.Context) (bool, error) {
+	step, err := s.retireSubtrees(ctx, 0, inventoryRetirementHooks{})
+	return step.Worked, err
+}
+
+func (s *Store) retireSubtrees(ctx context.Context, rootID int64, hooks inventoryRetirementHooks) (InventoryRetirementStep, error) {
+	if ctx == nil || rootID < 0 {
+		return InventoryRetirementStep{}, ErrInventoryRetirementInput
+	}
+	if err := ctx.Err(); err != nil {
+		return InventoryRetirementStep{}, err
+	}
 	if s.readOnly {
-		return false, errors.New("state is read-only")
+		return InventoryRetirementStep{}, errors.New("state is read-only")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return false, err
+		return InventoryRetirementStep{}, err
 	}
 	defer tx.Rollback()
+	step := InventoryRetirementStep{Eligible: true}
+	if rootID > 0 {
+		var enabled int64
+		if err = tx.QueryRowContext(ctx, "SELECT enabled FROM roots WHERE id=?", rootID).Scan(&enabled); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				err = ErrInventoryRetirementInput
+			}
+			return InventoryRetirementStep{}, err
+		}
+		if enabled != 0 && enabled != 1 {
+			return InventoryRetirementStep{}, ErrInventoryRetirementCorrupt
+		}
+		var busy bool
+		if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM jobs WHERE root_id=? AND kind=?)", rootID, ScanKind).Scan(&busy); err != nil {
+			return InventoryRetirementStep{}, err
+		}
+		step.Eligible = enabled == 1 && !busy
+		if err = inventoryRetirementRemaining(ctx, tx, rootID, &step.Remaining); err != nil {
+			return InventoryRetirementStep{}, err
+		}
+		if !step.Eligible {
+			return step, ctx.Err()
+		}
+	}
 	var root, revision, current int64
 	var path []byte
 	var preserve bool
 	var phase int
-	err = tx.QueryRowContext(ctx, `SELECT t.root_id,t.path,t.scan_revision,t.preserve_entry,t.phase,v.scan_revision
+	query := `SELECT t.root_id,t.path,t.scan_revision,t.preserve_entry,t.phase,v.scan_revision
  FROM subtree_retirement t JOIN allocation_revisions v ON v.root_id=t.root_id JOIN roots r ON r.id=t.root_id
- WHERE r.enabled=1 AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.root_id=t.root_id AND j.kind=?)
- ORDER BY t.root_id,t.path LIMIT 1`, ScanKind).Scan(&root, &path, &revision, &preserve, &phase, &current)
+ WHERE r.enabled=1 AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.root_id=t.root_id AND j.kind=?)`
+	args := []any{ScanKind}
+	if rootID > 0 {
+		query += " AND t.root_id=?"
+		args = append(args, rootID)
+	}
+	query += " ORDER BY t.root_id,t.path LIMIT 1"
+	err = tx.QueryRowContext(ctx, query, args...).Scan(&root, &path, &revision, &preserve, &phase, &current)
 	if err == nil {
 		if revision != current {
 			// New scans own any reappearing entries. Their completed parent passes
@@ -43,29 +84,58 @@ func (s *Store) RetireSubtrees(ctx context.Context) (bool, error) {
 			err = purgeSubtreeStep(ctx, tx, root, path, preserve, phase)
 		}
 	} else if errors.Is(err, sql.ErrNoRows) {
-		worked, e := reconcileSubtreeStep(ctx, tx)
-		if e != nil || !worked {
-			return false, e
+		worked, e := reconcileSubtreeStep(ctx, tx, rootID)
+		if e != nil {
+			return InventoryRetirementStep{}, e
 		}
+		step.Worked = worked
 		err = nil
+	} else {
+		return InventoryRetirementStep{}, err
 	}
 	if err != nil {
-		return false, err
+		return InventoryRetirementStep{}, err
 	}
-	return true, tx.Commit()
+	if root != 0 {
+		step.Worked = true
+	}
+	if rootID > 0 {
+		if err = inventoryRetirementRemaining(ctx, tx, rootID, &step.Remaining); err != nil {
+			return InventoryRetirementStep{}, err
+		}
+	}
+	if hooks.beforeCommit != nil {
+		hooks.beforeCommit()
+	}
+	if err = ctx.Err(); err != nil {
+		return InventoryRetirementStep{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return InventoryRetirementStep{}, err
+	}
+	if err = ctx.Err(); err != nil {
+		return InventoryRetirementStep{}, err
+	}
+	return step, nil
 }
 
-func reconcileSubtreeStep(ctx context.Context, tx *sql.Tx) (bool, error) {
+func reconcileSubtreeStep(ctx context.Context, tx *sql.Tx, rootID int64) (bool, error) {
 	var root, generation, savedGeneration, revision int64
 	var path, cursor []byte
 	var complete bool
 	var fault string
-	err := tx.QueryRowContext(ctx, `SELECT t.root_id,t.path,t.generation,t.cursor,
+	query := `SELECT t.root_id,t.path,t.generation,t.cursor,
  COALESCE(d.generation,0),COALESCE(d.complete,0),COALESCE(d.last_error,''),v.scan_revision
  FROM subtree_reconcile t JOIN roots r ON r.id=t.root_id JOIN allocation_revisions v ON v.root_id=t.root_id
  LEFT JOIN directories d ON d.root_id=t.root_id AND d.path=t.path
- WHERE r.enabled=1 AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.root_id=t.root_id AND j.kind=?)
- ORDER BY t.root_id,t.path LIMIT 1`, ScanKind).Scan(&root, &path, &generation, &cursor, &savedGeneration, &complete, &fault, &revision)
+ WHERE r.enabled=1 AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.root_id=t.root_id AND j.kind=?)`
+	args := []any{ScanKind}
+	if rootID > 0 {
+		query += " AND t.root_id=?"
+		args = append(args, rootID)
+	}
+	query += " ORDER BY t.root_id,t.path LIMIT 1"
+	err := tx.QueryRowContext(ctx, query, args...).Scan(&root, &path, &generation, &cursor, &savedGeneration, &complete, &fault, &revision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -115,6 +185,16 @@ func reconcileSubtreeStep(ctx context.Context, tx *sql.Tx) (bool, error) {
 	}
 	for _, c := range children {
 		absent := c.generation != generation
+		if !absent && c.kind != "directory" && !c.directoryState {
+			// An interrupted purge may already have removed directory markers
+			// while retaining descendant entries and its anchor. A newer file
+			// or symlink replacement needs a fresh proof for that remaining
+			// payload too. This exact BLOB prefix seek is bounded and indexed.
+			if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM entries
+ WHERE root_id=? AND path>=? AND path<?)`, root, []byte(string(c.path)+"/"), []byte(string(c.path)+"0")).Scan(&c.directoryState); err != nil {
+				return false, err
+			}
+		}
 		if absent || (c.kind != "directory" && c.directoryState) {
 			_, err = tx.ExecContext(ctx, `INSERT INTO subtree_retirement(root_id,path,scan_revision,preserve_entry) VALUES(?,?,?,?)
  ON CONFLICT(root_id,path) DO UPDATE SET scan_revision=excluded.scan_revision,preserve_entry=excluded.preserve_entry,phase=0`, root, c.path, revision, !absent)

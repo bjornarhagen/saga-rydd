@@ -139,6 +139,10 @@ func (s *Store) HasCompactRetirement(ctx context.Context) (bool, error) {
 // RetireCompact removes at most 128 rebuildable records per call. Current
 // generation inode evidence and newly detailed files are never removed.
 func (s *Store) RetireCompact(ctx context.Context) (bool, error) {
+	return s.retireCompactForRoot(ctx, 0)
+}
+
+func (s *Store) retireCompactForRoot(ctx context.Context, rootID int64) (bool, error) {
 	if s.readOnly {
 		return false, errors.New("state is read-only")
 	}
@@ -149,7 +153,15 @@ func (s *Store) RetireCompact(ctx context.Context) (bool, error) {
 	defer tx.Rollback()
 	var root, generation int64
 	var path []byte
-	err = tx.QueryRowContext(ctx, "SELECT root_id,path,generation FROM compact_retirement ORDER BY root_id,path,generation LIMIT 1").Scan(&root, &path, &generation)
+	query := "SELECT root_id,path,generation FROM compact_retirement"
+	var args []any
+	if rootID > 0 {
+		query += ` WHERE root_id=? AND EXISTS(SELECT 1 FROM roots r WHERE r.id=root_id AND r.enabled=1)
+ AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.root_id=compact_retirement.root_id AND j.kind=?)`
+		args = []any{rootID, ScanKind}
+	}
+	query += " ORDER BY root_id,path,generation LIMIT 1"
+	err = tx.QueryRowContext(ctx, query, args...).Scan(&root, &path, &generation)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
