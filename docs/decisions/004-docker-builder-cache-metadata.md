@@ -1,14 +1,14 @@
 # ADR 004 — Docker builder/cache metadata feasibility
 
 - Date: 2026-10-09
-- Status: feasibility verified; Engine-embedded reporting implemented, published acceptance pending
+- Status: feasibility and generated Engine-embedded reporting verified; installed-context and named-builder acceptance open
 - Scope: P2-04b0, after finite image/container metadata discovery
 
 ## Result
 
 A finite HTTP request can observe the selected Engine's embedded build cache. This supports an independently completable read-only reporting leaf under the existing continuation authorization. It does not identify an independently named Buildx builder or its generation, so it cannot complete P2-04's exact-builder acceptance requirement or claim `builder_pinned`.
 
-The query can cause the trusted daemon to calculate and persist internal size accounting. The existing P2-04a contract forbids mutation requests and saved Rydd-state changes; it does not promise zero internal daemon writes. These effects require disclosure and clear client-versus-daemon resource limits, not another development approval. Implement a separate explicit Engine-cache reporting mode, preserving the current image/container mode and its request allowlist. This document itself adds no request, dependency, executable operation or installed-context trial.
+The query can cause the trusted daemon to calculate and persist internal size accounting. The existing P2-04a contract forbids mutation requests and saved Rydd-state changes; it does not promise zero internal daemon writes. These effects require disclosure and clear client-versus-daemon resource limits, not another development approval. The separate explicit Engine-cache reporting mode preserves the current image/container mode and its request allowlist. This document itself adds no request, dependency, executable operation or installed-context trial.
 
 ## Examined profiles
 
@@ -50,10 +50,10 @@ Daemon ID/version agreement supports continuity of the declared observations. It
 
 The bounded Engine-embedded report was implemented on generated fixtures under the current instruction to complete independently completable read-only plan work. No additional owner approval was needed for this development. The declared context/endpoint/daemon scope is useful even though exact builder-instance pinning remains unsupported. The existing command was not silently broadened, and no selected Buildx default was used. This partial reporting leaf does not complete P2-04 acceptance.
 
-Generated implementation tests cover the three-request allowlist, selector preservation, one connection, exact context/daemon evidence, empty versus unavailable results, required/null fields, safe projection, overflow, cancellation, late output and zero partial positive results. Docker checks, affected races, four builds and native macOS core/CLI/production fixtures passed; exact published native CI is being audited. Generated servers cannot prove how an installed daemon handles accounting, extensions or builder identity. Native installed acceptance requires an explicitly selected owner context and supported version/storage profile; no context is selected here.
+Generated implementation tests cover the three-request allowlist, selector preservation, one connection, exact context/daemon evidence, empty versus unavailable results, required/null fields, safe projection, overflow, cancellation, late output and zero partial positive results. Docker checks, affected races, four builds and native macOS core/CLI/production fixtures passed; all four jobs passed for exact `4b1652ada0d36e3e8b0e64a6caa8ed62360afb3f` in [CI 37874014650](https://github.com/bjornarhagen/saga-rydd/actions/runs/37874014650), including both native full race suites. Generated servers cannot prove how an installed daemon handles accounting, extensions or builder identity. Native installed acceptance requires an explicitly selected owner context and supported version/storage profile; no context is selected here.
 
 If a later report must support named Buildx instances, its exact driver/node/transport and identity contract need another bounded design. Other conforming local read-only profiles can be investigated under the continuation authorization; support must follow evidence, not an assertion that every possible API lacks a solution. Container helpers, remote transports and additional compatibility versions remain outside this profile. Adopting helpers or remote-context access would change the current product constraints and need a new scope decision. An owner choice is needed before selecting an installed/private context for acceptance or choosing actual cache-action/rebuild-cost policy. None of these choices blocks the generated Engine-cache leaf.
 
-The existing P2-04a command remains independently useful and passed exact published native CI. Audit P2-04b1's separate published source before checking off that leaf. Neither this feasibility result nor general continuation approval closes P2-04, automatic cache eligibility, source-namespace cleanup, Linux clone, unattended resource/service, soak or release gates. No new source-operation experiment follows from this record.
+The existing P2-04a command remains independently useful and passed exact published native CI. P2-04b1's exact published-source audit verifies its declared generated profile. Neither this feasibility result nor general continuation approval closes P2-04, automatic cache eligibility, source-namespace cleanup, Linux clone, unattended resource/service, soak or release gates. No new source-operation experiment follows from this record.
 
 Primary schemas and pinned source above were reviewed on 2026-10-09. No installed Docker/Buildx command, private configuration, daemon, builder or cache was accessed.

@@ -44,6 +44,18 @@ jobs:
         env:
           RYDD_TEST_GO_CACHE_TOOL: '1'
         run: go test ./internal/state -run '^TestGoBuildCacheToolProduced$' -count=1 -v
+      - name: Disposable existing-tool Cargo layout compatibility
+        run: |
+          case "$RUNNER_OS:$RUNNER_ARCH" in
+            Linux:X64) cargo_tool_triple=x86_64-unknown-linux-gnu ;;
+            macOS:ARM64) cargo_tool_triple=aarch64-apple-darwin ;;
+            macOS:X64) cargo_tool_triple=x86_64-apple-darwin ;;
+            *) echo 'Unsupported native Cargo fixture runner profile' >&2; exit 1 ;;
+          esac
+          cargo_tool_root="${RUSTUP_HOME:-${HOME}/.rustup}"
+          cargo_tool_bin="$cargo_tool_root/toolchains/stable-$cargo_tool_triple/bin"
+          RYDD_TEST_CARGO_TOOL=1 RYDD_TEST_CARGO_BIN="$cargo_tool_bin/cargo" RYDD_TEST_RUSTC_BIN="$cargo_tool_bin/rustc" \
+            go test ./internal/state -run '^TestCargoBuildOutputToolProduced$' -count=1 -v
       - run: ./scripts/tasks race
       - name: Native no-overwrite rename and directory-sync probe
         run: go test ./experiments/rename -count=1 -v

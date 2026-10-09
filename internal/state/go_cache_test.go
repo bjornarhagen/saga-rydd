@@ -716,18 +716,31 @@ func TestGoBuildCacheToolProduced(t *testing.T) {
 }
 
 type goCacheToolOutput struct {
-	bytes.Buffer
+	buffer    bytes.Buffer
 	limit     int
 	truncated bool
 }
 
+func (b *goCacheToolOutput) String() string { return b.buffer.String() }
+
 func (b *goCacheToolOutput) Write(p []byte) (int, error) {
 	n := len(p)
-	remaining := b.limit - b.Len()
+	remaining := b.limit - b.buffer.Len()
 	if remaining < len(p) {
 		b.truncated = true
 		p = p[:remaining]
 	}
-	_, err := b.Buffer.Write(p)
+	_, err := b.buffer.Write(p)
 	return n, err
+}
+
+func TestGoCacheToolOutputStreamCopyBound(t *testing.T) {
+	// LimitedReader hides the source's WriterTo. A promoted Buffer.ReadFrom
+	// must not bypass Write when io.Copy handles a subprocess output stream.
+	input := strings.Repeat("generated-output", 8192)
+	output := &goCacheToolOutput{limit: 1024}
+	n, err := io.Copy(output, io.LimitReader(strings.NewReader(input), int64(len(input))))
+	if err != nil || n != int64(len(input)) || !output.truncated || len(output.String()) != output.limit || output.String() != input[:output.limit] {
+		t.Fatal("stream copy bypassed the fixture's retained-output limit", n, err, output.truncated, len(output.String()))
+	}
 }
