@@ -429,7 +429,7 @@ func TestDockerMetadataCLIErrorEnvelopePriorityAndCapabilities(t *testing.T) {
 			t.Fatal("human capabilities omitted Docker", out.String())
 		}
 		if args[0] == "--json" {
-			for _, text := range []string{`"docker_image_container_metadata":true`, `"builder_metadata":false`, `"docker_volume_metadata":false`, `"docker_cache_metadata":false`, `"cleanup":false`, `"name":"docker"`, "--metadata --context NAME", "docker_context_unavailable", "docker_endpoint_unsupported", "docker_metadata_bounds", "docker_protocol_unsupported", "docker_daemon_changed"} {
+			for _, text := range []string{`"docker_image_container_metadata":true`, `"builder_metadata":false`, `"docker_volume_metadata":false`, `"docker_cache_metadata":true`, `"cleanup":false`, `"name":"docker"`, "--metadata --context NAME", "docker_context_unavailable", "docker_endpoint_unsupported", "docker_metadata_bounds", "docker_protocol_unsupported", "docker_daemon_changed"} {
 				if !strings.Contains(out.String(), text) {
 					t.Fatal("capabilities lost finite Docker support or qualifications", text, out.String())
 				}

@@ -164,6 +164,20 @@ Success uses the standard API 1 envelope under `report`: selected context/endpoi
 
 The command opens no Rydd configuration, inventory or hash/plan store and changes no saved records. It requests no registry work, pull, helper container or mutation. Volume discovery and builder/cache pinning remain separate plan gates. This implementation is verified against generated native fixtures; no real installed context has been accepted. See the [Engine 1.44 schema](https://github.com/moby/moby/blob/v25.0.0/docs/api/v1.44.yaml) and [Docker CLI context inspect implementation](https://github.com/docker/cli/blob/v29.2.0/cli/command/context/inspect.go).
 
+## Engine-embedded cache metadata
+
+```sh
+rydd docker --cache-metadata --context NAME [--json]
+```
+
+This is a separate explicit mode, mutually exclusive with `--metadata`. Require one true unique mode and one unique context under the same finite-name, resolver, Unix-endpoint, protocol and five-second bounds as image/container discovery. It opens no Rydd configuration or store. No installed/private context is selected by generated acceptance.
+
+Resolve once and hold one connection for exactly three requests: `GET /v1.44/info`, `GET /v1.44/system/df?type=build-cache`, then `GET /v1.44/info`. The selector is fixed. Unfiltered disk usage, volumes, image/container lists, Buildx/gRPC, helpers, bootstrap, builds, pulls, prune, reconnect and retry are outside this mode. Matching daemon ID/version provides only sequential declared continuity; independently named builder identity/generation remains unsupported.
+
+The standard `report` envelope names `scope: engine_embedded_cache`. It projects at most 128 cache records with exact bounded IDs/types, nullable usage flags/counts and nullable creation/last-use dates. Descriptions, labels, source/build commands, credentials and paths are discarded. Missing optional evidence remains null and displays `NOT RECORDED`; it must not become an invented zero or false observation. Sizes/savings remain null. `builder_pinned`, current-verification, atomic-snapshot, locality/authentication, approval, execution and persistence claims remain false. Failure returns no partial positive report. The existing Docker error codes, cancellation priority and output-failure behavior apply.
+
+`daemon_accounting_may_change` is true: the trusted daemon's cache enumeration can calculate and persist size accounting through its configured snapshotter/content store. Omitting size fields does not avoid that work. Rydd sends no mutation request and changes no saved Rydd records; this is not a guarantee of zero internal daemon writes. Client body/header/count limits do not bound server enumeration, memory or storage work, and closing the connection does not prove all server work stopped. This profile is supported by the pinned Engine source reviewed in [ADR 004](decisions/004-docker-builder-cache-metadata.md); arbitrary daemon/extensions remain trusted. Full named-builder and installed-context acceptance remain open.
+
 ## Configured path exclusions
 
 ```sh

@@ -80,6 +80,7 @@ Commands:
   report --go-cache -d ROOT [--min-age-days N] [--cursor TOKEN] [--json]
                                                      Saved Go build-cache files; review required
   docker --metadata --context NAME [--json]            Finite image/container metadata; no cleanup
+  docker --cache-metadata --context NAME [--json]      Engine-embedded cache metadata; no builder pinning
   measure -d PATH [--batches N] [--json]               Resume saved compact size calculations
   review -d PATH [--min-age-days N]                   Choose a numbered subset; save unapproved evidence
   review --hashes                                     Review numbered historical hashes; no saved choice
@@ -138,10 +139,10 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 	}
 	switch remaining[0] {
 	case "docker":
-		var r DockerMetadataReport
-		r, err = dockerMetadata(ctx, remaining[1:])
+		var r any
+		r, err = dispatchDockerMetadata(ctx, remaining[1:])
 		if err == nil {
-			err = printDockerMetadataReport(ctx, out, r)
+			err = printDockerResult(ctx, out, r)
 		}
 	case "init":
 		err = initialize(ctx, remaining[1:], paths, home, out, errOut)

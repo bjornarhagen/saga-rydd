@@ -93,7 +93,18 @@ rydd docker --metadata --context NAME --json
 
 Choose an exact existing Docker context explicitly. This command resolves its endpoint once and accepts only the supported canonical Unix socket form. It makes four fixed metadata requests on one connection and checks the daemon ID and version before and after image/container observations. It does not reconnect. Missing Docker, unavailable sockets and unsupported or oversized replies fail without a partial report.
 
-The report shows IDs, tags/names, creation dates and container state. It measures no sizes or savings, saves no Rydd history and provides no cleanup action. Volumes, builders and cache are outside this command. The supported profile is Linux Docker Engine 25+ with API 1.44; installed-Docker acceptance remains open. A Unix endpoint does not establish physical locality or authenticate the daemon. The installed CLI, its configuration and daemon extensions remain trust boundaries. See the [Docker metadata contract](docs/cli.md#selected-docker-metadata).
+The report shows IDs, tags/names, creation dates and container state. It measures no sizes or savings, saves no Rydd history and provides no cleanup action. Volumes, builders and cache are outside this mode. The supported profile is Linux Docker Engine 25+ with API 1.44; installed-Docker acceptance remains open. A Unix endpoint does not establish physical locality or authenticate the daemon. The installed CLI, its configuration and daemon extensions remain trust boundaries. See the [Docker metadata contract](docs/cli.md#selected-docker-metadata).
+
+## Read Engine-embedded cache metadata
+
+```sh
+rydd docker --cache-metadata --context NAME
+rydd docker --cache-metadata --context NAME --json
+```
+
+This separate mode queries only the selected Engine's embedded build cache. It makes three fixed requests on one connection: daemon metadata, filtered cache metadata, then daemon metadata again. It does not inspect the selected Buildx builder, volumes, images or containers. The report shows bounded cache IDs/types, optional usage flags and dates. Missing observations remain unknown. Sizes and savings are not reported, and no cleanup action is available.
+
+The daemon can calculate and save its internal size accounting during this query, even though Rydd omits sizes. Client limits do not bound daemon work, and cancellation does not prove that server work stopped. The same installed CLI/daemon trust and supported profile apply. Named-builder verification and installed-context acceptance remain open. See the [cache metadata contract](docs/cli.md#engine-embedded-cache-metadata) and [category evidence](docs/category-acceptance.md).
 
 ## Dismiss one exact saved finding
 

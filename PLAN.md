@@ -247,6 +247,14 @@ Project only IDs, bounded names/tags, creation times and container state; discar
 
 Validate exact resolver arguments/environment and request allowlist on generated fixtures, including remote endpoint refusal before dialing, context changes after resolution, daemon-ID change, redirects/reconnect attempts, malformed or duplicate-key JSON, overflow, cancellation and child reaping. No real Docker context inventory is selected by this implementation task. Native installed-Docker acceptance requires a later explicit owner context.
 
+### Finite Engine-embedded cache metadata (P2-04b1)
+
+[ADR 004](docs/decisions/004-docker-builder-cache-metadata.md) establishes a separate independently completable reporting leaf under the current continuation instruction. Add explicit `docker --cache-metadata --context NAME`, mutually exclusive with image/container metadata. Resolve once and hold one connection for exactly `GET /v1.44/info`, `GET /v1.44/system/df?type=build-cache`, then `GET /v1.44/info`. Preserve the existing protocol, context, five-second deadline, 16 KiB header, 1 MiB body, strict JSON and 128-record bounds. Never fall back to unfiltered disk usage, another builder, reconnect, helper, gRPC, SDK, build, pull or mutation request.
+
+Report only Engine-embedded cache IDs/types, supported usage flags and dates with explicit missing/null handling. Exclude descriptions, source commands, labels, credentials and paths. Keep sizes/savings unknown and builder pinning/current verification/approval/execution false. Matching daemon ID/version is sequential declared continuity, not named-builder generation, namespace authentication, locality or an atomic snapshot. Trusted daemon enumeration can calculate and persist internal size accounting; disclose this even when sizes are omitted, and do not claim client bounds limit server work or cancellation stops it. This is not a new zero-internal-write guarantee.
+
+Generated core/CLI/native acceptance must prove exact selector/allowlist, one resolution/connection, genuine empty versus unavailable/missing evidence, no partial success, safe projection, bounds, changed daemon refusal, cancellation and output failures. Preserve the old mode's JSON and request scope. Do not access an installed/private context for these fixtures. Full P2-04 remains open for independently named builder evidence and installed-context compatibility; reporting adds no cleanup policy or authority.
+
 ## 6. Duplicate detection and actual savings
 
 Pipeline:
