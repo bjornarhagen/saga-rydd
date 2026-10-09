@@ -40,6 +40,10 @@ jobs:
       - run: ./scripts/tasks check
       - name: Generated duplicate acceptance and qualified native clone support
         run: go test ./internal/cli -run '^TestDuplicateGateCLI' -count=1 -v
+      - name: Disposable existing-tool Go cache compatibility
+        env:
+          RYDD_TEST_GO_CACHE_TOOL: '1'
+        run: go test ./internal/state -run '^TestGoBuildCacheToolProduced$' -count=1 -v
       - run: ./scripts/tasks race
       - name: Native no-overwrite rename and directory-sync probe
         run: go test ./experiments/rename -count=1 -v

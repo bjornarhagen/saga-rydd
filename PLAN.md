@@ -221,6 +221,8 @@ Use a separate versioned rule and finite `report --build-output -d ROOT` mode wi
 
 P2-03b1 selects Go's local build cache as the first reversible read-only cache category under the instruction to finish the plan. This is a category choice for reporting, not approval of automatic eligibility. Require an explicit exact manual inventory rooted at the proposed cache. Recognize only bounded saved layout evidence and ordinary shard entries matching the supported lowercase-hex action/output filename forms. Validate completed saved parent membership, kinds, path/identity bounds and the selected object's stated age filter in one snapshot. Qualify partial or unsupported layout, unknown/aliased allocation and historical observations; do not label the result the whole cache or estimate savings.
 
+The supported metadata layout is a saved regular README and all 256 hexadecimal shard directories, at most 258 root/input/shard markers. Select only regular depth-two 64-hex `-a`/`-d` filenames whose prefix matches the shard. Apply age to files, not directory dates. One five-second snapshot uses a materialized 1,000-entry global ID page plus lookahead before root filtering, since schemas 4–9 have no root/ID ordering index; select at most 20 files and preserve empty continuation pages. Page-only identity counts and nullable file measurements do not establish cache totals or savings. Cursors bind age/local ID, not incarnation. Missing/incomplete layout is a qualified unsupported result, not a verified empty cache. Generated acceptance must cover genuine tool-produced disposable caches using an already available toolchain without installs/downloads; filename-only fixtures alone are not that evidence.
+
 Fuzz data, module/download caches, external `GOCACHEPROG` managers and executable-directory outputs are outside this initial rule. Do not infer effective Go settings from Rydd's environment, read cache bodies or invoke Go. Neither filenames nor old dates establish provenance, regeneration safety or dispensability. Go already trims cache data; a future automatic category requires ownership, supported contents, acceptable rebuild/offline costs and a safe exact-object operation contract. See [Go caching documentation](https://pkg.go.dev/cmd/go#hdr-Build_and_test_caching), [cache layout](https://go.dev/src/cmd/go/internal/cache/cache.go) and [cache selection](https://go.dev/src/cmd/go/internal/cache/default.go). Generated metadata fixtures and native readers can validate this reporting leaf without accessing a private cache or installing tooling; genuine tool-produced/native regeneration and automation gates remain separate.
 
 | Detector | Evidence | Proposed action |
@@ -608,10 +610,10 @@ Later candidates: additional ecosystems and automatic categories, personal-file 
 
 ## 12. Decisions to settle before implementation
 
-1. Confirmed: include opt-in automatic cleanup in v1; settle the first eligible cache category during detector design.
+1. Confirmed: include opt-in automatic cleanup in v1. Go local build cache is selected for the first read-only cache report; automatic eligibility, managed scope and accepted rebuild costs remain separate decisions.
 2. Confirmed: developer clutter plus exact duplicates as the first focus.
 3. Confirmed: Go, with SQLite and TOML; develop primarily through Docker.
 4. Choose initial roots/resource defaults during onboarding design and benchmarks.
 5. Confirmed: Saga — Rydd; repository `saga-rydd`, CLI `rydd`.
 
-Current milestone: useful saved reports and one review-required `node_modules` recommendation category, followed by controlled real-folder feedback. See the execution priority above and the task handoff in PROGRESS.md.
+Current milestone: verify the additional read-only categories and collect the cleanup product/scope and native-environment decisions after independently completable work. Generated reports never establish automatic eligibility or satisfy native/soak/release gates. See the execution priority above and the task handoff in PROGRESS.md.

@@ -57,6 +57,7 @@ type ReportRoot struct {
 	DirectoryErrors int64      `json:"directory_errors"`
 }
 type FileReport struct {
+	GoCache              *GoCacheReport     `json:"go_cache,omitempty"`
 	BuildOutput          *BuildOutputReport `json:"build_output,omitempty"`
 	SameSize             *SameSizeReport    `json:"same_size,omitempty"`
 	Candidates           *FindingReport     `json:"candidates,omitempty"`

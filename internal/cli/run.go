@@ -77,6 +77,8 @@ Commands:
   report --candidates [--include-dismissed] [--min-age-days N] [--cursor TOKEN] [--json]  Node modules review candidates
   report --build-output -d ROOT [--min-age-days N] [--cursor TOKEN] [--json]
                                                      Saved Cargo target layouts; review required
+  report --go-cache -d ROOT [--min-age-days N] [--cursor TOKEN] [--json]
+                                                     Saved Go build-cache files; review required
   docker --metadata --context NAME [--json]            Finite image/container metadata; no cleanup
   measure -d PATH [--batches N] [--json]               Resume saved compact size calculations
   review -d PATH [--min-age-days N]                   Choose a numbered subset; save unapproved evidence
@@ -241,18 +243,22 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 			}
 		}
 	case "report":
-		var r dispatchedReport
-		r, err = dispatchReport(ctx, remaining[1:], paths)
+		var r savedReportDispatch
+		r, err = dispatchSavedReport(ctx, remaining[1:], paths)
 		if err == nil {
-			if r.BuildOutput != nil {
+			if r.BuildOutput != nil || r.GoCache != nil {
 				checked := &reviewOutput{writer: out}
-				printDispatchedReport(checked, r)
+				printSavedReport(checked, r)
 				err = checked.err
 				if err == nil && ctx.Err() != nil {
-					err = fmt.Errorf("Cargo build-output report reply was canceled; no saved records or source files were changed: %w", ctx.Err())
+					category := "Cargo build-output"
+					if r.GoCache != nil {
+						category = "Go build-cache"
+					}
+					err = fmt.Errorf("%s report reply was canceled; no saved records or source files were changed: %w", category, ctx.Err())
 				}
 			} else {
-				printDispatchedReport(out, r)
+				printSavedReport(out, r)
 			}
 		}
 	case "status":

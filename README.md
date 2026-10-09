@@ -8,7 +8,7 @@ Rydd will gradually discover developer clutter and duplicate files, explain what
 
 For humans and AI: readable output by default, versioned JSON with `--json`, and `rydd capabilities --json` for discovery. Live status also reports scanner metadata API counters to help inspect background work. See the [CLI contract](docs/cli.md).
 
-**Next milestone: Docker and cache metadata reports.** The generated owner read-only walkthrough and human-output corrections passed, including guided review and separately consented fresh hashing with historical comparisons. Exact finding dismissal, persistent exclusion controls and saved Cargo build-output reports are available. Linux clone acceptance remains open. Cleanup needs an operation that preserves the exact reviewed source object and ancestor scope; the reviewed rename operations do not provide that boundary. See [ADR 003](docs/decisions/003-source-namespace-boundary.md), the [current handoff](PROGRESS.md#current-state) and [trial lessons](docs/mvp-trial-results.md). Numbered phases are not a strict work order, and the full plan remains unfinished.
+**Next milestone: category acceptance and cleanup scope.** The generated owner read-only walkthrough and human-output corrections passed, including guided review and separately consented fresh hashing with historical comparisons. Exact finding dismissal, persistent exclusion controls, saved Cargo/Go cache reports and finite selected Docker metadata are available. Installed-Docker, cache-action/regeneration and Linux clone acceptance remain open. Cleanup needs an operation that preserves the exact reviewed source object and ancestor scope; the reviewed rename operations do not provide that boundary. See [ADR 003](docs/decisions/003-source-namespace-boundary.md), the [current handoff](PROGRESS.md#current-state) and [trial lessons](docs/mvp-trial-results.md). Numbered phases are not a strict work order, and the full plan remains unfinished.
 
 ## Scan a chosen folder
 
@@ -72,6 +72,17 @@ rydd report --build-output -d /path/to/project --min-age-days 30 --json
 This mode requires an existing manual scan of that exact folder. It recognizes an outermost `target` beside saved `Cargo.toml` and `Cargo.lock`, with a supported `debug` or `release` layout. Every required marker must meet the age filter and have a confirmed saved parent listing. Each page checks up to 1,000 entries and measures up to 20 candidates; use its continuation command when present.
 
 The report reads saved metadata only. It shows qualified logical/allocated sizes and recognition evidence. It does not check artifact contents, project use or whether a build can be reproduced. Custom and unsupported layouts are excluded. There is no cleanup action, saved plan or dismissal for this category. See the [Cargo report contract](docs/cli.md#saved-cargo-build-output).
+
+## Review saved Go build-cache files
+
+```sh
+rydd report --go-cache -d /path/to/cache
+rydd report --go-cache -d /path/to/cache --min-age-days 30 --json
+```
+
+First perform an explicit manual metadata scan of that exact proposed cache root. This report requires a saved regular `README`, all 256 hexadecimal shard directories and completed saved listing evidence. It selects old regular action/data filenames in the supported shard layout. Partial or unsupported layouts produce a qualified empty report; empty file pages can still have continuation.
+
+It reads saved metadata only. Names do not establish that Go produced the files, uses this cache or can regenerate its contents. Per-file sizes and page identity counts are historical observations, not cache totals or space you can free. Fuzz data, module downloads, external cache management and cached executable directories are outside this category. No Go tool runs, source read, saved-record change, approval or cleanup occurs. See the [Go cache report contract](docs/cli.md#saved-go-build-cache-files).
 
 ## Read selected Docker metadata
 

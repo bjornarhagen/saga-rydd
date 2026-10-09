@@ -132,6 +132,22 @@ Additive plan schema 5 keeps dismissal records separate from plans, consent, obs
 
 Scoped candidate reports and guided review compare active dismissal keys with one frozen raw inventory page. They examine at most 1,000 entries and measure at most 20 eligible candidates, without refilling after hidden findings. Cursors, examined counts and coverage are preserved; `selected` and `dismissed` diagnostic counts split the same eligible outcome. Fully hidden pages can still have continuation. `--include-dismissed` requires candidate mode, includes all eligible findings without undo and names included dismissed references in notes; continuation retains this option. Configured unscoped reports have no manual dismissal scope. Unknown identities remain visible because they cannot bind a dismissal. Authoritative string evidence must be valid UTF-8 to survive JSON exactly; unusable text stays reportable but cannot be dismissed. Raw byte paths remain supported. Changed evidence or a different age filter resurfaces the finding, including an unchanged-path rescan. Saved cleanup selections and checks are unaffected; permanent exclusion and keep policies are separate.
 
+## Saved Go build-cache files
+
+```sh
+rydd report --go-cache -d ROOT [--min-age-days N] [--cursor TOKEN] [--json]
+```
+
+Require an explicit true mode and the exact existing manual inventory for the proposed cache root. Directory aliases, modes and options cannot repeat; other report modes, dismissal inclusion, limit/size filters and extra arguments are refused before storage access. Age is 1–36500 days, default 90. There is no configured-inventory fallback, initialization, migration, scan, Go command or configuration lookup.
+
+JSON adds an omitted optional `report.go_cache` field to the standard report envelope, contract `go_build_cache_file_metadata_v1`, rule `go-local-build-cache-layout-v1`. Layout recognition requires saved root/regular README/all 256 two-lowercase-hex shard directories, correct kinds/parents, skip-free membership and complete error-free generation-confirmed listings. At most 258 frozen layout markers retain relative raw paths, identity, dates and listing evidence. Missing or unsupported layout yields `layout_unsupported`, an empty file list and qualified coverage; it does not establish an empty cache. Marker contents and effective Go settings are never read. The supported filename shape follows the [Go disk-cache implementation](https://go.dev/src/cmd/go/internal/cache/cache.go); this is layout recognition, not provenance.
+
+Each selected file must be a depth-two regular `<64 lowercase hex>-a` or `-d` object whose hash prefix matches its shard, with a completed confirmed parent and saved modification time at least the selected age. Root/shard modification dates do not apply to file age. Executable `-d` directories, fuzz/module/download data, auxiliary files, custom shapes and skipped entries are excluded. References use `go-cache-file-v1:ROOT:ENTRY` and cannot enter node_modules plans/dismissals. File bodies and action-index contents remain unchecked; the report establishes neither cache validity nor a dependency relation between entries.
+
+One five-second transaction reads layout and at most 1,000 raw global saved entries plus one lookahead, selecting at most 20 files. The raw page is fenced before root filtering because existing schemas lack a root/ID ordering index; other roots consume the bound and have a `different_root` diagnostic. All diagnostic counts sum to examined rows. Empty pages may continue. `gocache1:AGE:LAST_ID` binds age and the last raw local ID, not an inventory incarnation or frozen export. Keep the same data directory/root; changed inventories can change later pages. Exhausted saved rows do not establish complete current coverage.
+
+Each file shows nullable logical/allocated observations and page-qualified known, aliased, unknown or conflicting identity. Do not sum files or pages: aliases can cross pages and clones/snapshots can share storage. Per-file sizes are not whole-cache totals or savings. Requested/read selected-body bytes remain zero; content/current/regeneration verification, approval, automatic eligibility and execution remain false and reclaimable bytes null. Go has its own cache maintenance; effective `GOCACHE`, persisted `GOENV`, external `GOCACHEPROG` and rebuild prerequisites are unverified. See [Go build/test caching](https://pkg.go.dev/cmd/go#hdr-Build_and_test_caching).
+
 ## Selected Docker metadata
 
 ```sh
