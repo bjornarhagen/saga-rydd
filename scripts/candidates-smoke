@@ -31,7 +31,8 @@ attempts=0
 while :; do
     rydd status --json >"$fixture/status.json"
     if grep -q '"complete_directories":3' "$fixture/status.json" && \
-       grep -q '"pending_jobs":0' "$fixture/status.json" && \
+       grep -q '"pending_jobs":1' "$fixture/status.json" && \
+       grep -q '"wait_reason":"inventory_revisit"' "$fixture/status.json" && \
        grep -q '"running_jobs":0' "$fixture/status.json"; then break; fi
     attempts=$((attempts + 1))
     if [ "$attempts" -ge 100 ] || ! kill -0 "$worker_pid" 2>/dev/null; then

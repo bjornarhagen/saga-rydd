@@ -40,6 +40,12 @@ func start(t *testing.T, dir string, c config.Config, options Options) (Snapshot
 	if options.cpuObserve == nil {
 		options.cpuObserve = func() (time.Duration, error) { return 0, nil }
 	}
+	// Native scheduling changes are exercised only in disposable child processes.
+	if options.priorityRequest == nil {
+		options.priorityRequest = func(context.Context) ThreadPriorityObservation {
+			return newThreadPriorityObservation("fixture")
+		}
+	}
 	ready := make(chan Snapshot, 1)
 	options.Ready = func(s Snapshot) { ready <- s }
 	ctx, cancel := context.WithCancel(context.Background())

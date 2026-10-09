@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
+	"sync/atomic"
 	"time"
 
 	"github.com/bjornarhagen/saga-rydd/internal/config"
@@ -19,19 +21,20 @@ import (
 )
 
 type Snapshot struct {
-	PID              int                   `json:"pid"`
-	Instance         string                `json:"instance"`
-	StartedAt        time.Time             `json:"started_at"`
-	Paused           bool                  `json:"paused"`
-	Stopping         bool                  `json:"stopping"`
-	ActiveJob        int64                 `json:"active_job,omitempty"`
-	RecoveredJobs    int64                 `json:"recovered_jobs"`
-	Handlers         int                   `json:"handlers"`
-	WaitReason       string                `json:"wait_reason"`
-	InventoryMetrics *inventory.Metrics    `json:"inventory_metrics,omitempty"`
-	Dispatch         *state.DispatchBudget `json:"dispatch,omitempty"`
-	CPU              *CPUObservation       `json:"cpu,omitempty"`
-	Metadata         *state.MetadataBudget `json:"metadata,omitempty"`
+	PID              int                        `json:"pid"`
+	Instance         string                     `json:"instance"`
+	StartedAt        time.Time                  `json:"started_at"`
+	Paused           bool                       `json:"paused"`
+	Stopping         bool                       `json:"stopping"`
+	ActiveJob        int64                      `json:"active_job,omitempty"`
+	RecoveredJobs    int64                      `json:"recovered_jobs"`
+	Handlers         int                        `json:"handlers"`
+	WaitReason       string                     `json:"wait_reason"`
+	InventoryMetrics *inventory.Metrics         `json:"inventory_metrics,omitempty"`
+	Dispatch         *state.DispatchBudget      `json:"dispatch,omitempty"`
+	CPU              *CPUObservation            `json:"cpu,omitempty"`
+	Metadata         *state.MetadataBudget      `json:"metadata,omitempty"`
+	Priority         *ThreadPriorityObservation `json:"thread_priority,omitempty"`
 }
 
 type Result struct {
@@ -56,6 +59,8 @@ type Options struct {
 	Interval, WorkDuration time.Duration
 	// cpuObserve is private so production always uses native process accounting.
 	cpuObserve func() (time.Duration, error)
+	// Scheduling requests are private so production uses the native source-thread adapter.
+	priorityRequest func(context.Context) ThreadPriorityObservation
 	// Production revisits root listings every 24 hours; only fixtures shorten it.
 	revisitInterval time.Duration
 	// Source hooks are private, for bounded permit/failure lifecycle fixtures.
@@ -70,6 +75,11 @@ type outcome struct {
 }
 
 func Run(ctx context.Context, dir string, cfg config.Config, options Options) error {
+	requestPriority := options.priorityRequest
+	if requestPriority == nil {
+		requestPriority = requestThreadPriority
+	}
+	var priorityObservation atomic.Pointer[ThreadPriorityObservation]
 	observeCPU := options.cpuObserve
 	if observeCPU == nil {
 		observeCPU = processCPUTime
@@ -183,6 +193,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 	live := Snapshot{PID: os.Getpid(), Instance: hex.EncodeToString(id[:]), StartedAt: time.Now().UTC(), Paused: paused, RecoveredJobs: recovered, Handlers: len(handlers)}
 	cpu := newCPUBudget()
 	refreshMetrics := func() {
+		live.Priority = priorityObservation.Load()
 		observation := cpu.observation
 		live.CPU = &observation
 		if scanner := source.value.Load(); scanner != nil {
@@ -576,7 +587,15 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 			activeCPUWindow = window
 			live.WaitReason = "running"
 			live.ActiveJob = job.ID
-			cancelTask = startChunk(ctx, work, *job, handler, done)
+			var priorityRequest func(context.Context) ThreadPriorityObservation
+			if options.ExperimentalScan && job.Kind == state.ScanKind {
+				priorityRequest = func(ctx context.Context) ThreadPriorityObservation {
+					observation := requestPriority(ctx)
+					priorityObservation.Store(&observation)
+					return observation
+				}
+			}
+			cancelTask = startChunkWithPriority(ctx, work, *job, handler, done, priorityRequest)
 		case result := <-done:
 			cancelTask()
 			cancelTask = nil
@@ -641,6 +660,10 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 }
 
 func startChunk(ctx context.Context, duration time.Duration, job state.Job, handler Handler, done chan<- outcome) context.CancelFunc {
+	return startChunkWithPriority(ctx, duration, job, handler, done, nil)
+}
+
+func startChunkWithPriority(ctx context.Context, duration time.Duration, job state.Job, handler Handler, done chan<- outcome, priorityRequest func(context.Context) ThreadPriorityObservation) context.CancelFunc {
 	taskCtx, cancel := context.WithTimeout(ctx, duration)
 	go func() {
 		defer cancel()
@@ -653,6 +676,17 @@ func startChunk(ctx context.Context, duration time.Duration, job state.Job, hand
 			}
 			done <- result
 		}()
+		if priorityRequest != nil {
+			runtime.LockOSThread()
+			// A Linux nice reduction may be irreversible without privilege.
+			// Never unlock a changed thread into Go's pool; goroutine exit
+			// terminates the locked thread, including cancellation or panic.
+			_ = priorityRequest(taskCtx)
+		}
+		if err := taskCtx.Err(); err != nil {
+			result.err = err
+			return
+		}
 		result.result, result.err = handler(taskCtx, job)
 	}()
 	return cancel
