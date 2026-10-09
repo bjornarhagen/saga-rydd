@@ -28,6 +28,9 @@ func testRootStreamsBindMount(t *testing.T) {
 				mounted = true
 			}
 			defer func() {
+				// Close retained streams before unmounting. Fixture cleanup runs
+				// after this defer, while a live directory FD keeps the mount busy.
+				s.Close()
 				if mounted {
 					if err := unix.Unmount(path, 0); err != nil {
 						t.Error(err)
