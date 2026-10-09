@@ -24,6 +24,7 @@ type metadataWindow struct {
 	reservation         state.MetadataReservation
 	wallNow, elapsedNow func() time.Time
 	deadline            time.Time
+	wallDeadline        time.Time
 	mu                  sync.Mutex
 	highWater           time.Time
 	observed            int64
@@ -35,9 +36,20 @@ func newMetadataWindow(reservation state.MetadataReservation, work time.Duration
 
 func metadataWindowWithClocks(reservation state.MetadataReservation, work time.Duration, wallNow, elapsedNow func() time.Time) *metadataWindow {
 	wall := wallNow().UTC()
-	remaining := min(reservation.ExpiresAt.Sub(wall), work)
+	// Anchor wall work to the charged reservation, not delayed construction.
+	// Go's elapsed clock can stop during suspend; a forward wall gap must not
+	// extend this source window. Neither clock can grant catch-up allowance.
+	wallDeadline := minTime(reservation.StartedAt.Add(work), reservation.ExpiresAt)
+	remaining := min(wallDeadline.Sub(wall), work)
 	return &metadataWindow{reservation: reservation, wallNow: wallNow, elapsedNow: elapsedNow,
-		deadline: elapsedNow().Add(remaining), highWater: reservation.ClockHighWater}
+		deadline: elapsedNow().Add(remaining), wallDeadline: wallDeadline, highWater: reservation.ClockHighWater}
+}
+
+func minTime(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
 }
 
 func (w *metadataWindow) permit(ctx context.Context, kind inventory.APICallKind) error {
@@ -63,7 +75,7 @@ func (w *metadataWindow) permit(ctx context.Context, kind inventory.APICallKind)
 		return errMetadataRollback
 	}
 	w.highWater = wall
-	if !wall.Before(w.reservation.ExpiresAt) || !w.elapsedNow().Before(w.deadline) {
+	if !wall.Before(w.wallDeadline) || !wall.Before(w.reservation.ExpiresAt) || !w.elapsedNow().Before(w.deadline) {
 		return errMetadataExpired
 	}
 	if w.observed >= w.reservation.Allowance {
@@ -79,15 +91,20 @@ func (w *metadataWindow) usage() (int64, time.Time) {
 	return w.observed, w.highWater
 }
 
-// Sequential operations must carry their highest observed wall time across
-// their permit windows. The Next reservation predates construction's calls.
+// Sequential operations carry the highest observed wall time and earliest
+// work deadlines across their permit windows. The Next reservation predates
+// construction's calls; it cannot extend the preceding source work window.
 func (w *metadataWindow) inheritHighWater(previous *metadataWindow) {
-	_, highWater := previous.usage()
+	previous.mu.Lock()
+	highWater, deadline, wallDeadline := previous.highWater, previous.deadline, previous.wallDeadline
+	previous.mu.Unlock()
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if highWater.After(w.highWater) {
 		w.highWater = highWater
 	}
+	w.deadline = minTime(w.deadline, deadline)
+	w.wallDeadline = minTime(w.wallDeadline, wallDeadline)
 }
 
 // Publish and Close can overlap when construction is interrupted. Either

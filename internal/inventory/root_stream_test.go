@@ -213,11 +213,13 @@ func TestRootStreamsAdmissionAndNamesBeforeSourceCalls(t *testing.T) {
 }
 
 type rootStreamNativeEvidence struct {
-	Roots        int   `json:"roots"`
-	PendingNames int   `json:"pending_names"`
-	OpenDelta    int   `json:"open_fd_delta"`
-	AfterDelta   int   `json:"closed_fd_delta"`
-	PeakRSSBytes int64 `json:"child_peak_rss_bytes"`
+	Roots            int   `json:"roots"`
+	PendingNames     int   `json:"pending_names"`
+	OpenDelta        int   `json:"open_fd_delta"`
+	AfterDelta       int   `json:"closed_fd_delta"`
+	PeakRSSBytes     int64 `json:"child_peak_rss_bytes"`
+	RaceInstrumented bool  `json:"race_instrumented"`
+	RSSLimitApplied  bool  `json:"rss_limit_applied"`
 }
 
 func fixtureRetainedDirectoryFDs() int {
@@ -298,10 +300,10 @@ func TestRootStreamsNativeChild(t *testing.T) {
 		}
 	}
 	afterDelta := fixtureOpenFDCount(t) - before
-	if openDelta != fixtureRetainedDirectoryFDs() || afterDelta != 0 || rss <= 0 || rss >= 100<<20 {
+	if openDelta != fixtureRetainedDirectoryFDs() || afterDelta != 0 || rss <= 0 || (!rootStreamRaceInstrumented && rss >= 100<<20) {
 		t.Fatal("bounded fixture envelope failed", openDelta, afterDelta, rss)
 	}
-	evidence := rootStreamNativeEvidence{Roots: len(jobs), PendingNames: pending, OpenDelta: openDelta, AfterDelta: afterDelta, PeakRSSBytes: rss}
+	evidence := rootStreamNativeEvidence{Roots: len(jobs), PendingNames: pending, OpenDelta: openDelta, AfterDelta: afterDelta, PeakRSSBytes: rss, RaceInstrumented: rootStreamRaceInstrumented, RSSLimitApplied: !rootStreamRaceInstrumented}
 	if err := json.NewEncoder(os.Stdout).Encode(evidence); err != nil {
 		t.Fatal(err)
 	}
@@ -317,7 +319,7 @@ func TestRootStreamsNativeDisposableProcess(t *testing.T) {
 		t.Fatal(err, string(output))
 	}
 	var evidence rootStreamNativeEvidence
-	if err = json.NewDecoder(bytes.NewReader(output)).Decode(&evidence); err != nil || evidence.Roots != 32 || evidence.PendingNames != 4096 || evidence.OpenDelta != fixtureRetainedDirectoryFDs() || evidence.AfterDelta != 0 || evidence.PeakRSSBytes <= 0 {
+	if err = json.NewDecoder(bytes.NewReader(output)).Decode(&evidence); err != nil || evidence.Roots != 32 || evidence.PendingNames != 4096 || evidence.OpenDelta != fixtureRetainedDirectoryFDs() || evidence.AfterDelta != 0 || evidence.PeakRSSBytes <= 0 || evidence.RaceInstrumented != rootStreamRaceInstrumented || evidence.RSSLimitApplied == rootStreamRaceInstrumented {
 		t.Fatal(evidence, err, string(output))
 	}
 	t.Logf("Generated %s child: %+v; finite fixture evidence only", runtime.GOOS, evidence)
