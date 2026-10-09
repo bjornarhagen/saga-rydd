@@ -371,6 +371,11 @@ func (s *Store) ClaimFairInventoryTurn(ctx context.Context, scope FairInventoryR
 			return nil, ErrFairInventoryCorrupt
 		}
 		job.LeaseUntil = time.Unix(0, until)
+		if s.schema >= 13 {
+			if err = adaptiveClaim(ctx, tx, job); err != nil {
+				return nil, err
+			}
+		}
 		turn.Job = &job
 	}
 	if err = writeFairInventoryCursor(ctx, tx, turn.RootID, reserved); err != nil {

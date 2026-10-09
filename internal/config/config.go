@@ -77,6 +77,7 @@ type Scan struct {
 	PauseOnBattery         bool  `toml:"pause_on_battery"`
 	MaxScanChunksPerDay    int   `toml:"max_scan_chunks_per_day"`
 	MaxStateBytes          int64 `toml:"max_state_bytes"`
+	AdaptiveRevisits       bool  `toml:"adaptive_revisits"`
 }
 
 func Default() Config {

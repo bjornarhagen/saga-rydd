@@ -8,6 +8,10 @@ Rydd will gradually discover developer clutter and duplicate files, explain what
 
 For humans and AI: readable output by default, versioned JSON with `--json`, and `rydd capabilities --json` for discovery. Status separates live process CPU observations from saved experimental-turn feedback. Interrupted tracked turns require explicit writer recovery and retain a one-hour cooldown; saved views never recover them. Scanner metadata API counters help inspect background work. See the [CLI contract](docs/cli.md). The [finite generated resource harness](experiments/backgroundresources/README.md) measures native worker CPU, peak memory and control/report latency with separate observer overhead; hourly and soak acceptance remain open.
 
+Start with [first use and recovery](docs/getting-started.md) for explicit folder/private-state selection, the available review flow and common waits or interrupted commands.
+
+For distribution work, follow the [local candidate and future release procedure](docs/release.md). Local packages remain review candidates; license, platform and release acceptance gates are open.
+
 **Next milestone: resource controls and user services.** The generated owner read-only walkthrough and human-output corrections passed, including guided review and separately consented fresh hashing with historical comparisons. Exact finding dismissal, persistent exclusion controls, saved Cargo/Go cache reports and finite selected Docker image/container/Engine-cache metadata are verified on generated native fixtures. Genuine Cargo producer compatibility passed both native platforms. Restart-safe CPU feedback and bounded Linux power observations are verified. The current continuation adds sparse source-power scheduling, finite resource measurements and the remaining state/service controls after the read-only MVP. Installed-Docker, cache-action/regeneration and Linux clone acceptance remain open. Cleanup needs an operation that preserves the exact reviewed source object and ancestor scope; the reviewed rename operations do not provide that boundary. See [ADR 003](docs/decisions/003-source-namespace-boundary.md), the [current handoff](PROGRESS.md#current-state) and [trial lessons](docs/mvp-trial-results.md). Numbered phases are not a strict work order, and the full plan remains unfinished.
 
 ## Scan a chosen folder
@@ -481,6 +485,8 @@ Use the exact installed scope. This removes only the managed descriptor and pres
 ## Background scan revisits
 
 The experimental scanner admits at most 32 configured roots and rotates bounded source or saved-maintenance turns across them. It retains each root's unfinished directory stream and one shared entry pacing clock. It schedules one root listing at least 24 hours after its last completed root listing, once that root's unfinished work drains. A healthy root can revisit while another root waits on an error. Saved due times survive restart; controls and resource gates still apply. Root listing completion does not prove full-tree coverage. Manual scans keep their explicit invocation flow. See the [revisit contract](docs/cli.md#periodic-experimental-scan-revisits).
+
+The optional `scan.adaptive_revisits = true` setting tracks historical metadata across each saved pass and reconciliation. Changed or uncertain completed passes use a daily interval. Two consecutive completed passes without an observed metadata change may use seven days. The default remains false. Restart the worker to apply a configuration change; scanning still requires `--experimental-scan`. Cached status does not inspect source folders or establish inactivity or cleanup safety. See [adaptive scheduling](docs/cli.md#opt-in-adaptive-historical-metadata-revisits).
 
 ## Try the experimental scanner
 

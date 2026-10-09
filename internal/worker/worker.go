@@ -36,6 +36,7 @@ type Snapshot struct {
 	CPUFeedback      *state.CPUFeedbackState       `json:"cpu_feedback,omitempty"`
 	Power            *PowerPolicySnapshot          `json:"power,omitempty"`
 	InventoryState   *InventoryStatePolicySnapshot `json:"inventory_state,omitempty"`
+	AdaptiveRevisits *AdaptiveRevisitSnapshot      `json:"adaptive_revisits,omitempty"`
 	Metadata         *state.MetadataBudget         `json:"metadata,omitempty"`
 	Priority         *ThreadPriorityObservation    `json:"thread_priority,omitempty"`
 }
@@ -173,6 +174,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 	var revisitCursor int64
 	var revisitMore bool
 	var fairRoots state.FairInventoryRoots
+	var adaptive adaptiveRevisitPolicy
 	scannerNew := options.scannerNew
 	if scannerNew == nil {
 		scannerNew = inventory.NewPermitted
@@ -206,11 +208,13 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 		if compact {
 			return errors.New("compact inventories currently require the manual scan command; background compact scanning is not enabled")
 		}
-		page, err := w.SeedInventoryRevisitPage(ctx, 0, wallNow(), revisitInterval)
-		if err != nil {
-			return err
+		if !cfg.Scan.AdaptiveRevisits {
+			page, err := w.SeedInventoryRevisitPage(ctx, 0, wallNow(), revisitInterval)
+			if err != nil {
+				return err
+			}
+			revisitCursor, revisitMore = page.Cursor, page.More
 		}
-		revisitCursor, revisitMore = page.Cursor, page.More
 		fairRoots, err = w.ResolveFairInventoryRoots(ctx, cfg.Roots)
 		if err != nil {
 			return err
@@ -224,6 +228,16 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 	recovered, err := w.RecoverJobs(ctx, wallNow())
 	if err != nil {
 		return err
+	}
+	if options.ExperimentalScan {
+		home, _ := os.UserHomeDir()
+		digest, err := adaptiveRevisitDigest(cfg.Roots, cfg.Excludes, privatePaths, home)
+		if err != nil {
+			return err
+		}
+		if err = adaptive.configure(ctx, w, fairRoots, cfg.Scan.AdaptiveRevisits, digest, wallNow()); err != nil {
+			return fmt.Errorf("configure adaptive inventory revisits: %w", err)
+		}
 	}
 	paused, err := w.Paused(ctx)
 	if err != nil {
@@ -285,6 +299,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 		if options.ExperimentalScan {
 			live.Power = powerState.snapshot()
 			live.InventoryState = inventoryState.snapshot()
+			live.AdaptiveRevisits = adaptive.snapshot()
 		}
 		live.Priority = priorityObservation.Load()
 		observation := cpu.observation
@@ -446,7 +461,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 					var due time.Time
 					var plan fairInventoryPlan
 					var err error
-					if revisitMore {
+					if revisitMore || adaptive.startupPending() {
 						due, live.WaitReason = now, "inventory_revisit_setup"
 					} else if options.ExperimentalScan {
 						if err = refreshMetadata(ctx, now); err != nil {
@@ -484,7 +499,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 								live.WaitReason = "job_retry"
 							}
 							if options.ExperimentalScan && !plan.generic && plan.waitReason == "job_retry" {
-								revisit, err := w.InventoryRevisitPending(ctx, due, revisitInterval)
+								revisit, err := adaptive.pending(ctx, w, due, revisitInterval)
 								if err != nil {
 									if ctx.Err() != nil {
 										stop()
@@ -499,11 +514,11 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						}
 						wait := dispatchWait{reason: live.WaitReason}
 						wait.wall(due, now, live.WaitReason)
-						if options.ExperimentalScan && !revisitMore && !plan.generic && plan.schedule.Turn == nil && !plan.schedule.NextSourceDue.IsZero() {
+						if options.ExperimentalScan && !revisitMore && !adaptive.startupPending() && !plan.generic && plan.schedule.Turn == nil && !plan.schedule.NextSourceDue.IsZero() {
 							wait.add(powerState.remaining(now, elapsed), "power_source_backoff")
 							wait.add(inventoryState.remaining(now, elapsed), "inventory_state_source_backoff")
 						}
-						if options.ExperimentalScan && !revisitMore {
+						if options.ExperimentalScan && !revisitMore && !adaptive.startupPending() {
 							budget, err := w.DispatchBudget(ctx, now, cfg.Scan.MaxScanChunksPerDay)
 							if err != nil {
 								if ctx.Err() != nil {
@@ -642,6 +657,23 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						return fmt.Errorf("schedule root-listing revisits: %w", err)
 					}
 					revisitCursor, revisitMore = page.Cursor, page.More
+					if err := finishCPU(window, nil); err != nil {
+						return err
+					}
+					reschedule = true
+					continue
+				}
+				if adaptive.startupPending() {
+					pageCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+					err := adaptive.initializeNext(pageCtx, w, wallNow())
+					cancel()
+					if err != nil {
+						if ctx.Err() != nil {
+							stop()
+							continue
+						}
+						return fmt.Errorf("initialize adaptive inventory revisits: %w", err)
+					}
 					if err := finishCPU(window, nil); err != nil {
 						return err
 					}
@@ -853,7 +885,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 					if turn.Kind == state.FairInventoryMaintenance {
 						step, retireErr := w.RetireInventoryForRoot(turnCtx, turn.RootID)
 						if retireErr == nil && step.Eligible && !step.Remaining {
-							_, retireErr = w.ScheduleInventoryRevisit(turnCtx, turn.RootID, wallNow(), revisitInterval)
+							retireErr = adaptive.finalize(turnCtx, w, turn.RootID, wallNow(), revisitInterval)
 						}
 						cancel()
 						cpuErr := finishCPU(window, marker)
@@ -1010,7 +1042,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 			activeMetadata = nil
 			var err error
 			if result.result.Scan != nil {
-				err = w.CommitScan(finishCtx, *active, *result.result.Scan)
+				err = adaptive.commit(finishCtx, w, *active, *result.result.Scan, wallNow())
 			} else {
 				err = w.FinishJob(finishCtx, *active, result.result.Done, result.result.Cursor, due, lastError)
 			}
@@ -1019,7 +1051,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 				return errors.Join(fmt.Errorf("save job progress: %w", err), finishCPU(activeCPUWindow, activeCPUMarker))
 			}
 			if options.ExperimentalScan && active.Kind == state.ScanKind {
-				if _, err := w.ScheduleInventoryRevisit(finishCtx, active.RootID, wallNow(), revisitInterval); err != nil {
+				if err := adaptive.finalize(finishCtx, w, active.RootID, wallNow(), revisitInterval); err != nil {
 					cancel()
 					return errors.Join(fmt.Errorf("schedule completed root-listing work: %w", err), finishCPU(activeCPUWindow, activeCPUMarker))
 				}

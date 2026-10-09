@@ -79,7 +79,12 @@ func (s *Store) retireSubtrees(ctx context.Context, rootID int64, hooks inventor
 		if revision != current {
 			// New scans own any reappearing entries. Their completed parent passes
 			// enqueue fresh reconciliation; this old proof must not remove them.
-			_, err = tx.ExecContext(ctx, "DELETE FROM subtree_retirement WHERE root_id=? AND path=?", root, path)
+			if s.schema >= 13 {
+				err = adaptiveUncertain(ctx, tx, root)
+			}
+			if err == nil {
+				_, err = tx.ExecContext(ctx, "DELETE FROM subtree_retirement WHERE root_id=? AND path=?", root, path)
+			}
 		} else {
 			err = purgeSubtreeStep(ctx, tx, root, path, preserve, phase)
 		}
@@ -147,6 +152,9 @@ func reconcileSubtreeStep(ctx context.Context, tx *sql.Tx, rootID int64) (bool, 
 		return true, err
 	}
 	if generation != savedGeneration || !complete || fault != "" {
+		if err = adaptiveUncertain(ctx, tx, root); err != nil {
+			return false, err
+		}
 		return finish()
 	}
 	if cursor == nil {
@@ -196,6 +204,13 @@ func reconcileSubtreeStep(ctx context.Context, tx *sql.Tx, rootID int64) (bool, 
 			}
 		}
 		if absent || (c.kind != "directory" && c.directoryState) {
+			// Only checked source-entry removal changes the epoch. Deleting
+			// derived scratch/cache rows is not source change evidence.
+			if absent {
+				if err = adaptiveChanged(ctx, tx, root); err != nil {
+					return false, err
+				}
+			}
 			_, err = tx.ExecContext(ctx, `INSERT INTO subtree_retirement(root_id,path,scan_revision,preserve_entry) VALUES(?,?,?,?)
  ON CONFLICT(root_id,path) DO UPDATE SET scan_revision=excluded.scan_revision,preserve_entry=excluded.preserve_entry,phase=0`, root, c.path, revision, !absent)
 			if err != nil {

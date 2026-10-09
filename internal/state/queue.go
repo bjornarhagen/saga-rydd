@@ -112,7 +112,12 @@ func (s *Store) ClaimJob(ctx context.Context, kinds []string, now time.Time, lea
 	params = append(params, args...)
 	var j Job
 	var until int64
-	err = s.db.QueryRowContext(ctx, `UPDATE jobs SET status='running',lease_token=?,lease_until_ns=?,attempts=attempts+1
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	err = tx.QueryRowContext(ctx, `UPDATE jobs SET status='running',lease_token=?,lease_until_ns=?,attempts=attempts+1
  WHERE id=(SELECT j.id FROM jobs j JOIN roots r ON r.id=j.root_id WHERE j.status='pending' AND j.due_at_ns<=?
  AND r.enabled=1 AND j.kind IN (`+clause+`) ORDER BY j.due_at_ns,j.id LIMIT 1)
  RETURNING id,root_id,kind,path,cursor,attempts,lease_token,lease_until_ns,
@@ -125,6 +130,20 @@ func (s *Store) ClaimJob(ctx context.Context, kinds []string, now time.Time, lea
 		return nil, err
 	}
 	j.LeaseUntil = time.Unix(0, until)
+	if s.schema >= 13 {
+		if err = adaptiveClaim(ctx, tx, j); err != nil {
+			return nil, err
+		}
+	}
+	if err = ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	if err = ctx.Err(); err != nil {
+		return nil, err
+	}
 	return &j, nil
 }
 
@@ -133,7 +152,20 @@ func (s *Store) FinishJob(ctx context.Context, j Job, done bool, cursor []byte, 
 	if s.readOnly {
 		return errors.New("state is read-only")
 	}
-	return finishJob(ctx, s.db, j, done, cursor, due, lastError)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err = finishJob(ctx, tx, j, done, cursor, due, lastError); err != nil {
+		return err
+	}
+	if s.schema >= 13 && j.Kind == ScanKind {
+		if err = adaptiveUncertain(ctx, tx, j.RootID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 type executor interface {
@@ -180,13 +212,31 @@ func (s *Store) RecoverJobs(ctx context.Context, now time.Time) (int64, error) {
 	if s.readOnly || s.lock == nil {
 		return 0, errors.New("recovery requires the exclusive writer lock")
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE jobs SET status='pending',
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	if s.schema >= 13 {
+		if _, err = tx.ExecContext(ctx, `UPDATE adaptive_inventory_revisits SET unknown=1,unchanged_streak=0
+ WHERE root_id IN (SELECT root_id FROM jobs WHERE status='running' AND kind=?)`, ScanKind); err != nil {
+			return 0, err
+		}
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE jobs SET status='pending',
  due_at_ns=CASE WHEN kind=? THEN due_at_ns ELSE ? END,lease_token='',lease_until_ns=0
  WHERE status='running'`, ScanKind, now.UnixNano())
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected()
+	n, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if err = tx.Commit(); err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 func (s *Store) Paused(ctx context.Context) (bool, error) {

@@ -59,6 +59,10 @@ func (s *Store) SeedInventory(ctx context.Context) error {
 // children, and saves enumeration progress. A crash cannot commit one without
 // the others. Call only from the worker's owning event loop.
 func (s *Store) CommitScan(ctx context.Context, j Job, b ScanBatch) error {
+	return s.commitScan(ctx, j, b, nil, time.Now())
+}
+
+func (s *Store) commitScan(ctx context.Context, j Job, b ScanBatch, adaptive *AdaptiveRevisitScope, now time.Time) error {
 	if s.readOnly {
 		return errors.New("state is read-only")
 	}
@@ -82,12 +86,16 @@ func (s *Store) CommitScan(ctx context.Context, j Job, b ScanBatch) error {
 		return err
 	}
 	defer tx.Rollback()
-	now := time.Now()
 	due := time.Unix(0, 1) // Continue this open directory before starting a child.
 	if b.Fault != "" {
 		due = now.Add(time.Hour)
 	}
 	if err := finishJob(ctx, tx, j, b.Complete, b.Cursor, due, b.Fault); err != nil {
+		return err
+	}
+	// Read prior metadata before any entry upsert. The lease update and all
+	// adaptive evidence roll back together if the batch later fails.
+	if err := s.adaptiveScan(ctx, tx, adaptive, j, b, now); err != nil {
 		return err
 	}
 	if err := invalidateAllocations(ctx, tx, j); err != nil {

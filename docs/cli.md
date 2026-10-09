@@ -70,7 +70,7 @@ Live `worker.live.power` uses `worker_source_power_policy_v1`. `last_decision_st
 
 `daemon --experimental-scan` admits at most 32 configured roots before writer/root/source changes. Configuration can still hold up to 128 roots for other workflows; this narrower background limit is explicit. The worker rotates source and eligible saved-only maintenance turns with a durable root cursor and retains bounded per-root directory streams under shared entry pacing. A busy root therefore cannot keep winning every ready turn. Delayed/error jobs retain their evidence and block only their own maintenance. Source API quota waits can allow other-root database-only work; shared dispatch, CPU/WAL and control gates still apply.
 
-Capabilities add `experimental_root_turns` and `inventory_scheduling_contract`, named `experimental_root_turns_v1`, with scope `configured_experimental_background_inventory`. It reports `max_configured_roots: 32`, `max_retained_directory_streams: 32`, `max_pending_names_per_stream: 128` and `durable_root_rotation: true`. Manual scans are excluded. `adaptive_inventory_revisits`, `portable_directory_continuation` and full resource/power controls remain false. Rotation survives restart; open enumeration streams do not. This establishes bounded turns during a continuous healthy run, not completion under repeated mutation/crashes or an elapsed resource guarantee. See [worker scheduling](worker.md#fair-experimental-root-turns-p1-07b2).
+Capabilities add `experimental_root_turns` and `inventory_scheduling_contract`, named `experimental_root_turns_v1`, with scope `configured_experimental_background_inventory`. It reports `max_configured_roots: 32`, `max_retained_directory_streams: 32`, `max_pending_names_per_stream: 128` and `durable_root_rotation: true`. Manual scans are excluded. Adaptive timing is separately opt-in below; `portable_directory_continuation` and full resource/power controls remain false. Rotation survives restart; open enumeration streams do not. This establishes bounded turns during a continuous healthy run, not completion under repeated mutation/crashes or an elapsed resource guarantee. See [worker scheduling](worker.md#fair-experimental-root-turns-p1-07b2).
 
 ## Live scanner accounting
 
@@ -129,11 +129,33 @@ Live `worker.live.thread_priority` uses `experimental_source_thread_priority_v1`
 
 ## Periodic experimental scan revisits
 
-A continuously running `daemon --experimental-scan` schedules one future root listing after that root's saved scan and maintenance work drains. Its fixed due time is the later of now or the last completed root listing plus 24 hours. Unknown prior listing evidence starts now. Root listing completion covers direct children, not a complete tree or current coverage.
+A continuously running `daemon --experimental-scan` schedules one future root listing after that root's saved scan and maintenance work drains. With the default `scan.adaptive_revisits = false`, its fixed due time is the later of now or the last completed root listing plus 24 hours. Unknown prior listing evidence starts now. Root listing completion covers direct children, not a complete tree or current coverage.
 
 Unfinished scans, running jobs and delayed errors stay ahead of that root's revisit. Other drained roots can schedule independently. Startup examines at most 128 raw saved roots plus one continuation row per turn; disabled and blocked roots consume slots. Controls run between pages. Existing saved due times, cursors and tokens survive restart and clock rollback. Overdue work creates one pass without catch-up credits.
 
-The worker sleeps on its saved job timer, with no idle polling. `wait_reason: inventory_revisit` identifies an unchanged future root-listing job supported by matching saved listing evidence; other retries stay qualified separately. A pending future revisit is planned work, not proof of incomplete scan coverage. `inventory_revisit_setup` identifies bounded startup bookkeeping. Resource, CPU and WAL gates still apply. Ordinary idle daemon and explicit foreground scans retain their existing behavior. Adaptive timing and fairness remain open; `periodic_root_revisits` advertises this limited fixed policy.
+The worker sleeps on its saved job timer, with no idle polling. `wait_reason: inventory_revisit` identifies an unchanged future root-listing job supported by matching saved listing evidence; other retries stay qualified separately. A pending future revisit is planned work, not proof of incomplete scan coverage. `inventory_revisit_setup` identifies bounded startup bookkeeping. Resource, CPU and WAL gates still apply. Ordinary idle daemon and explicit foreground scans retain their existing behavior. `periodic_root_revisits` advertises the fixed policy; adaptive timing uses its separate contract.
+
+## Opt-in adaptive historical metadata revisits
+
+`scan.adaptive_revisits = true` enables contract `adaptive_historical_metadata_v1` only for configured experimental background inventory. The default is false. Stop the worker before editing configuration and start it again to apply the setting. This setting does not activate scanning; `daemon --experimental-scan` remains explicit. Manual scans keep their invocation flow.
+
+One bounded per-root epoch tracks historical metadata across the source pass and saved reconciliation. Comparisons exclude routine generation/observation times and derived-cache invalidation. Checked additions, removals, replacements and metadata changes reset learning. Failed, unavailable, recovered, pretracking or changed-scope evidence remains uncertain. Successful partial batches preserve the epoch without claiming completion.
+
+Startup seeds a previously untracked drained root immediately, without quiet credit, examining one admitted root per owning-loop turn. After a completed epoch's inventory jobs and saved maintenance drain, initial/changed/uncertain evidence schedules 24 hours after checked completion. Two consecutive completed epochs without an observed metadata change may schedule seven days. Finalization and next-job insertion share a transaction; exact retries cannot learn twice. Every existing resource, control and fair-root gate remains active. Metadata agreement does not prove content equality, inactivity or cleanup safety.
+
+A policy/scope change resets learning. It may shorten only the exact adaptive future job proven never claimed or started, to its saved daily baseline. Started work, cursors, errors and unrelated retries stay intact. Recovery cannot turn an interrupted pass into quiet evidence. Schema 13 adds fixed scalar scheduling records. This version's saved readers accept existing schema-12 stores without migration; older schema-12 binaries reject schema 13. At most 32 roots are admitted at once; disabled or historical rows are not claimed to have a lifetime retention bound.
+
+Enabled live status includes optional `worker.live.adaptive_revisits`, with `policy_enabled`, `cached_at` and the bounded aggregate below. It is omitted outside enabled experimental scheduling. The cache records the last successful saved query; later denial/recovery evidence may be newer in SQLite. Status makes no source probe or extra scheduling query and does not calculate current permission.
+
+| Field | Historical meaning at `cached_at` |
+| --- | --- |
+| `tracked_roots` | Roots in the admitted scope |
+| `active_epochs` | Epochs with a recorded root pass started |
+| `changed_epochs`, `unknown_epochs` | Current epoch flags, including epochs that have not started |
+| `stable_roots` | Roots with a saturated two-epoch unchanged streak |
+| `daily_roots`, `weekly_roots` | Archived interval profile; not a current eligibility decision |
+
+An active changed/uncertain pass can still display its previous weekly interval; finalization chooses the next interval only after drain. `historical_metadata_only` is true; `current_content_verified` and `cleanup_approved` are false. Capabilities expose `adaptive_inventory_revisits` and `adaptive_revisit_contract`, with the two intervals, required streak and `maximum_admitted_roots: 32`. Corrupt/invalid evidence uses `adaptive_revisit_invalid`; rollback/overflow uses `adaptive_revisit_clock`. Full resource quotas, portable crash enumeration, elapsed seven-day behavior and representative tuning remain separate.
 
 ## Saved file reports
 

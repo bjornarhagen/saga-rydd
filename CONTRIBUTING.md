@@ -45,6 +45,8 @@ This command freshly builds the four fixed targets with Go 1.27.1, CGO disabled 
 
 These are build targets. Native runtime acceptance covers only the platforms and architectures actually exercised; minimum OS/kernel/filesystem, signing, licensing, installed service and release gates remain open. This command installs no executable or service and publishes no release. Its result keeps `release_accepted: false`.
 
+Use the [candidate and future release procedure](docs/release.md) to retain exact source/CI provenance, verify checksums and native version agreement, and inspect an uncertain publication.
+
 Use a literal version label of 1–64 ASCII characters: an initial letter or digit, then letters, digits, dots, underscores or hyphens. Invalid labels and existing candidate destinations refuse before replacement. One fixed `dist/candidates/.staging` directory bounds interrupted build leftovers. Inspect a reported uncertain publication or leftover before another attempt; the command does not import old `dist/` binaries, overwrite candidates or automatically recover staging.
 
 The archive's version is the fixed recipe input (`candidate_recipe`). Go omits linker flags from recorded build information under `-trimpath`, so structural inspection cannot establish an executed version label. Native fixtures separately run the matching executable. Its `--json --version` reply preserves the version scalar and adds `build_metadata_v1`, with `linked_value` and `executable_label_verified: true` when valid. Allowlisted VCS fields disclose clean, dirty or unknown provenance; they do not authenticate source. Private paths, dependency lists and raw build flags are omitted.

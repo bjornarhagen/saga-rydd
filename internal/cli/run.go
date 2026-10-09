@@ -466,6 +466,7 @@ func status(ctx context.Context, args []string, paths config.Paths, home string,
 		printWorkerPriority(out, connection.Live.Priority)
 		printWorkerPower(out, connection.Live.Power)
 		printWorkerInventoryState(out, connection.Live.InventoryState)
+		printWorkerAdaptiveRevisits(out, connection.Live.AdaptiveRevisits)
 		if m := connection.Live.InventoryMetrics; m != nil {
 			fmt.Fprintf(out, "Entry inspections: %d; limit: %d/s; throttling: %t; accumulated throttle wait: %s\n", m.EntryInspections, m.EntryRatePerSecond, m.Throttled, time.Duration(m.ThrottleWaitNS))
 			fmt.Fprintf(out, "Scanner API calls this worker: stat=%d; directory open=%d; directory read=%d; filesystem stat=%d; mount identity=%d; path resolution=%d\n", m.StatCalls, m.DirectoryOpenCalls, m.DirectoryReadCalls, m.FilesystemStatCalls, m.MountIdentityCalls, m.PathResolutionCalls)
