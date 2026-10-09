@@ -428,6 +428,17 @@ Pause is saved before acknowledgment and survives restart. It cancels an active 
 
 Controls use a private Unix socket with same-user peer checks. Docker commands share a small runtime volume so separate development containers can communicate. Native sockets use a private directory under `/tmp`; set the same short, absolute `RYDD_RUNTIME_DIR` for daemon and clients if overriding it. Keep application state on a local filesystem. See [worker design](docs/worker.md) for recovery and remaining scheduler work.
 
+## Preview a user-service descriptor
+
+```sh
+rydd service preview --executable /absolute/path/to/rydd
+rydd --data-dir /path/to/private/state service preview --executable /absolute/path/to/rydd --json
+```
+
+This proposes an idle-only launchd or systemd user descriptor. It binds the exact executable, configuration, state and control-runtime paths. It renders plain `daemon`, with no scanner. It opens no configuration, state or executable contents, writes no descriptor and invokes no service manager. The output declares a supported profile; installed support and future executable identity are unverified.
+
+Installing a descriptor in a login service directory can affect future logins. Installation, start, status, stop and uninstall adapters remain separate work. The worker would update normal root/recovery bookkeeping when started. Scheduling hints supplement resource pacing; they do not prove effective CPU/I/O priority or hourly limits. See the [service preview contract](docs/cli.md#user-service-descriptor-preview).
+
 ## Try the experimental scanner
 
 Try experimental scanning on a disposable fixture with `./scripts/scanner-smoke ./dist/rydd-darwin-arm64` after `./scripts/dev build-all` (choose the binary for your host). Inside Docker, run `./scripts/dev shell -c './scripts/scanner-smoke ./dist/rydd'` after `./scripts/dev check`. The script creates five synthetic entries, scans them with a short fixture cadence, checks results and stops its worker. No ordinary file contents are opened, hashed or deleted. Keep broad personal-directory scans disabled until P1-06 resource enforcement.

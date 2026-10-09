@@ -13,6 +13,7 @@ import (
 
 	"github.com/bjornarhagen/saga-rydd/internal/config"
 	"github.com/bjornarhagen/saga-rydd/internal/inventory"
+	"github.com/bjornarhagen/saga-rydd/internal/service"
 	"github.com/bjornarhagen/saga-rydd/internal/state"
 	"github.com/bjornarhagen/saga-rydd/internal/worker"
 )
@@ -31,6 +32,7 @@ Commands:
   state init                                           Initialize/migrate state from existing config
   status [--json]                                       Read saved state summary
   daemon [--experimental-scan]                         Run the worker (scanning opt-in for fixtures)
+  service preview --executable ABSOLUTE_PATH [--json]  Preview an idle-only service descriptor
   pause / resume                                       Persistently pause or resume work
   stop                                                 Request graceful worker shutdown
   ignore --preview -d ROOT [--min-age-days N] FINDING_ID [--json]
@@ -124,7 +126,7 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 		return 0
 	}
 	if remaining[0] == "capabilities" && len(remaining) == 1 {
-		fmt.Fprintln(out, "Rydd commands: init, config check, exclude, state init, status, scan, measure, report, docker, review, plan, ignore, journal, hashes, hash, pause, resume, stop, capabilities.\nAdd --json for versioned machine output on finite commands. review prompts in text mode; daemon uses foreground text output.\nOther commands are noninteractive. Exit codes: 0 success, 1 operation failed, 2 invalid usage.\nScanning is experimental. Deletion, duplicate detection, and full resource controls are unavailable.")
+		fmt.Fprintln(out, "Rydd commands: init, config check, exclude, state init, status, scan, measure, report, docker, service, review, plan, ignore, journal, hashes, hash, pause, resume, stop, capabilities.\nAdd --json for versioned machine output on finite commands. review prompts in text mode; daemon uses foreground text output.\nOther commands are noninteractive. Exit codes: 0 success, 1 operation failed, 2 invalid usage.\nScanning is experimental. Deletion, duplicate detection, and full resource controls are unavailable.")
 		return 0
 	}
 	paths, err := config.ResolvePaths(*dataDir)
@@ -138,6 +140,15 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 		return 1
 	}
 	switch remaining[0] {
+	case "service":
+		var descriptor service.Descriptor
+		descriptor, err = servicePreview(ctx, remaining[1:], paths)
+		if err == nil {
+			err = printServicePreview(out, descriptor)
+		}
+		if err == nil && ctx.Err() != nil {
+			err = fmt.Errorf("service preview reply was canceled; no service or state was changed: %w", ctx.Err())
+		}
 	case "docker":
 		var r any
 		r, err = dispatchDockerMetadata(ctx, remaining[1:])

@@ -291,6 +291,22 @@ Later conditions may also fail; these are first-match explanations, not an exhau
 
 `page_coverage` is `more_saved_entries` when `next_cursor` is present, otherwise `saved_entries_exhausted`. It describes the remainder of this saved page sequence, not filesystem scan completion. Disabled roots and entries beyond the cursor/page bounds are not counted. An empty page can still require continuation; an exhausted page does not prove that the computer is clean.
 
+## User-service descriptor preview
+
+```sh
+rydd service preview --executable /absolute/path/to/rydd [--json]
+```
+
+This finite exclusive mode requires one explicit executable path and no other service flags or positional arguments. The standard global `--data-dir` selects resolved configuration/state paths. The command only renders a descriptor: configuration/state/executable contents and service-manager state remain unchecked. Missing or invalid existing storage does not need initialization and is not interpreted. No descriptor is published, manager is invoked, worker is started or scanner is enabled.
+
+All paths must be absolute, lexically clean UTF-8 of at most 4,096 bytes. Control/format characters and unsupported XML characters are refused. Spaces, dollar/percent signs and ordinary Unicode remain literal. The Linux executable path also refuses quotes and backslashes, as required by the [systemd v255 executable parser](https://github.com/systemd/systemd/blob/v255/src/core/load-fragment.c) and [safe-string check](https://github.com/systemd/systemd/blob/v255/src/basic/string-util.c). Those characters remain literal in other Linux arguments/environment values and in Darwin executable paths. Unified configuration/state paths use exact `--data-dir`. Standard split Linux `saga-rydd/config.toml` and `saga-rydd` state paths instead freeze `XDG_CONFIG_HOME` and `XDG_STATE_HOME`. The control runtime path is frozen from `RYDD_RUNTIME_DIR`, defaulting to `/tmp`. These are child environment additions, not a complete sanitized manager environment or a manager installation-directory choice.
+
+JSON uses the standard API 1 `service` envelope and contract `service_descriptor_preview_v1`, with platform, declared `manager_profile`, fixed managed label/filename, descriptor content, executable/configuration/state/runtime paths, exact `argv` and `env`, and false `installation_performed`, `activation_performed` and `scanning_enabled`. Those flags describe this preview, not the state of an existing service. Paths are valid UTF-8 under this narrow profile. Descriptor output is capped at 64 KiB. Human output shows the same scope and proposed content. Capabilities add `service_descriptor_previews`; `service_installation` stays false.
+
+The launchd profile uses literal XML `ProgramArguments`, background process classification, low-priority I/O, failure-only restart and finite restart/stop delays. The declared `systemd_user_v255` profile uses quoted whole items, a colon command prefix to disable dollar expansion, doubled percent specifiers, `Type=exec`, failure-only restart, finite delays and supplemental CPU/I/O priority hints. Neither profile detects an installed manager or proves effective priority. Both render plain `daemon`; the future worker would perform normal root/recovery bookkeeping without a scanner.
+
+Publishing a descriptor in a login service directory can affect future logins. Later lifecycle adapters must distinguish publication, enablement and start outcomes, verify exact managed content, preserve user configuration/history and externally supplied executables, and disclose partial outcomes. Exact manager stop/unregistration is needed to suppress a failure restart. Generated rendering or syntax validation does not complete native user-manager/login/logout acceptance.
+
 ## Foreground manual scans
 
 `scan -d PATH [-s MS | --now] [--json]` scans one selected folder without initialization or service installation. Long aliases are `--directory` and `--sleep`. Default spacing is 10 ms between child-entry inspection starts; accepted spacing is 0–60000 ms. `--now` means zero spacing. Combining `--now` with a sleep flag, or both aliases of an option, is invalid usage. Relative and home-relative paths normalize to absolute lexical paths; aliases/symlinks are not canonicalized into the same inventory key.

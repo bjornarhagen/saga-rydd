@@ -544,6 +544,8 @@ Initial release targets: macOS arm64/amd64 and Linux arm64/amd64. Select minimum
 
 Installation should include status, diagnostic, stop and uninstall commands. Uninstall removes the service/executable while explicitly preserving configuration, inventory and quarantine unless the user chooses otherwise.
 
+P1-09a begins with an idle-only descriptor preview: exact absolute executable, configuration/state/runtime scope and literal launchd/systemd arguments. Unified paths use `--data-dir`; supported standard split Linux paths freeze XDG bases without conflating child configuration with the manager's unit search path. Render plain `daemon`, with no scanner activation. Preview installs nothing, invokes no manager and opens no source/configuration/state contents. Later adapters must distinguish descriptor publication, future-login enablement and explicit start; stop/uninstall use the exact manager operation, retain user data and externally supplied executables, refuse foreign descriptors and disclose partial outcomes. Native user-manager lifecycle acceptance remains a separate gate.
+
 ## 9. Proposed terminal workflow
 
 The terminal command is `rydd`; the public repository/module is `github.com/bjornarhagen/saga-rydd`.

@@ -454,7 +454,7 @@ func TestDockerMetadataCLIErrorEnvelopePriorityAndCapabilities(t *testing.T) {
 		if args[0] == "--help" && !strings.Contains(out.String(), "docker --metadata --context NAME [--json]") {
 			t.Fatal("help lacks explicit finite Docker scope", out.String())
 		}
-		if args[0] == "capabilities" && !strings.Contains(out.String(), "report, docker, review") {
+		if args[0] == "capabilities" && !strings.Contains(out.String(), ", docker,") {
 			t.Fatal("human capabilities omitted Docker", out.String())
 		}
 		if args[0] == "--json" {
