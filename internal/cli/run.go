@@ -26,6 +26,8 @@ Commands:
   scan -d PATH [-s MS | --now] [--compact | --detailed] [--json]                Foreground metadata scan (default delay 10 ms)
   init --root /path [--root /another] [--exclude /path]  Create config and state
   config check                                         Validate configuration
+  exclude --list / --add ABSOLUTE_PATH / --remove ABSOLUTE_PATH [--json]
+                                                     Edit existing exclusions for later invocations
   state init                                           Initialize/migrate state from existing config
   status [--json]                                       Read saved state summary
   daemon [--experimental-scan]                         Run the worker (scanning opt-in for fixtures)
@@ -116,7 +118,7 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 		return 0
 	}
 	if remaining[0] == "capabilities" && len(remaining) == 1 {
-		fmt.Fprintln(out, "Rydd commands: init, config check, state init, status, scan, measure, report, review, plan, ignore, journal, hashes, hash, pause, resume, stop, capabilities.\nAdd --json for versioned machine output on finite commands. review prompts in text mode; daemon uses foreground text output.\nOther commands are noninteractive. Exit codes: 0 success, 1 operation failed, 2 invalid usage.\nScanning is experimental. Deletion, duplicate detection, and full resource controls are unavailable.")
+		fmt.Fprintln(out, "Rydd commands: init, config check, exclude, state init, status, scan, measure, report, review, plan, ignore, journal, hashes, hash, pause, resume, stop, capabilities.\nAdd --json for versioned machine output on finite commands. review prompts in text mode; daemon uses foreground text output.\nOther commands are noninteractive. Exit codes: 0 success, 1 operation failed, 2 invalid usage.\nScanning is experimental. Deletion, duplicate detection, and full resource controls are unavailable.")
 		return 0
 	}
 	paths, err := config.ResolvePaths(*dataDir)
@@ -132,6 +134,15 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 	switch remaining[0] {
 	case "init":
 		err = initialize(ctx, remaining[1:], paths, home, out, errOut)
+	case "exclude":
+		var r ExcludeReport
+		r, err = exclude(ctx, remaining[1:], paths, home)
+		if err == nil {
+			err = printExcludeResult(out, r, paths)
+		}
+		if err == nil && ctx.Err() != nil {
+			err = fmt.Errorf("%s; reply was canceled: %w", excludeReplyMessage(r, paths), ctx.Err())
+		}
 	case "config":
 		if len(remaining) != 2 || remaining[1] != "check" {
 			fmt.Fprintln(errOut, "Usage: rydd config check")
@@ -237,9 +248,10 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 			return 2
 		}
 		var c config.Config
-		c, err = config.Load(paths.ConfigFile, home)
+		var startupCheck func(context.Context) error
+		c, startupCheck, err = loadDaemonConfiguration(ctx, paths, home)
 		if err == nil {
-			err = worker.Run(ctx, paths.StateDir, c, worker.Options{ExperimentalScan: *experimental, PrivatePaths: []string{paths.ConfigFile}, Ready: func(s worker.Snapshot) {
+			err = worker.Run(ctx, paths.StateDir, c, worker.Options{ExperimentalScan: *experimental, PrivatePaths: []string{paths.ConfigFile}, StartupCheck: startupCheck, Ready: func(s worker.Snapshot) {
 				fmt.Fprintf(out, "Worker ready (PID %d, paused: %t, experimental scan: %t).\n", s.PID, s.Paused, *experimental)
 			}})
 		}
@@ -267,7 +279,8 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 		var missing missingScanError
 		var missingHash missingHashError
 		var missingIgnore ignoreUnavailableError
-		if errors.As(err, &missing) || errors.As(err, &missingHash) || errors.As(err, &missingIgnore) {
+		var missingExclude excludeUnavailableError
+		if errors.As(err, &missing) || errors.As(err, &missingHash) || errors.As(err, &missingIgnore) || errors.As(err, &missingExclude) {
 			fmt.Fprintln(errOut, err)
 		} else if errors.Is(err, os.ErrNotExist) {
 			fmt.Fprintf(errOut, "Not initialized or unavailable: %v\nUse rydd init --root /path for new configuration, or rydd state init with existing configuration.\n", err)
@@ -275,7 +288,7 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 			fmt.Fprintln(errOut, err)
 		}
 		var usage usageError
-		if errors.As(err, &usage) {
+		if errors.As(err, &usage) || errors.Is(err, config.ErrExclusionInput) {
 			return 2
 		}
 		return 1

@@ -47,6 +47,9 @@ type Options struct {
 	Ready            func(Snapshot)
 	ExperimentalScan bool
 	PrivatePaths     []string
+	// StartupCheck runs under the state writer lock before roots, scanner or
+	// recovery use the captured settings. It can refuse a stale configuration.
+	StartupCheck func(context.Context) error
 	// Overrides support small deterministic lifecycle fixtures, not public flags.
 	Interval, WorkDuration time.Duration
 }
@@ -83,6 +86,11 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 		return err
 	}
 	defer w.Close()
+	if options.StartupCheck != nil {
+		if err := options.StartupCheck(ctx); err != nil {
+			return err
+		}
+	}
 	if err := w.SyncRoots(ctx, cfg.Roots); err != nil {
 		return err
 	}

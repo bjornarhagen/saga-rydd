@@ -8,7 +8,7 @@ Rydd will gradually discover developer clutter and duplicate files, explain what
 
 For humans and AI: readable output by default, versioned JSON with `--json`, and `rydd capabilities --json` for discovery. Live status also reports scanner metadata API counters to help inspect background work. See the [CLI contract](docs/cli.md).
 
-**Next milestone: reversible finding controls.** The generated owner read-only walkthrough and human-output corrections passed, including guided review and separately consented fresh hashing with historical comparisons. Exact finding dismissal and persistent exclusions are next. Linux clone acceptance remains open. Cleanup needs an operation that preserves the exact reviewed source object and ancestor scope; the reviewed rename operations do not provide that boundary. See [ADR 003](docs/decisions/003-source-namespace-boundary.md), the [current handoff](PROGRESS.md#current-state) and [trial lessons](docs/mvp-trial-results.md). Numbered phases are not a strict work order, and the full plan remains unfinished.
+**Next milestone: saved build-output reports.** The generated owner read-only walkthrough and human-output corrections passed, including guided review and separately consented fresh hashing with historical comparisons. Exact finding dismissal and persistent exclusion controls are available. Linux clone acceptance remains open. Cleanup needs an operation that preserves the exact reviewed source object and ancestor scope; the reviewed rename operations do not provide that boundary. See [ADR 003](docs/decisions/003-source-namespace-boundary.md), the [current handoff](PROGRESS.md#current-state) and [trial lessons](docs/mvp-trial-results.md). Numbered phases are not a strict work order, and the full plan remains unfinished.
 
 ## Scan a chosen folder
 
@@ -77,6 +77,20 @@ Review the preview before saving it. Use the finding's full `node-modules-v1:ROO
 Dismissal hides only this exact historical finding from candidate reports and guided review. It preserves its saved identities, timestamps, age filter and qualified size evidence. Changed observations or a different age filter make it appear again, including a later rescan of unchanged files. `--include-dismissed` shows the eligible findings for inspection and names included dismissed references. Filtering keeps the original page and cursor; a fully dismissed page can be empty and still have a next page. Undo restores visibility without deleting the historical decision.
 
 Show, undo and exact save retries work with the source and inventory offline. A new save requires matching saved inventory. No source files are read, moved or deleted. Dismissal creates no permanent exclusion, keep policy, read consent or cleanup permission. Up to 128 distinct immutable dismissal records fit in the private plan store; an undone exact record stays undone on save retries.
+
+## Configure exclusions for later scans
+
+```sh
+rydd exclude --list
+rydd exclude --add /path/to/project/cache
+rydd exclude --remove /path/to/project/cache
+```
+
+These commands require existing valid configuration. Editing also requires the configured state and its existing writer lock. An active worker, including a paused worker, causes an edit to fail; stop it explicitly first. Missing state requires a separate `state init`. The editor creates no state and starts no scan or worker.
+
+Use one mode and an absolute path. Paths are normalized without opening them; they need not exist. Add is unchanged when the exact exclusion is present. Remove deletes all exact matches while keeping other exclusions. A path that fully excludes a configured root is refused. These controls support up to 128 roots and exclusions and preserve the other setting values; an actual edit rewrites TOML formatting and comments.
+
+Later invocations use the updated exclusions. Active manual scans and hash steps retain their captured settings. Saved reports, selections, dismissals and hash observations stay unchanged. Keep the same global data directory throughout. Add `--json` for the exact result and configuration digest. If a reply is lost or publication is uncertain, use `exclude --list` to inspect the configuration before retrying.
 
 ## View same-size saved files
 
