@@ -437,7 +437,7 @@ rydd --data-dir /path/to/private/state service preview --executable /absolute/pa
 
 This proposes an idle-only launchd or systemd user descriptor. It binds the exact executable, configuration, state and control-runtime paths. It renders plain `daemon`, with no scanner. It opens no configuration, state or executable contents, writes no descriptor and invokes no service manager. The output declares a supported profile; installed support and future executable identity are unverified.
 
-Installing a descriptor in a login service directory can affect future logins. Exact artifact installation/status is available below; start, stop and uninstall adapters remain separate work. The worker would update normal root/recovery bookkeeping when started. Scheduling hints supplement resource pacing; they do not prove effective CPU/I/O priority or hourly limits. See the [service preview contract](docs/cli.md#user-service-descriptor-preview).
+Installing a descriptor in a login service directory can affect future logins. Exact artifact installation/status is available below; explicit start/stop requests are available below; descriptor removal remains separate work. The worker would update normal root/recovery bookkeeping when started. Scheduling hints supplement resource pacing; they do not prove effective CPU/I/O priority or hourly limits. See the [service preview contract](docs/cli.md#user-service-descriptor-preview).
 
 ## Install or inspect an idle service descriptor
 
@@ -448,7 +448,16 @@ rydd service status --executable /absolute/path/to/rydd
 
 Use the same executable and global data directory on every invocation. These commands publish or inspect one exact descriptor. They preserve user configuration, inventory/history and the selected executable. Exact retries are unchanged; foreign/different artifacts and unsafe paths refuse. A failed reply can follow publication: inspect status before retrying.
 
-macOS publication can start the idle worker at a future login. Linux install checks current manager directory visibility but does not enable/start the unit. No scanning command is issued. Artifact presence and manager visibility do not prove runtime readiness. Connecting to Linux’s selected local broker socket can activate the broker; destination activation is suppressed. Native installed-manager/login/logout acceptance and explicit runtime controls remain open. See [installation/status scope](docs/cli.md#exact-user-service-artifact-installation-and-status).
+macOS publication can start the idle worker at a future login. Linux install checks current manager directory visibility but does not enable/start the unit. No scanning command is issued. Artifact presence and manager visibility do not prove runtime readiness. Connecting to Linux’s selected local broker socket can activate the broker; destination activation is suppressed. Native installed-manager/login/logout acceptance and verified runtime state remain open. See [installation/status scope](docs/cli.md#exact-user-service-artifact-installation-and-status).
+
+## Request service start or stop
+
+```sh
+rydd service start --executable /absolute/path/to/rydd
+rydd service stop --executable /absolute/path/to/rydd
+```
+
+Use the exact installed spec and selected data directory. These send one explicit request for the idle service. A queued Linux job or successful macOS client reply is historical acceptance evidence; running/stopped state remains unknown. Linux checks declared loaded settings; macOS addresses the fixed current-user managed label without loaded-origin proof. Normal manager dependencies and preflight bookkeeping can be affected. Stop preserves the descriptor and its future-login effects. Inspect an uncertain reply before deciding to retry. See the [request contract](docs/cli.md#explicit-idle-service-start-and-stop-requests).
 
 ## Try the experimental scanner
 

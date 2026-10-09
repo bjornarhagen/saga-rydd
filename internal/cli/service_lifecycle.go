@@ -54,8 +54,8 @@ func serviceInstallSpec(paths config.Paths, executable, directory string, host s
 }
 
 func serviceLifecycleArguments(args []string) (action, executable, directory string, err error) {
-	if len(args) == 0 || (args[0] != "install" && args[0] != "status") {
-		return "", "", "", usageError{errors.New("use service preview, install or status with --executable ABSOLUTE_PATH")}
+	if len(args) == 0 || (args[0] != "install" && args[0] != "status" && args[0] != "start" && args[0] != "stop") {
+		return "", "", "", usageError{errors.New("use service preview, install, status, start or stop with --executable ABSOLUTE_PATH")}
 	}
 	action = args[0]
 	flags := flag.NewFlagSet("service "+action, flag.ContinueOnError)
@@ -74,7 +74,7 @@ func serviceLifecycleArguments(args []string) (action, executable, directory str
 		}
 	}
 	if flags.NArg() != 0 || counts["executable"] != 1 || counts["directory"] > 1 || executable == "" || (counts["directory"] == 1 && directory == "") {
-		return "", "", "", usageError{errors.New("service install/status requires one --executable ABSOLUTE_PATH and at most one --directory ABSOLUTE_PATH")}
+		return "", "", "", usageError{errors.New("service requires one --executable ABSOLUTE_PATH and at most one --directory ABSOLUTE_PATH")}
 	}
 	return action, executable, directory, nil
 }
@@ -95,7 +95,11 @@ func dispatchService(ctx context.Context, args []string, paths config.Paths) (an
 		return nil, errors.New("user home directory is unavailable for service placement")
 	}
 	host := serviceHost{GOOS: runtime.GOOS, HomeDir: homeDir, XDGConfigHome: os.Getenv("XDG_CONFIG_HOME"), XDGRuntimeDir: os.Getenv("XDG_RUNTIME_DIR"), UID: os.Geteuid()}
-	return runServiceLifecycle(ctx, action, serviceInstallSpec(paths, executable, directory, host))
+	spec := serviceInstallSpec(paths, executable, directory, host)
+	if action == "start" || action == "stop" {
+		return runServiceRuntime(ctx, action, spec)
+	}
+	return runServiceLifecycle(ctx, action, spec)
 }
 
 func runServiceLifecycle(ctx context.Context, action string, spec service.InstallSpec) (service.LifecycleResult, error) {
@@ -115,6 +119,9 @@ func runServiceLifecycle(ctx context.Context, action string, spec service.Instal
 func printServiceResult(out io.Writer, result any) error {
 	if descriptor, ok := result.(service.Descriptor); ok {
 		return printServicePreview(out, descriptor)
+	}
+	if request, ok := result.(service.RuntimeResult); ok {
+		return printServiceRuntime(out, request)
 	}
 	r, ok := result.(service.LifecycleResult)
 	if !ok {
@@ -144,6 +151,13 @@ func printServiceResult(out io.Writer, result any) error {
 }
 
 func serviceReplyMessage(result any) string {
+	if r, ok := result.(service.RuntimeResult); ok && r.DescriptorPath != "" {
+		message := fmt.Sprintf("Service %s request status is %s for managed label %q. Request attempted: %t. Running/stopped state is unverified; do not automatically retry an uncertain request. Descriptor: %q. Configuration, inventory/history and executable were preserved", r.Action, r.RequestStatus, r.Label, r.RequestAttempted, r.DescriptorPath)
+		if r.UnitLoadAttempted {
+			message += "; preflight unit loading was attempted and manager bookkeeping can change"
+		}
+		return message
+	}
 	if r, ok := result.(service.LifecycleResult); ok && r.DescriptorPath != "" {
 		var message strings.Builder
 		fmt.Fprintf(&message, "Service artifact publication is %s at %q. Inspect service status with the same scope before retrying; no enable/start/scanning command was issued", r.Publication, r.DescriptorPath)
@@ -162,6 +176,10 @@ func serviceErrorCode(err error) string {
 	switch {
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return "canceled"
+	case errors.Is(err, service.ErrRuntimeOutcome):
+		return "service_outcome_unknown"
+	case errors.Is(err, service.ErrRuntimeBinding):
+		return "service_runtime_binding"
 	case errors.Is(err, service.ErrArtifactPublication):
 		return "service_outcome_unknown"
 	case errors.Is(err, service.ErrArtifactConflict):
@@ -195,12 +213,15 @@ func serviceMachineFailure(out, errOut io.Writer, result any, err error) int {
 		return machineFailure(out, errOut, "service", "invalid_arguments", err.Error(), 2)
 	}
 	code := serviceErrorCode(err)
-	message := "Service operation failed; inspect the artifact result before retrying"
+	message := "Service operation failed; inspect the recorded result before retrying"
 	if code == "canceled" {
-		message = "Service operation was canceled; inspect the artifact result before retrying"
+		message = "Service operation was canceled; inspect the recorded result before retrying"
 	}
 	envelope := map[string]any{"api_version": APIVersion, "ok": false, "command": "service", "error": map[string]string{"code": code, "message": message}}
 	if r, ok := result.(service.LifecycleResult); ok && r.DescriptorPath != "" {
+		envelope["service"] = r
+	}
+	if r, ok := result.(service.RuntimeResult); ok && r.DescriptorPath != "" {
 		envelope["service"] = r
 	}
 	// Use zero only to distinguish successful emission from a failed write;
