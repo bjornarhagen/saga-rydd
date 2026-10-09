@@ -38,6 +38,8 @@ Commands:
                                                      Request idle-service start or stop; runtime unknown
   service uninstall --executable ABSOLUTE_PATH [--directory ABSOLUTE_PATH] [--json]
                                                      Remove the exact descriptor; does not stop a service
+  service enable-login/disable-login --executable ABSOLUTE_PATH [--directory ABSOLUTE_PATH] [--json]
+                                                     Change one Linux login link; runtime unknown
   pause / resume                                       Persistently pause or resume work
   stop                                                 Request graceful worker shutdown
   ignore --preview -d ROOT [--min-age-days N] FINDING_ID [--json]

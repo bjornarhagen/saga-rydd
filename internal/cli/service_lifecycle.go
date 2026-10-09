@@ -54,8 +54,8 @@ func serviceInstallSpec(paths config.Paths, executable, directory string, host s
 }
 
 func serviceLifecycleArguments(args []string) (action, executable, directory string, err error) {
-	if len(args) == 0 || (args[0] != "install" && args[0] != "status" && args[0] != "start" && args[0] != "stop" && args[0] != "uninstall") {
-		return "", "", "", usageError{errors.New("use service preview, install, status, start, stop or uninstall with --executable ABSOLUTE_PATH")}
+	if len(args) == 0 || (args[0] != "install" && args[0] != "status" && args[0] != "start" && args[0] != "stop" && args[0] != "uninstall" && args[0] != "enable-login" && args[0] != "disable-login") {
+		return "", "", "", usageError{errors.New("use service preview, install, status, start, stop, uninstall, enable-login or disable-login with --executable ABSOLUTE_PATH")}
 	}
 	action = args[0]
 	flags := flag.NewFlagSet("service "+action, flag.ContinueOnError)
@@ -102,6 +102,9 @@ func dispatchService(ctx context.Context, args []string, paths config.Paths) (an
 	if action == "uninstall" {
 		return runServiceRemoval(ctx, spec)
 	}
+	if action == "enable-login" || action == "disable-login" {
+		return runServiceLoginLink(ctx, action, spec)
+	}
 	return runServiceLifecycle(ctx, action, spec)
 }
 
@@ -128,6 +131,9 @@ func printServiceResult(out io.Writer, result any) error {
 	}
 	if removal, ok := result.(service.RemovalResult); ok {
 		return printServiceRemoval(out, removal)
+	}
+	if link, ok := result.(service.LoginLinkResult); ok {
+		return printServiceLoginLink(out, link)
 	}
 	r, ok := result.(service.LifecycleResult)
 	if !ok {
@@ -157,6 +163,12 @@ func printServiceResult(out io.Writer, result any) error {
 }
 
 func serviceReplyMessage(result any) string {
+	if r, ok := result.(service.LoginLinkResult); ok {
+		if r.DescriptorPath == "" {
+			return "Selected login link command did not attempt a link change"
+		}
+		return serviceLoginLinkReplyMessage(r)
+	}
 	if r, ok := result.(service.RemovalResult); ok && r.DescriptorPath != "" {
 		return fmt.Sprintf("Descriptor removal status is %s at %q. Unlink attempted: %t; completed: %t; directory sync completed: %t. Inspect the artifact with the same scope before retrying. Runtime remains unknown; no stop, disable or reload was requested. Configuration, inventory/history, executable, directories and coordinator lock were preserved", r.RemovalStatus, r.DescriptorPath, r.RemovalAttempted, r.UnlinkCompleted, r.SyncCompleted)
 	}
@@ -189,6 +201,12 @@ func serviceErrorCode(err error) string {
 		return "service_outcome_unknown"
 	case errors.Is(err, service.ErrArtifactRemoval):
 		return "service_outcome_unknown"
+	case errors.Is(err, service.ErrLoginLinkOutcome):
+		return "service_outcome_unknown"
+	case errors.Is(err, service.ErrLoginLinkConflict):
+		return "service_login_link_conflict"
+	case errors.Is(err, service.ErrLoginLinkChanged):
+		return "service_login_link_changed"
 	case errors.Is(err, service.ErrRuntimeBinding):
 		return "service_runtime_binding"
 	case errors.Is(err, service.ErrArtifactPublication):
@@ -236,6 +254,9 @@ func serviceMachineFailure(out, errOut io.Writer, result any, err error) int {
 		envelope["service"] = r
 	}
 	if r, ok := result.(service.RemovalResult); ok && r.DescriptorPath != "" {
+		envelope["service"] = r
+	}
+	if r, ok := result.(service.LoginLinkResult); ok && r.DescriptorPath != "" {
 		envelope["service"] = r
 	}
 	// Use zero only to distinguish successful emission from a failed write;

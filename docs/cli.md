@@ -388,6 +388,23 @@ JSON `service` uses `service_descriptor_removal_v1`. `removal_status` is `not_re
 
 No manager, stop, disable, reload or scanning request occurs. `running`, `stopped` and global `future_login_may_start` remain null; runtime/loaded-origin verification stays false. A loaded or registered service can continue, and external enablement links remain. Request the Rydd stop adapter before removal if wanted because it requires the exact descriptor; acknowledgment still does not prove shutdown. After removal, use manager-specific inspection/action or exact reinstall before that adapter. `service_descriptor_removal` advertises this artifact-only scope. Installed-manager/login/logout acceptance and packaging executable removal remain open.
 
+## Selected Linux login dependency link
+
+```sh
+rydd service enable-login --executable /absolute/path/to/rydd [--directory /exact/user/service/directory] [--json]
+rydd service disable-login --executable /absolute/path/to/rydd [--directory /exact/user/service/directory] [--json]
+```
+
+These finite modes require native Linux, the exact existing idle descriptor and its stable coordinator lock. They address only `default.target.wants/<fixed service filename>` in the selected service directory, with the exact absolute descriptor as its target. Enable creates the absent link exclusively, or leaves an exact matching link unchanged. It can create only the immediate wants directory. Disable initializes nothing and removes only a matching owned single-link symlink. A foreign, repointed or changed link refuses. Every other link, existing directory, descriptor, executable and saved history is preserved.
+
+The creator of a matching link is unknown. An identical manually created link at this exact selected name is within the command's scope. This is a cooperating-user metadata operation, not authentication against deliberate same-user namespace replacement or original-source cleanup authority.
+
+Preflight pins the current manager owner, checks typed UnitPath and declared loaded execution/environment bindings, and can request LoadUnit. At most seven fixed bounded helper calls and link mutation/check/sync share one cooperative five-second deadline. The owner, socket, descriptor, lock and selected path evidence are rechecked around the change. Unit loading can change manager bookkeeping, and connecting can activate the local broker. No manager enable/disable, start/stop or reload request occurs. Global enablement, current loaded-target dependencies, alternate login links, lingering and next-login behavior remain unknown. A loaded target may need a later load or reload to use the changed dependency.
+
+JSON `service` uses `service_linux_login_link_v1`, with scope `selected_default_target_dependency`. It binds the descriptor specification, manager observations and exact `link_path`/`link_target`. `link_status` is `unexamined`, `absent` or `exact`; nullable `link_present` and `link_observed_at` describe the last individual check, which can precede a later error. `change_status` is `not_requested`, `not_needed`, `changed` or `unknown`. Keep `change_attempted`, `change_completed` (the mutation syscall), nullable held-link `removal_observed`, link-parent `sync_completed` and created-directory-parent `directory_sync_completed` separate. Later errors retain known partial effects in the normal error envelope; cancellation takes priority. After an uncertain or lost reply, inspect the exact link and service artifact with the same scope before deciding to retry.
+
+`enabled`, `running`, `stopped` and `future_login_may_start` remain null. Origin, effective enablement, loaded-origin and runtime verification remain false. Capabilities advertise `service_linux_login_link_controls`; `service_enablement_verification` remains false. Disable the selected link before descriptor removal when wanted, because these commands require that descriptor. Native installed-manager/login/logout acceptance remains open.
+
 ## Foreground manual scans
 
 `scan -d PATH [-s MS | --now] [--json]` scans one selected folder without initialization or service installation. Long aliases are `--directory` and `--sleep`. Default spacing is 10 ms between child-entry inspection starts; accepted spacing is 0–60000 ms. `--now` means zero spacing. Combining `--now` with a sleep flag, or both aliases of an option, is invalid usage. Relative and home-relative paths normalize to absolute lexical paths; aliases/symlinks are not canonicalized into the same inventory key.

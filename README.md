@@ -4,7 +4,7 @@ A quiet storage cleanup companion for macOS and Linux. Part of Saga.
 
 Rydd will gradually discover developer clutter and duplicate files, explain what can be removed, and help reclaim space through reviewed actions or explicitly enabled automatic policies.
 
-**Status: experimental read-only inventory and explicit hashing.** The worker can scan explicitly selected fixture directories in bounded, resumable batches and save metadata, skip reasons and directory reconciliation markers in SQLite. Use `scan -d PATH` for a foreground scan, or `daemon --experimental-scan` for configured roots; ordinary `daemon` stays idle. Durable dispatch cadence, a daily batch cap, charged scanner API allowances, child-entry pacing and WAL backpressure are enforced; saved largest-file and selected-directory size reports and review-required `node_modules` candidates are available. Explicit full-file hashing requires separate exact consent and one bounded invocation at a time. Process CPU observations, cooperative dispatch backoff and source-thread priority requests are live; exact idle-only service descriptors can be installed and inspected. Full CPU/I/O/power quotas, supervisor runtime controls and cleanup remain pending. Nothing runs in the background when you clone, build or initialize this repository.
+**Status: experimental read-only inventory and explicit hashing.** The worker can scan explicitly selected fixture directories in bounded, resumable batches and save metadata, skip reasons and directory reconciliation markers in SQLite. Use `scan -d PATH` for a foreground scan, or `daemon --experimental-scan` for configured roots; ordinary `daemon` stays idle. Durable dispatch cadence, a daily batch cap, charged scanner API allowances, child-entry pacing and WAL backpressure are enforced; saved largest-file and selected-directory size reports and review-required `node_modules` candidates are available. Explicit full-file hashing requires separate exact consent and one bounded invocation at a time. Process CPU observations, cooperative dispatch backoff and source-thread priority requests are live; exact idle-only service descriptors can be installed and inspected, with explicit start/stop requests and descriptor removal. Full CPU/I/O/power quotas, runtime verification and cleanup remain pending. Nothing runs in the background when you clone, build or initialize this repository.
 
 For humans and AI: readable output by default, versioned JSON with `--json`, and `rydd capabilities --json` for discovery. Live status also reports scanner metadata API counters to help inspect background work. See the [CLI contract](docs/cli.md).
 
@@ -458,6 +458,15 @@ rydd service stop --executable /absolute/path/to/rydd
 ```
 
 Use the exact installed spec and selected data directory. These send one explicit request for the idle service. A queued Linux job or successful macOS client reply is historical acceptance evidence; running/stopped state remains unknown. Linux checks declared loaded settings; macOS addresses the fixed current-user managed label without loaded-origin proof. Normal manager dependencies and preflight bookkeeping can be affected. Stop preserves the descriptor and its future-login effects. Inspect an uncertain reply before deciding to retry. See the [request contract](docs/cli.md#explicit-idle-service-start-and-stop-requests).
+
+## Change the selected Linux login link
+
+```sh
+rydd service enable-login --executable /absolute/path/to/rydd
+rydd service disable-login --executable /absolute/path/to/rydd
+```
+
+On native Linux, these commands create or remove only the fixed `default.target.wants` link to the exact existing descriptor. They preserve other links, the descriptor and user data. A matching manually created link at this selected name is also in scope; its origin is unknown. No start, stop or reload request is sent. Preflight can load the unit and change manager bookkeeping. Effective enablement, running state and next-login behavior remain unverified. Disable this link before removing its required descriptor when wanted. See the [selected-link contract](docs/cli.md#selected-linux-login-dependency-link).
 
 ## Remove the managed service descriptor
 

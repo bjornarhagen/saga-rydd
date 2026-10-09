@@ -24,6 +24,8 @@ sed 's/work_seconds = 30/work_seconds = 1/; s/interval_seconds = 300/interval_se
 cat "$fixture/config.tmp" >"$fixture/state/config.toml"
 "$binary" --data-dir "$fixture/state" daemon --experimental-scan >"$fixture/worker.log" 2>&1 &
 worker_pid=$!
+# Source batches and saved-only reconciliation each consume paced dispatches.
+# Keep a finite 300-observation ceiling while allowing that work to drain.
 attempts=0
 while :; do
     rydd status --json >"$fixture/status.json"
@@ -32,7 +34,7 @@ while :; do
        grep -q '"wait_reason":"inventory_revisit"' "$fixture/status.json" && \
        grep -q '"running_jobs":0' "$fixture/status.json"; then break; fi
     attempts=$((attempts + 1))
-    if [ "$attempts" -ge 100 ] || ! kill -0 "$worker_pid" 2>/dev/null; then
+    if [ "$attempts" -ge 300 ] || ! kill -0 "$worker_pid" 2>/dev/null; then
         cat "$fixture/status.json" "$fixture/worker.log" >&2
         exit 1
     fi
