@@ -73,6 +73,17 @@ This mode requires an existing manual scan of that exact folder. It recognizes a
 
 The report reads saved metadata only. It shows qualified logical/allocated sizes and recognition evidence. It does not check artifact contents, project use or whether a build can be reproduced. Custom and unsupported layouts are excluded. There is no cleanup action, saved plan or dismissal for this category. See the [Cargo report contract](docs/cli.md#saved-cargo-build-output).
 
+## Read selected Docker metadata
+
+```sh
+rydd docker --metadata --context NAME
+rydd docker --metadata --context NAME --json
+```
+
+Choose an exact existing Docker context explicitly. This command resolves its endpoint once and accepts only the supported canonical Unix socket form. It makes four fixed metadata requests on one connection and checks the daemon ID and version before and after image/container observations. It does not reconnect. Missing Docker, unavailable sockets and unsupported or oversized replies fail without a partial report.
+
+The report shows IDs, tags/names, creation dates and container state. It measures no sizes or savings, saves no Rydd history and provides no cleanup action. Volumes, builders and cache are outside this command. The supported profile is Linux Docker Engine 25+ with API 1.44; installed-Docker acceptance remains open. A Unix endpoint does not establish physical locality or authenticate the daemon. The installed CLI, its configuration and daemon extensions remain trust boundaries. See the [Docker metadata contract](docs/cli.md#selected-docker-metadata).
+
 ## Dismiss one exact saved finding
 
 ```sh

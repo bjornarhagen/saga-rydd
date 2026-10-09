@@ -77,6 +77,7 @@ Commands:
   report --candidates [--include-dismissed] [--min-age-days N] [--cursor TOKEN] [--json]  Node modules review candidates
   report --build-output -d ROOT [--min-age-days N] [--cursor TOKEN] [--json]
                                                      Saved Cargo target layouts; review required
+  docker --metadata --context NAME [--json]            Finite image/container metadata; no cleanup
   measure -d PATH [--batches N] [--json]               Resume saved compact size calculations
   review -d PATH [--min-age-days N]                   Choose a numbered subset; save unapproved evidence
   review --hashes                                     Review numbered historical hashes; no saved choice
@@ -120,7 +121,7 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 		return 0
 	}
 	if remaining[0] == "capabilities" && len(remaining) == 1 {
-		fmt.Fprintln(out, "Rydd commands: init, config check, exclude, state init, status, scan, measure, report, review, plan, ignore, journal, hashes, hash, pause, resume, stop, capabilities.\nAdd --json for versioned machine output on finite commands. review prompts in text mode; daemon uses foreground text output.\nOther commands are noninteractive. Exit codes: 0 success, 1 operation failed, 2 invalid usage.\nScanning is experimental. Deletion, duplicate detection, and full resource controls are unavailable.")
+		fmt.Fprintln(out, "Rydd commands: init, config check, exclude, state init, status, scan, measure, report, docker, review, plan, ignore, journal, hashes, hash, pause, resume, stop, capabilities.\nAdd --json for versioned machine output on finite commands. review prompts in text mode; daemon uses foreground text output.\nOther commands are noninteractive. Exit codes: 0 success, 1 operation failed, 2 invalid usage.\nScanning is experimental. Deletion, duplicate detection, and full resource controls are unavailable.")
 		return 0
 	}
 	paths, err := config.ResolvePaths(*dataDir)
@@ -134,6 +135,12 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 		return 1
 	}
 	switch remaining[0] {
+	case "docker":
+		var r DockerMetadataReport
+		r, err = dockerMetadata(ctx, remaining[1:])
+		if err == nil {
+			err = printDockerMetadataReport(ctx, out, r)
+		}
 	case "init":
 		err = initialize(ctx, remaining[1:], paths, home, out, errOut)
 	case "exclude":
@@ -291,7 +298,8 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 		var missingHash missingHashError
 		var missingIgnore ignoreUnavailableError
 		var missingExclude excludeUnavailableError
-		if errors.As(err, &missing) || errors.As(err, &missingHash) || errors.As(err, &missingIgnore) || errors.As(err, &missingExclude) {
+		var missingDocker dockerMetadataError
+		if errors.As(err, &missing) || errors.As(err, &missingHash) || errors.As(err, &missingIgnore) || errors.As(err, &missingExclude) || errors.As(err, &missingDocker) {
 			fmt.Fprintln(errOut, err)
 		} else if errors.Is(err, os.ErrNotExist) {
 			fmt.Fprintf(errOut, "Not initialized or unavailable: %v\nUse rydd init --root /path for new configuration, or rydd state init with existing configuration.\n", err)
