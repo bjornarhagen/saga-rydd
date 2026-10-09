@@ -103,7 +103,7 @@ func (s *Store) nodeModulesFindingsSnapshot(ctx context.Context, token string, m
 		measurementNote,
 		"Selection diagnostics count only this page, with one first-match outcome per examined entry in displayed order. Exhausted saved entries do not mean scanning is complete or the machine is clean.",
 		pageNote,
-		"Findings are derived on demand, not persisted approvals. IDs are local inventory references, not action authorization; cleanup, dismissal and automatic policies are unavailable; review consent belongs to a separate exact saved plan.",
+		"Findings are derived on demand, not persisted approvals. IDs are local inventory references, not action authorization; cleanup and automatic policies are unavailable; review consent belongs to a separate exact saved plan. Exact historical dismissal is available separately for manual inventories.",
 	}}
 	if minimumAgeDays < 1 || minimumAgeDays > MaxFindingAgeDays {
 		return r, ErrFindingAge

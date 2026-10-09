@@ -31,6 +31,10 @@ Commands:
   daemon [--experimental-scan]                         Run the worker (scanning opt-in for fixtures)
   pause / resume                                       Persistently pause or resume work
   stop                                                 Request graceful worker shutdown
+  ignore --preview -d ROOT [--min-age-days N] FINDING_ID [--json]
+                                                     Preview one exact historical finding dismissal
+  ignore --save --from REQUEST_JSON [--json]           Save the exact preview; no cleanup permission
+  ignore --show ID / --undo ID [--json]                Show or undo a dismissal offline
   plan --preview [options] FINDING_ID...               Read-only exact-target cleanup preview
   plan --save [options] FINDING_ID...                  Save an unapproved selection
   plan --show PLAN_ID                                 Reopen a saved selection
@@ -68,7 +72,7 @@ Commands:
                                                      Record fixed full-file read consent; no content read
   hash --run APPROVAL_ID [--json]                    One guarded hash step (at most 1 MiB; no cleanup)
   hash --revoke APPROVAL_ID [--json]                 Revoke read consent; no source or inventory needed
-  report --candidates [--min-age-days N] [--cursor TOKEN] [--json]         Node modules review candidates
+  report --candidates [--include-dismissed] [--min-age-days N] [--cursor TOKEN] [--json]  Node modules review candidates
   measure -d PATH [--batches N] [--json]               Resume saved compact size calculations
   review -d PATH [--min-age-days N]                   Choose a numbered subset; save unapproved evidence
   review --hashes                                     Review numbered historical hashes; no saved choice
@@ -112,7 +116,7 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 		return 0
 	}
 	if remaining[0] == "capabilities" && len(remaining) == 1 {
-		fmt.Fprintln(out, "Rydd commands: init, config check, state init, status, scan, measure, report, review, plan, journal, hashes, hash, pause, resume, stop, capabilities.\nAdd --json for versioned machine output on finite commands. review prompts in text mode; daemon uses foreground text output.\nOther commands are noninteractive. Exit codes: 0 success, 1 operation failed, 2 invalid usage.\nScanning is experimental. Deletion, duplicate detection, and full resource controls are unavailable.")
+		fmt.Fprintln(out, "Rydd commands: init, config check, state init, status, scan, measure, report, review, plan, ignore, journal, hashes, hash, pause, resume, stop, capabilities.\nAdd --json for versioned machine output on finite commands. review prompts in text mode; daemon uses foreground text output.\nOther commands are noninteractive. Exit codes: 0 success, 1 operation failed, 2 invalid usage.\nScanning is experimental. Deletion, duplicate detection, and full resource controls are unavailable.")
 		return 0
 	}
 	paths, err := config.ResolvePaths(*dataDir)
@@ -168,6 +172,15 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 		r, err = plan(ctx, remaining[1:], paths)
 		if err == nil {
 			printPlan(out, r, paths)
+		}
+	case "ignore":
+		var r any
+		r, err = ignore(ctx, remaining[1:], paths)
+		if err == nil {
+			err = printIgnoreResult(out, r, paths)
+		}
+		if err == nil && ctx.Err() != nil {
+			err = fmt.Errorf("%s; reply was canceled: %w", ignoreReplyMessage(r), ctx.Err())
 		}
 	case "review":
 		err = review(ctx, remaining[1:], paths, in, out)
@@ -253,7 +266,8 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 	if err != nil {
 		var missing missingScanError
 		var missingHash missingHashError
-		if errors.As(err, &missing) || errors.As(err, &missingHash) {
+		var missingIgnore ignoreUnavailableError
+		if errors.As(err, &missing) || errors.As(err, &missingHash) || errors.As(err, &missingIgnore) {
 			fmt.Fprintln(errOut, err)
 		} else if errors.Is(err, os.ErrNotExist) {
 			fmt.Fprintf(errOut, "Not initialized or unavailable: %v\nUse rydd init --root /path for new configuration, or rydd state init with existing configuration.\n", err)

@@ -31,6 +31,7 @@ func report(ctx context.Context, args []string, paths config.Paths) (reportResul
 	cursor := f.String("cursor", "", "next page cursor")
 	minimumAge := f.Int("min-age-days", state.FindingAgeDays, "minimum candidate age in days (1–36500)")
 	candidates := f.Bool("candidates", false, "review old node_modules observations")
+	includeDismissed := f.Bool("include-dismissed", false, "include exact dismissed findings for inspection")
 	sameSize := f.Bool("same-size", false, "read bounded saved same-size file bands; contents unchecked")
 	minimumBytes := f.Int64("min-size-bytes", state.SameSizeMinimumBytes, "minimum same-size file bytes")
 	directory := f.String("directory", "", "measure a saved directory subtree")
@@ -41,11 +42,14 @@ func report(ctx context.Context, args []string, paths config.Paths) (reportResul
 	if f.NArg() != 0 || *limit < 1 || *limit > 200 {
 		return reportResult{}, usageError{errors.New("report accepts --limit 1–200 and --cursor TOKEN, or --directory ABSOLUTE_PATH")}
 	}
-	directorySet, pageSet, limitSet, ageSet, sizeSet, candidatesSet, sameSizeSet := false, false, false, false, false, false, false
+	directorySet, pageSet, limitSet, ageSet, sizeSet, candidatesSet, sameSizeSet, dismissalSet := false, false, false, false, false, false, false, false
 	directoryFlags := 0
 	f.Visit(func(v *flag.Flag) {
 		if v.Name == "candidates" {
 			candidatesSet = true
+		}
+		if v.Name == "include-dismissed" {
+			dismissalSet = true
 		}
 		if v.Name == "same-size" {
 			sameSizeSet = true
@@ -69,6 +73,9 @@ func report(ctx context.Context, args []string, paths config.Paths) (reportResul
 	})
 	if ageSet && !*candidates {
 		return reportResult{}, usageError{errors.New("--min-age-days requires --candidates")}
+	}
+	if dismissalSet && !*candidates {
+		return reportResult{}, usageError{errors.New("--include-dismissed requires --candidates")}
 	}
 	if sameSizeSet && candidatesSet || sizeSet && !*sameSize || *minimumBytes < 1 {
 		return reportResult{}, usageError{errors.New("--same-size accepts --min-size-bytes greater than zero and cannot be combined with --candidates; --min-size-bytes requires --same-size")}
@@ -124,11 +131,29 @@ func report(ctx context.Context, args []string, paths config.Paths) (reportResul
 		return reportResult{FileReport: state.FileReport{SameSize: &r, GeneratedAt: r.GeneratedAt, Source: r.Source, Files: []state.ReportFile{}, Roots: []state.ReportRoot{}, Notes: r.Notes}, sameSizeCommand: command}, err
 	}
 	if *candidates {
-		c, err := s.NodeModulesFindings(ctx, *cursor, *minimumAge)
+		var c state.FindingReport
+		var err error
+		if directorySet {
+			page, pageErr := s.NodeModulesFindingPage(ctx, *cursor, *minimumAge)
+			if errors.Is(pageErr, state.ErrPlanSchema) {
+				// Legacy inventory cannot have an applicable schema-9 dismissal.
+				page.Evidence, pageErr = s.NodeModulesFindings(ctx, *cursor, *minimumAge)
+			}
+			if pageErr == nil {
+				page, pageErr = filterDismissalPage(ctx, scanPaths.StateDir, *directory, page, *includeDismissed)
+			}
+			c, err = page.Evidence, pageErr
+		} else {
+			c, err = s.NodeModulesFindings(ctx, *cursor, *minimumAge)
+		}
 		if errors.Is(err, state.ErrReportCursor) {
 			err = usageError{err}
 		}
-		return reportResult{FileReport: state.FileReport{Candidates: &c, GeneratedAt: c.GeneratedAt, Source: c.Source, Files: []state.ReportFile{}, Roots: []state.ReportRoot{}, Notes: c.Notes}, candidateCommand: candidateReportCommand(scanPaths, *directory, *minimumAge)}, err
+		command := candidateReportCommand(scanPaths, *directory, *minimumAge)
+		if *includeDismissed {
+			command += " --include-dismissed"
+		}
+		return reportResult{FileReport: state.FileReport{Candidates: &c, GeneratedAt: c.GeneratedAt, Source: c.Source, Files: []state.ReportFile{}, Roots: []state.ReportRoot{}, Notes: c.Notes}, candidateCommand: command}, err
 	}
 	if directorySet {
 		d, err := s.MeasureDirectory(ctx, filepath.Clean(*directory))
@@ -340,6 +365,7 @@ func printFindingReport(out io.Writer, r state.FindingReport, command string) {
 		printFinding(out, i+1, f)
 	}
 	printFindingPageSummary(out, r)
+	printDismissalNotes(out, r)
 
 	if r.NextCursor != "" {
 		fmt.Fprintln(out, "\nMORE RESULTS")
@@ -376,6 +402,7 @@ func printFindingPageSummary(out io.Writer, r state.FindingReport) {
 		"timestamp_unknown":               "Unknown modification dates",
 		"age_not_met":                     "Too recent / future-dated",
 		"selected":                        "Selected for review",
+		"dismissed":                       "Dismissed saved findings",
 	}
 	for _, d := range r.Diagnostics {
 		if d.Count == 0 {

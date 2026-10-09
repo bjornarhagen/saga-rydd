@@ -64,7 +64,7 @@ func review(ctx context.Context, args []string, paths config.Paths, in io.Reader
 	cursor := ""
 	for {
 		opCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		page, err := loadReviewPage(opCtx, base, cursor, *age)
+		page, err := loadDismissalReviewPage(opCtx, paths.StateDir, base, root, cursor, *age)
 		cancel()
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
@@ -205,13 +205,14 @@ func printReviewPage(out io.Writer, page reviewPage, age int, command string) {
 	for i, finding := range page.Evidence.Findings {
 		printFinding(out, i+1, finding)
 	}
+	printDismissalNotes(out, page.Evidence)
 	if page.NextCursor != "" {
 		printWrapped(out, "More saved entries remain. next replaces this page and resets its numbers; selections do not carry forward.", "")
 	} else {
 		printWrapped(out, "End of saved entries. This does not prove the scan is complete.", "")
 	}
 	if len(page.Evidence.Findings) == 0 {
-		printWrapped(out, "No eligible candidates on this page. An empty page can still have more saved entries.", "")
+		printWrapped(out, "No candidates available for review on this page. An empty page can still have more saved entries.", "")
 		printFindingPageSummary(out, page.Evidence)
 		fmt.Fprintf(out, "\nView this saved-entry page again:\n  %s\n", command)
 		printWrapped(out, "A later scan can change these results.", "")

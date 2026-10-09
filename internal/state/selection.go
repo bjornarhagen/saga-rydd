@@ -68,12 +68,19 @@ func (s *Store) snapshotSelection(ctx context.Context, ids []string, minimumAgeD
 	if err != nil {
 		return SelectionSnapshot{}, err
 	}
+	return s.captureSelectionBindings(ctx, r, tx)
+}
+
+// Capture bindings from the report already measured in this transaction. The
+// raw candidate page and exact plan selection share this path without another
+// eligibility query or a measurement from a later snapshot.
+func (s *Store) captureSelectionBindings(ctx context.Context, r SelectionSnapshot, tx *sql.Tx) (SelectionSnapshot, error) {
 	seen := map[int64][]byte{}
 	for _, f := range r.Evidence.Findings {
 		rootPath, ok := seen[f.RootID]
 		if !ok {
 			root := RootBinding{ID: f.RootID}
-			err = tx.QueryRowContext(ctx, `SELECT r.path,r.volume_id,COALESCE(v.revision,0)
+			err := tx.QueryRowContext(ctx, `SELECT r.path,r.volume_id,COALESCE(v.revision,0)
  FROM roots r LEFT JOIN allocation_revisions v ON v.root_id=r.id WHERE r.id=? AND r.enabled=1`, f.RootID).Scan(&root.PathBytes, &root.Fingerprint, &root.Revision)
 			if err != nil {
 				return SelectionSnapshot{}, err

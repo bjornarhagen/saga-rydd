@@ -288,7 +288,7 @@ PRAGMA application_id=0x5259504c; PRAGMA user_version=1;`)
 			return fail(e)
 		}
 		version = 1
-	} else if app != applicationID || (version != 1 && version != 2 && version != 3 && version != 4) {
+	} else if app != applicationID || (version != 1 && version != 2 && version != 3 && version != 4 && version != 5) {
 		return fail(errors.New("unsupported or unidentified plan database; left intact"))
 	}
 	if write && migrate && version < 3 {

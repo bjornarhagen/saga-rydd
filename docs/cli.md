@@ -112,6 +112,26 @@ Input lines are bounded to 4096 bytes, including the newline. A command needs a 
 
 The completion output includes commands to reopen the saved plan and start another explicit scan and review. Review exits after one saved subset. Scanning never continues automatically.
 
+## Exact saved-finding dismissal
+
+```sh
+rydd ignore --preview -d ROOT [--min-age-days N] --json FINDING_ID
+rydd ignore --save --from REQUEST_JSON [--json]
+rydd ignore --show DISMISSAL_ID [--json]
+rydd ignore --undo DISMISSAL_ID [--json]
+rydd report --candidates -d ROOT --include-dismissed [--json]
+```
+
+Choose one exclusive mode. Preview requires one canonical positive `node-modules-v1:ROOT_ID:ENTRY_ID` reference from that exact existing manual inventory and a minimum age of 1–36500 days (default 90). No configuration or source contents are loaded. It captures one finding with usable saved root/target/manifest identities in an inventory-schema-9 snapshot; exact partial/stale/unknown size qualifications remain eligible. Preview saves nothing. JSON uses the standard API 1 success envelope with `dismissal_request`, contract `saved_finding_dismissal_request_v1` and a stable `dismissal-request-v1-` identity.
+
+Save accepts only a complete successful preview envelope from an explicitly named stable no-follow regular file of at most 1 MiB. Duplicate, case-ambiguous, missing or unknown fields, extra values, unsupported contracts, fabricated authority or inconsistent evidence are refused. It accepts no age, root, target or finding override. Existing exact requests return their first saved record offline; a new request compares its inventory incarnation and complete canonical saved evidence before publication. Report-generation times, explanatory notes and lossy display strings do not identify a finding; raw paths, observation times, identities, root revision, age filter, rule and all measurement qualifications do. A scan can advance after the check, so the saved decision remains historical.
+
+Save/show/undo JSON uses `dismissal`, containing its `dismissal-v1-` ID, immutable record, `dismissed` or `undone` status and optional immutable undo. Current applicability is unevaluated in this saved-only view. Verification, approval and execution flags stay false and estimated reclaimable bytes null. Show and undo require existing private plan storage but not source files, inventory or configuration. Undo appends evidence instead of deleting the first decision. Exact save/undo retries preserve the original IDs and times; an undone exact decision cannot be revived by retrying save.
+
+Additive plan schema 5 keeps dismissal records separate from plans, consent, observations, journals, inventory and hashing. Each dismissal is at most 256 KiB, each undo at most 4 KiB and there are at most 128 distinct dismissals. Capacity cannot evict old decisions; exact retries work at capacity. Readers accept earlier schemas without migrating or initializing them. A missing or legacy dismissal store hides nothing; incompatible storage or corrupt checked evidence is an error. Publication and its reply can be uncertain: inspect the exact ID or retry the same request, without assuming that a failed reply rolled back a commit.
+
+Scoped candidate reports and guided review compare active dismissal keys with one frozen raw inventory page. They examine at most 1,000 entries and measure at most 20 eligible candidates, without refilling after hidden findings. Cursors, examined counts and coverage are preserved; `selected` and `dismissed` diagnostic counts split the same eligible outcome. Fully hidden pages can still have continuation. `--include-dismissed` requires candidate mode, includes all eligible findings without undo and names included dismissed references in notes; continuation retains this option. Configured unscoped reports have no manual dismissal scope. Unknown identities remain visible because they cannot bind a dismissal. Authoritative string evidence must be valid UTF-8 to survive JSON exactly; unusable text stays reportable but cannot be dismissed. Raw byte paths remain supported. Changed evidence or a different age filter resurfaces the finding, including an unchanged-path rescan. Saved cleanup selections and checks are unaffected; permanent exclusion and keep policies are separate.
+
 ## Saved same-size file bands
 
 `report --same-size [-d PATH] [--min-size-bytes N] [--limit N] [--cursor TOKEN] [--json]` is a metadata-only prerequisite for duplicate discovery. JSON uses `report.same_size`, with `content_verified: false`, `current_state_verified: false` and `estimated_reclaimable_bytes: null`. Equal sizes are not content matches. `same_size_candidates` is true; `duplicates` and cleanup remain false.
@@ -166,7 +186,7 @@ Rule `node_modules_old_metadata` version 1 requires a saved regular-file sibling
 
 `--min-age-days N` overrides the age filter for this report only (1–36500 days). It requires `--candidates` and does not change saved inventory or configure cleanup policy. The effective value appears in human output and JSON `minimum_age_days`. For example, `report --candidates --min-age-days 30` reviews observations at least 30 days old. Unknown and future timestamps remain ineligible.
 
-Findings contain a local ID, rule/version, entry/root/device/inode identity, authoritative base64 path bytes, manifest path, observation/modification times and the full directory measurement contract. IDs are stable across unchanged inventory reports but not authorization and not guaranteed across inventory rebuilds. Findings derive from saved inventory; findings themselves are not approvals. Review consent is stored separately per saved plan; dismissal and an independent finding table remain unavailable.
+Findings contain a local ID, rule/version, entry/root/device/inode identity, authoritative base64 path bytes, manifest path, observation/modification times and the full directory measurement contract. IDs are stable across unchanged inventory reports but not authorization and not guaranteed across inventory rebuilds. Findings derive from saved inventory; findings themselves are not approvals. Review consent is stored separately per saved plan. Exact historical dismissal is described above; findings still have no independent mutable table.
 
 Pages examine at most 1,000 inventory entries and measure at most 20 candidates, using completed scope summaries or the bounded directory fallback. Follow `next_cursor` even on an empty page; keep `--candidates` and the same `--min-age-days` on subsequent requests. Cursors reject a changed age threshold; human continuation commands preserve the override. Each directory measurement reads its own snapshot, so concurrent updates can change evidence between selection and measurement. The whole command has a five-second deadline; timeout returns an error. Nested dependency directories are suppressed, and no aggregate savings are presented. Sizes remain qualified by stale/partial/unknown status and shared-storage caveats. Empty results never mean the machine is clean.
 

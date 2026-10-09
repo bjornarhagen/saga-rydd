@@ -8,7 +8,7 @@ Rydd will gradually discover developer clutter and duplicate files, explain what
 
 For humans and AI: readable output by default, versioned JSON with `--json`, and `rydd capabilities --json` for discovery. Live status also reports scanner metadata API counters to help inspect background work. See the [CLI contract](docs/cli.md).
 
-**Next milestone: review usability and reversible finding controls.** The generated owner read-only walkthrough passed, including guided review and separately consented fresh hashing with historical comparisons. Human-output corrections and exact finding dismissal are next. Linux clone acceptance remains open. Cleanup needs an operation that preserves the exact reviewed source object and ancestor scope; the reviewed rename operations do not provide that boundary. See [ADR 003](docs/decisions/003-source-namespace-boundary.md), the [current handoff](PROGRESS.md#current-state) and [trial lessons](docs/mvp-trial-results.md). Numbered phases are not a strict work order, and the full plan remains unfinished.
+**Next milestone: reversible finding controls.** The generated owner read-only walkthrough and human-output corrections passed, including guided review and separately consented fresh hashing with historical comparisons. Exact finding dismissal and persistent exclusions are next. Linux clone acceptance remains open. Cleanup needs an operation that preserves the exact reviewed source object and ancestor scope; the reviewed rename operations do not provide that boundary. See [ADR 003](docs/decisions/003-source-namespace-boundary.md), the [current handoff](PROGRESS.md#current-state) and [trial lessons](docs/mvp-trial-results.md). Numbered phases are not a strict work order, and the full plan remains unfinished.
 
 ## Scan a chosen folder
 
@@ -61,6 +61,22 @@ rydd report --limit 10 --cursor TOKEN
 ```
 
 The report works while the worker is stopped and reads only saved inventory. It lists the largest observed regular files, sizes, timestamps, parent-pass freshness and saved root diagnostics. Use `--directory` to read a completed scope calculation or measure up to 10,000 saved entries in a selected subtree, with partial/stale/unknown labels and qualified hardlink accounting. `--candidates` selects old recorded `node_modules` and sibling `package.json` timestamps for review. It does not inspect manifest contents or establish inactivity or safe deletion. The default age filter is 90 days; `--min-age-days N` changes it for one report only. Candidate reports now explain selection outcomes (including age, missing evidence and incomplete listings) and whether more saved entries remain. Reports do not rescan paths or delete anything. Use the returned `next_cursor` for another page; keep global `--data-dir` before `report` if using a separate instance. See the [report contract](docs/cli.md#saved-file-reports).
+
+## Dismiss one exact saved finding
+
+```sh
+rydd ignore --preview -d /path/to/project --json FINDING_ID > /path/to/private/dismissal.json
+rydd ignore --save --from /path/to/private/dismissal.json
+rydd ignore --show DISMISSAL_ID
+rydd ignore --undo DISMISSAL_ID
+rydd report --candidates -d /path/to/project --include-dismissed
+```
+
+Review the preview before saving it. Use the finding's full `node-modules-v1:ROOT_ID:ENTRY_ID` reference from a manual candidate report. Put options before that reference. Keep the same global data directory throughout; the preview file contains private paths and belongs outside version control.
+
+Dismissal hides only this exact historical finding from candidate reports and guided review. It preserves its saved identities, timestamps, age filter and qualified size evidence. Changed observations or a different age filter make it appear again, including a later rescan of unchanged files. `--include-dismissed` shows the eligible findings for inspection and names included dismissed references. Filtering keeps the original page and cursor; a fully dismissed page can be empty and still have a next page. Undo restores visibility without deleting the historical decision.
+
+Show, undo and exact save retries work with the source and inventory offline. A new save requires matching saved inventory. No source files are read, moved or deleted. Dismissal creates no permanent exclusion, keep policy, read consent or cleanup permission. Up to 128 distinct immutable dismissal records fit in the private plan store; an undone exact record stays undone on save retries.
 
 ## View same-size saved files
 
