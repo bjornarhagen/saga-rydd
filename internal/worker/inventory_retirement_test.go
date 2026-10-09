@@ -244,7 +244,7 @@ func TestWorkerSavedRetirementSharesDurableDailyCapAcrossRestart(t *testing.T) {
 	}
 }
 
-func TestWorkerSavedRetirementRechecksDueSourceAfterCPUWait(t *testing.T) {
+func TestWorkerFairMaintenancePrecedesFutureSourceSharesCap(t *testing.T) {
 	dir, root, _ := workerRetirementFixture(t, 300)
 	healthy := t.TempDir()
 	_, c := fixture(t)
@@ -273,17 +273,11 @@ func TestWorkerSavedRetirementRechecksDueSourceAfterCPUWait(t *testing.T) {
 		}
 		return 10 * time.Millisecond, nil
 	}
-	options.scannerNext = func(ctx context.Context, s *inventory.Scanner, j state.Job, p inventory.APIPermit) (state.ScanBatch, error) {
-		calls.Add(1)
-		if string(j.RootPath) != healthy {
-			return state.ScanBatch{}, errors.New("maintenance displaced due healthy root")
-		}
-		return s.NextPermitted(ctx, j, p)
-	}
+	noRetirementSource(t, &options, &calls)
 	_, done := start(t, dir, c, options)
 	waitUntil(t, func() bool {
 		snapshot := control(t, dir, "status")
-		return calls.Load() == 1 && snapshot.WaitReason == "daily_chunk_limit"
+		return snapshot.WaitReason == "daily_chunk_limit"
 	})
 	r, err := state.OpenReader(context.Background(), dir)
 	if err != nil {
@@ -291,8 +285,11 @@ func TestWorkerSavedRetirementRechecksDueSourceAfterCPUWait(t *testing.T) {
 	}
 	defer r.Close()
 	summary, err := r.Summary(context.Background())
-	if err != nil || summary.Entries != 306 || control(t, dir, "status").Dispatch.Used != 1 {
-		t.Fatal("maintenance spent last slot before due source", summary, err)
+	if err != nil || summary.Entries <= 4 || summary.Entries >= 306 || calls.Load() != 0 || control(t, dir, "status").Dispatch.Used != 1 {
+		t.Fatal("eligible maintenance did not use its fair turn", summary, err, calls.Load())
+	}
+	if due, err := r.NextJobDue(context.Background(), []string{state.ScanKind}); err != nil || due.IsZero() {
+		t.Fatal("future source job was lost", due, err)
 	}
 	control(t, dir, "stop")
 	waitExit(t, done)

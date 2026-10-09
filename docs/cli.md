@@ -50,6 +50,12 @@ Live `worker.live.cpu` adds contract `worker_process_cpu_window_v1`, source `get
 
 Capabilities expose `process_cpu_accounting` and `cooperative_cpu_backoff`; `cpu_limit` and `power_controls` remain false. This pacing adds no source reads, saved quota or automatic scanner activation and does not prove an hourly resource target.
 
+## Fair experimental inventory scheduling
+
+`daemon --experimental-scan` admits at most 32 configured roots before writer/root/source changes. Configuration can still hold up to 128 roots for other workflows; this narrower background limit is explicit. The worker rotates source and eligible saved-only maintenance turns with a durable root cursor and retains bounded per-root directory streams under shared entry pacing. A busy root therefore cannot keep winning every ready turn. Delayed/error jobs retain their evidence and block only their own maintenance. Source API quota waits can allow other-root database-only work; shared dispatch, CPU/WAL and control gates still apply.
+
+Capabilities add `experimental_root_turns` and `inventory_scheduling_contract`, named `experimental_root_turns_v1`, with scope `configured_experimental_background_inventory`. It reports `max_configured_roots: 32`, `max_retained_directory_streams: 32`, `max_pending_names_per_stream: 128` and `durable_root_rotation: true`. Manual scans are excluded. `adaptive_inventory_revisits`, `portable_directory_continuation` and full resource/power controls remain false. Rotation survives restart; open enumeration streams do not. This establishes bounded turns during a continuous healthy run, not completion under repeated mutation/crashes or an elapsed resource guarantee. See [worker scheduling](worker.md#fair-experimental-root-turns-p1-07b2).
+
 ## Live scanner accounting
 
 When experimental inventory is enabled, live worker snapshots include `inventory_metrics`. Human `status` prints the same counters. `capabilities --json` advertises `metadata_api_counters: true`; `metadata_rate_limit` remains false.
@@ -433,7 +439,7 @@ Generation changes replace one directory's partial totals; stale inode generatio
 
 Incomplete or failed listings do not authorize retirement. Delayed scan retries can postpone maintenance; historical evidence remains available until a later successful reconciliation. Detailed background inventory dispatches one eligible saved-only maintenance step before its next root revisit. Huge-directory continuation across crashes, disabled-root retention, arbitrary-scope caches and large-scale resource validation remain unfinished. Freed database pages are reusable; retiring rows does not promise the SQLite file will shrink.
 
-Schema 8 introduced full saved scope coverage. Writers now migrate additively to schema 9; reports still read schemas 4–8 without migration and use bounded identity checks when caches are unavailable. Stop a worker before explicitly migrating its state; manual inventories are separate stores. Older binaries cannot read schema-9 stores. Existing allocation caches are invalidated once for coverage recalculation. No application database is deleted or rebuilt by this migration, and upgrading alone does not scan, populate caches or schedule subtree retirement.
+Schema 8 introduced full saved scope coverage. Writers now migrate additively to schema 11; saved readers retain schemas 4–10 without migration and use bounded identity checks when caches are unavailable. Stop a worker before explicitly migrating its state; manual inventories are separate stores. Older binaries that lack schema-11 reader support cannot read these stores. Existing allocation caches are invalidated once for coverage recalculation. No application database is deleted or rebuilt by this migration, and upgrading alone does not scan, populate caches or schedule subtree retirement.
 
 ### Human candidate output
 

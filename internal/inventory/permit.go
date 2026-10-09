@@ -101,12 +101,13 @@ func NewPermitted(ctx context.Context, roots, excludes, privatePaths []string, p
 // NextPermitted bounds only this operation's source API attempts. The callback
 // is never retained on Scanner or used by unrelated live observations. A denied
 // operation returns no tentative batch, fault, skip or completion evidence and
-// discards its stream; the caller retains its previously saved job cursor.
+// discards only the selected root's stream; the caller retains its previously saved job cursor.
 // A small allowance may prevent progress on deep paths. This API guarantees no
 // eventual progress for every depth, and does not meter closes or database work.
 func (s *Scanner) NextPermitted(ctx context.Context, job state.Job, permit APIPermit) (state.ScanBatch, error) {
 	if ctx == nil || permit == nil {
 		s.mu.Lock()
+		s.selectRoot(string(job.RootPath))
 		s.reset()
 		s.mu.Unlock()
 		return state.ScanBatch{}, deniedAPI(errors.New("context and permit are required"))

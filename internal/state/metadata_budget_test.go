@@ -417,7 +417,7 @@ func TestMetadataSchema9ReadMigrationAndPreservation(t *testing.T) {
 	defer w.Close()
 	var preserved string
 	var bytes, ops int64
-	if err = w.db.QueryRow("SELECT token FROM inventory_identity").Scan(&preserved); err != nil || preserved != inventory || w.schema != 10 {
+	if err = w.db.QueryRow("SELECT token FROM inventory_identity").Scan(&preserved); err != nil || preserved != inventory || w.schema != schemaVersion {
 		t.Fatal(preserved, err)
 	}
 	if err = w.db.QueryRow("SELECT content_bytes,metadata_ops FROM daily_budgets").Scan(&bytes, &ops); err != nil || bytes != 42 || ops != 17 {

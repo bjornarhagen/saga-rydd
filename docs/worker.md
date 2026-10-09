@@ -43,9 +43,29 @@ Quota waits preserve status, pause and stop. Current scanner metrics are absent 
 
 Completed detailed and compact parent listings queue reconciliation of saved children. Once an enabled root has no inventory jobs, including delayed or future work, an exact-root maintenance step advances at most one worked bounded transaction. It retires obsolete compact generations, then revision-fenced absent/replaced subtrees, then invalidated detailed allocation cache/scratch state. Current observations and revision-matched completed caches stay intact. New scan observations cancel old retirement proofs.
 
-The experimental owning loop discovers maintenance roots in pages of at most 128 raw roots plus one continuation row and serves controls between pages. Due source work takes priority in this version. Each mutation turn uses the same durable dispatch/day reservation, CPU backoff, WAL and cadence gates as other background work. It opens no source scanner, spends no source API allowance and touches no owner plans, consent, hashes, actions or restore history. Revisit scheduling waits for maintenance to drain; restart rediscovers unfinished work without idle polling. Manual scans finish their saved maintenance before a later invocation starts another pass.
+The experimental owning loop discovers maintenance roots in pages of at most 128 raw roots plus one continuation row and serves controls between pages. Each selected root prefers its own due source work, otherwise its eligible saved-only maintenance, as described below. Each mutation turn uses the same durable dispatch/day reservation, CPU backoff, WAL and cadence gates as other background work. It opens no source scanner, spends no source API allowance and touches no owner plans, consent, hashes, actions or restore history. Revisit scheduling waits for maintenance to drain; restart rediscovers unfinished work without idle polling. Manual scans finish their saved maintenance before a later invocation starts another pass.
 
 The batch bounds apply to returned roots and changed payload records, not every SQL row examined. Cooperative database deadlines remain required. SQLite can reuse freed pages without shrinking its file. Physical size admission, disabled-root retention and fair/adaptive scheduling remain separate.
+
+## Fair experimental root turns (P1-07b2)
+
+Experimental scanning accepts 1–32 exact configured roots before opening the writer, changing saved roots or constructing a source scanner. Manual scans, explicit hashing and default single-stream library behavior retain their contracts. A bounded saved snapshot rotates admitted root IDs after the last durably claimed root. It uses indexed per-root due/id lookup and pending-cache checks. Disabled roots and roots with no inventory job release their parked stream; future/delayed jobs preserve their root's unfinished evidence and block its maintenance.
+
+```text
+Choose the next ready root in saved rotation
+  -> due source work, otherwise eligible saved maintenance
+  -> shared cadence, day, CPU and WAL gates
+  -> commit one dispatch reservation
+  -> claim one turn and save root rotation together
+  -> run one bounded source or database step
+  -> choose the next ready root
+```
+
+A claim needs the latest unused dispatch reservation, less than two seconds old and within the lease. Lost replies or interrupted work retain the charge and rotation; explicit writer recovery recovers the source lease. Source turns also need the separate scanner API allowance. A source quota wait can skip source work while allowing another root's eligible database-only maintenance. It sleeps until saved due/resource times when nothing can run and rechecks readiness after CPU/cadence/WAL waits.
+
+One shared scanner retains at most 32 logical streams with no eviction. Each holds at most 128 supported names, bounded to 4,096 bytes each, and preserves its generation/unread buffer when another root runs. Native generated maximum-stream fixtures observed 32 Linux and 64 Darwin directory descriptors, all closed afterward. The pinned Darwin Go directory implementation duplicates the descriptor for fdopendir ownership; a logical stream is not one physical FD on both platforms. The measured finite-fixture RSS is not the full unattended memory gate. Continual mutation, repeated crashes or an insufficient path allowance can still prevent completion. Adaptive timing, portable crash enumeration, million-entry background acceptance and physical resource/sleep tests remain open.
+
+Schema 11 adds scheduler/cache indexes and one bounded saved rotation value; schema-10 saved readers remain compatible without migration. Capabilities use `experimental_root_turns_v1` with the 32-root/stream and 128-name limits. Full CPU/power, adaptive revisits and portable directory continuation remain false.
 
 ## Next integrations
 

@@ -17,6 +17,7 @@ func TestBindMountBoundary(t *testing.T) {
 	if os.Getenv("RYDD_TEST_MOUNTS") != "1" {
 		t.Skip("requires isolated mount namespace")
 	}
+	t.Run("root_streams", testRootStreamsBindMount)
 	for _, kind := range []string{"directory", "manifest"} {
 		t.Run("live_"+kind, func(t *testing.T) {
 			s, target := liveFixture(t)

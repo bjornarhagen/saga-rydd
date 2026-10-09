@@ -105,6 +105,11 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 	if options.ExperimentalScan && (cfg.Scan.MetadataAttemptsPerDay < 1 || cfg.Scan.MetadataAttemptsPerDay > state.MetadataDailyLimit) {
 		return state.ErrMetadataInvalid
 	}
+	if options.ExperimentalScan {
+		if err := state.ValidateFairInventoryPaths(cfg.Roots); err != nil {
+			return err
+		}
+	}
 	handlers := make(map[string]Handler, len(options.Handlers))
 	kinds := make([]string, 0, len(options.Handlers))
 	for kind, h := range options.Handlers {
@@ -115,6 +120,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 		kinds = append(kinds, kind)
 	}
 	sort.Strings(kinds)
+	genericKinds := append([]string(nil), kinds...)
 	w, err := state.OpenWriter(ctx, dir)
 	if err != nil {
 		return err
@@ -134,8 +140,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 	var startupAllowance int64
 	var revisitCursor int64
 	var revisitMore bool
-	var retirementCursor, retirementRoot int64
-	var retirementMore, retirementTurn bool
+	var fairRoots state.FairInventoryRoots
 	scannerNew := options.scannerNew
 	if scannerNew == nil {
 		scannerNew = inventory.NewPermitted
@@ -174,7 +179,10 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 			return err
 		}
 		revisitCursor, revisitMore = page.Cursor, page.More
-		retirementMore = true
+		fairRoots, err = w.ResolveFairInventoryRoots(ctx, cfg.Roots)
+		if err != nil {
+			return err
+		}
 	}
 	// Writer-owned restart recovery retains full unknown charges. Status and
 	// ordinary store opening never perform this mutation, including idle mode.
@@ -281,7 +289,6 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 			}
 			tick = nil
 			reschedule = false
-			retirementTurn = false
 			if live.Paused {
 				live.WaitReason = "paused"
 			}
@@ -301,7 +308,32 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 					timer = time.NewTimer(max(time.Until(due), 0))
 					tick = timer.C
 				} else {
-					due, err := w.NextJobDue(ctx, kinds)
+					now := time.Now()
+					var due time.Time
+					var plan fairInventoryPlan
+					var err error
+					if options.ExperimentalScan {
+						if err = refreshMetadata(ctx, now); err != nil {
+							if ctx.Err() != nil {
+								stop()
+								continue
+							}
+							return err
+						}
+						neededStartup := int64(0)
+						if source.value.Load() == nil {
+							neededStartup = startupAllowance
+						}
+						planCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+						plan, err = nextFairInventoryPlan(planCtx, w, fairRoots, genericKinds, now, *live.Metadata, neededStartup)
+						cancel()
+						due = plan.due
+						if err == nil {
+							releaseDormantRootStreams(&source, plan.schedule)
+						}
+					} else {
+						due, err = w.NextJobDue(ctx, kinds)
+					}
 					if err != nil {
 						if ctx.Err() != nil {
 							stop()
@@ -309,23 +341,13 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						}
 						return err
 					}
-					// Existing due source jobs keep priority. Otherwise inspect or
-					// advance saved-state work before this root gets a future job.
-					if options.ExperimentalScan && (retirementMore || retirementRoot != 0) && (due.IsZero() || due.After(time.Now())) {
-						retirementTurn = true
-						due = time.Now()
-					}
 					if !due.IsZero() {
-						live.WaitReason = ""
-						now := time.Now()
-						if retirementTurn {
-							live.WaitReason = "inventory_maintenance"
-							if retirementRoot == 0 {
-								live.WaitReason = "inventory_maintenance_setup"
+						live.WaitReason = plan.waitReason
+						if due.After(now) {
+							if live.WaitReason == "" {
+								live.WaitReason = "job_retry"
 							}
-						} else if due.After(now) {
-							live.WaitReason = "job_retry"
-							if options.ExperimentalScan && len(kinds) == 1 && kinds[0] == state.ScanKind {
+							if options.ExperimentalScan && !plan.generic && plan.waitReason == "job_retry" {
 								revisit, err := w.InventoryRevisitPending(ctx, due, revisitInterval)
 								if err != nil {
 									if ctx.Err() != nil {
@@ -341,7 +363,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						} else {
 							due = now
 						}
-						if options.ExperimentalScan && !(retirementTurn && retirementRoot == 0) {
+						if options.ExperimentalScan {
 							budget, err := w.DispatchBudget(ctx, time.Now(), cfg.Scan.MaxScanChunksPerDay)
 							if err != nil {
 								if ctx.Err() != nil {
@@ -355,28 +377,9 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 								due = budget.NextAllowed
 								live.WaitReason = budget.Reason
 							}
-							if !retirementTurn {
-								if err := refreshMetadata(ctx, now); err != nil {
-									if ctx.Err() != nil {
-										stop()
-										continue
-									}
-									return err
-								}
-								neededStartup := int64(0)
-								if source.value.Load() == nil {
-									neededStartup = startupAllowance
-								}
-								allowed, reason, err := metadataReadiness(*live.Metadata, now, neededStartup)
-								if err != nil {
-									return err
-								}
-								if reason != "" && !allowed.Before(due) {
-									due, live.WaitReason = allowed, reason
-								}
-							}
+
 						}
-						if !(retirementTurn && retirementRoot == 0) && due.Before(nextAllowed) {
+						if due.Before(nextAllowed) {
 							due = nextAllowed
 							live.WaitReason = "cadence"
 						}
@@ -475,92 +478,12 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 					reschedule = true
 					continue
 				}
-				if retirementTurn {
-					// A retry can become due while cadence/CPU/WAL delays this
-					// timer. Recheck before maintenance consumes a shared slot.
-					due, err := w.NextJobDue(ctx, kinds)
-					if err != nil {
-						if ctx.Err() != nil {
-							stop()
-							continue
-						}
-						return err
-					}
-					if !due.IsZero() && !due.After(time.Now()) {
-						retirementTurn = false
-						reschedule = true
-						continue
-					}
-					maintenanceCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-					if retirementRoot == 0 {
-						page, err := w.NextInventoryRetirementPage(maintenanceCtx, retirementCursor)
-						cancel()
-						if err != nil {
-							if ctx.Err() != nil {
-								stop()
-								continue
-							}
-							return fmt.Errorf("discover inventory maintenance: %w", err)
-						}
-						retirementRoot, retirementCursor, retirementMore = page.RootID, page.Cursor, page.More
-					} else {
-						now := time.Now()
-						budget, err := w.ReserveScanChunk(maintenanceCtx, now, interval, cfg.Scan.MaxScanChunksPerDay)
-						live.Dispatch = &budget
-						if errors.Is(err, state.ErrDispatchDeferred) {
-							cancel()
-							reschedule = true
-							continue
-						}
-						if err != nil {
-							cancel()
-							if ctx.Err() != nil {
-								stop()
-								continue
-							}
-							return fmt.Errorf("reserve inventory maintenance: %w", err)
-						}
-						nextAllowed = now.Add(interval)
-						step, err := w.RetireInventoryForRoot(maintenanceCtx, retirementRoot)
-						if err == nil && step.Eligible && !step.Remaining {
-							_, err = w.ScheduleInventoryRevisit(maintenanceCtx, retirementRoot, time.Now(), revisitInterval)
-						}
-						cancel()
-						if err != nil {
-							if ctx.Err() != nil {
-								stop()
-								continue
-							}
-							return fmt.Errorf("retire saved inventory: %w", err)
-						}
-						if !step.Eligible || !step.Remaining {
-							retirementRoot = 0
-						}
-						if step.Eligible && step.Remaining && !step.Worked {
-							return state.ErrInventoryRetirementCorrupt
-						}
-					}
-					after, cpuErr := observeCPU()
-					cpu.finish(window, time.Now(), after, cpuErr)
-					refreshMetrics()
-					reschedule = true
-					continue
-				}
-				budget, err := w.DispatchBudget(ctx, time.Now(), cfg.Scan.MaxScanChunksPerDay)
-				if err != nil {
-					if ctx.Err() != nil {
-						stop()
-						continue
-					}
-					return err
-				}
-				live.Dispatch = &budget
-				if budget.Reason != "" {
-					reschedule = true
-					continue
-				}
-				now := time.Now()
-				if err := refreshMetadata(ctx, now); err != nil {
+			}
+			now := time.Now()
+			var job *state.Job
+			var err error
+			if options.ExperimentalScan {
+				if err = refreshMetadata(ctx, now); err != nil {
 					if ctx.Err() != nil {
 						stop()
 						continue
@@ -571,17 +494,98 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 				if source.value.Load() == nil {
 					neededStartup = startupAllowance
 				}
-				_, reason, err := metadataReadiness(*live.Metadata, now, neededStartup)
-				if err != nil {
-					return err
+				planCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+				plan, planErr := nextFairInventoryPlan(planCtx, w, fairRoots, genericKinds, now, *live.Metadata, neededStartup)
+				cancel()
+				if planErr != nil {
+					if ctx.Err() != nil {
+						stop()
+						continue
+					}
+					return planErr
 				}
-				if reason != "" {
+				releaseDormantRootStreams(&source, plan.schedule)
+				if plan.due.IsZero() || plan.due.After(now) {
 					reschedule = true
 					continue
 				}
+				if plan.generic {
+					budget, budgetErr := w.DispatchBudget(ctx, time.Now(), cfg.Scan.MaxScanChunksPerDay)
+					if budgetErr != nil {
+						if ctx.Err() != nil {
+							stop()
+							continue
+						}
+						return budgetErr
+					}
+					live.Dispatch = &budget
+					if budget.Reason != "" {
+						reschedule = true
+						continue
+					}
+					job, err = w.ClaimJob(ctx, genericKinds, now, work+10*time.Second)
+				} else {
+					// One committed dispatch receipt funds one fair root turn.
+					reservedAt := time.Now()
+					turnCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+					budget, reserveErr := w.ReserveScanChunk(turnCtx, reservedAt, interval, cfg.Scan.MaxScanChunksPerDay)
+					live.Dispatch = &budget
+					if errors.Is(reserveErr, state.ErrDispatchDeferred) {
+						cancel()
+						reschedule = true
+						continue
+					}
+					if reserveErr != nil {
+						cancel()
+						if ctx.Err() != nil {
+							stop()
+							continue
+						}
+						return fmt.Errorf("reserve inventory root turn: %w", reserveErr)
+					}
+					turn, claimErr := w.ClaimFairInventoryTurn(turnCtx, fairRoots, time.Now(), work+10*time.Second, plan.allowSource, reservedAt)
+					if claimErr != nil {
+						cancel()
+						if ctx.Err() != nil {
+							stop()
+							continue
+						}
+						return fmt.Errorf("claim inventory root turn: %w", claimErr)
+					}
+					if turn == nil {
+						cancel()
+						reschedule = true
+						continue
+					}
+					nextAllowed = reservedAt.Add(interval)
+					if turn.Kind == state.FairInventoryMaintenance {
+						step, retireErr := w.RetireInventoryForRoot(turnCtx, turn.RootID)
+						if retireErr == nil && step.Eligible && !step.Remaining {
+							_, retireErr = w.ScheduleInventoryRevisit(turnCtx, turn.RootID, time.Now(), revisitInterval)
+						}
+						cancel()
+						if retireErr != nil {
+							if ctx.Err() != nil {
+								stop()
+								continue
+							}
+							return fmt.Errorf("retire saved inventory: %w", retireErr)
+						}
+						if step.Eligible && step.Remaining && !step.Worked {
+							return state.ErrInventoryRetirementCorrupt
+						}
+						after, cpuErr := observeCPU()
+						cpu.finish(window, time.Now(), after, cpuErr)
+						refreshMetrics()
+						reschedule = true
+						continue
+					}
+					job = turn.Job
+					cancel()
+				}
+			} else {
+				job, err = w.ClaimJob(ctx, kinds, now, work+10*time.Second)
 			}
-			now := time.Now()
-			job, err := w.ClaimJob(ctx, kinds, now, work+10*time.Second)
 			if err != nil {
 				if ctx.Err() != nil {
 					stop()
@@ -596,18 +600,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 			handler := handlers[job.Kind]
 			activeMetadata = nil
 			if options.ExperimentalScan && job.Kind == state.ScanKind {
-				budget, err := w.ReserveScanChunk(ctx, time.Now(), interval, cfg.Scan.MaxScanChunksPerDay)
-				if errors.Is(err, state.ErrDispatchDeferred) {
-					if err := w.FinishJob(ctx, *job, false, job.Cursor, budget.NextAllowed, ""); err != nil {
-						return err
-					}
-					reschedule = true
-					continue
-				}
-				if err != nil {
-					return fmt.Errorf("reserve scan dispatch: %w", err)
-				}
-				live.Dispatch = &budget
+
 				var startupWindow *metadataWindow
 				var reserveErr error
 				if source.value.Load() == nil {
@@ -654,7 +647,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 				handler = func(ctx context.Context, j state.Job) (Result, error) {
 					scanner := source.value.Load()
 					if scanner == nil {
-						created, err := scannerNew(ctx, cfg.Roots, cfg.Excludes, privatePaths, startupWindow.permit, inventory.WithEntryRate(cfg.Scan.MetadataPerSecond))
+						created, err := scannerNew(ctx, cfg.Roots, cfg.Excludes, privatePaths, startupWindow.permit, inventory.WithEntryRate(cfg.Scan.MetadataPerSecond), inventory.WithRootStreams(state.MaxFairInventoryRoots))
 						if err != nil {
 							return Result{}, err
 						}
@@ -729,9 +722,6 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 					cancel()
 					return fmt.Errorf("schedule completed root-listing work: %w", err)
 				}
-				// A completed source pass can leave saved proofs with no queue
-				// row. Rediscover them in bounded turns, including after restart.
-				retirementCursor, retirementMore = 0, true
 			}
 			if err := refreshMetadata(finishCtx, time.Now()); err != nil {
 				cancel()

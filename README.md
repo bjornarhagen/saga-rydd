@@ -478,7 +478,7 @@ Use the exact installed scope. This removes only the managed descriptor and pres
 
 ## Background scan revisits
 
-The experimental scanner now schedules one root listing at least 24 hours after its last completed root listing, once that root's unfinished work drains. A healthy root can revisit while another root waits on an error. Saved due times survive restart; controls and resource gates still apply. Root listing completion does not prove full-tree coverage. Manual scans keep their explicit invocation flow. See the [revisit contract](docs/cli.md#periodic-experimental-scan-revisits).
+The experimental scanner admits at most 32 configured roots and rotates bounded source or saved-maintenance turns across them. It retains each root's unfinished directory stream and one shared entry pacing clock. It schedules one root listing at least 24 hours after its last completed root listing, once that root's unfinished work drains. A healthy root can revisit while another root waits on an error. Saved due times survive restart; controls and resource gates still apply. Root listing completion does not prove full-tree coverage. Manual scans keep their explicit invocation flow. See the [revisit contract](docs/cli.md#periodic-experimental-scan-revisits).
 
 ## Try the experimental scanner
 

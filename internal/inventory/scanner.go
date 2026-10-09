@@ -1,6 +1,6 @@
 // Package inventory scans metadata and performs separately requested bounded
 // file observations. Scans never open ordinary file contents.
-// A single bounded directory stream is retained between committed batches.
+// Bounded directory streams are retained between committed batches.
 package inventory
 
 import (
@@ -25,25 +25,29 @@ import (
 )
 
 type Scanner struct {
-	mu           sync.Mutex
-	metrics      counters
-	entryRate    int
-	entrySpacing time.Duration
-	nextEntry    time.Time
-	closed       atomic.Bool
-	roots        map[string]bool
-	excludes     []string
-	protectedIDs map[string]bool
-	current      *stream
+	mu              sync.Mutex
+	metrics         counters
+	entryRate       int
+	entrySpacing    time.Duration
+	nextEntry       time.Time
+	closed          atomic.Bool
+	roots           map[string]bool
+	excludes        []string
+	protectedIDs    map[string]bool
+	current         *stream
+	currentRoot     string
+	rootStreamLimit int
+	rootStreams     map[string]*stream
 }
 type stream struct {
-	file       *os.File
-	jobID      int64
-	cursor     []byte
-	generation int64
-	stamp      unix.Stat_t
-	pending    []string
-	eof        bool
+	file          *os.File
+	jobID         int64
+	cursor        []byte
+	generation    int64
+	stamp         unix.Stat_t
+	pending       []string
+	eof           bool
+	volume, mount string
 }
 
 func New(roots, excludes, privatePaths []string, options ...Option) (*Scanner, error) {
@@ -64,6 +68,9 @@ func newScanner(roots, excludes, privatePaths []string, guard *apiGuard, options
 		if err := option(s); err != nil {
 			return nil, err
 		}
+	}
+	if err := s.validateRootStreams(roots); err != nil {
+		return nil, err
 	}
 	protected := append([]string{}, excludes...)
 	protected = append(protected, privatePaths...)
@@ -126,6 +133,7 @@ func newScanner(roots, excludes, privatePaths []string, guard *apiGuard, options
 func (s *Scanner) reset() {
 	if s.current != nil {
 		s.current.file.Close()
+		delete(s.rootStreams, s.currentRoot)
 		s.current = nil
 	}
 }
@@ -135,7 +143,7 @@ func (s *Scanner) reset() {
 func (s *Scanner) Close() {
 	s.closed.Store(true)
 	if s.mu.TryLock() {
-		s.reset()
+		s.resetAll()
 		s.mu.Unlock()
 	}
 }
@@ -340,9 +348,10 @@ func (s *Scanner) Next(ctx context.Context, j state.Job) (state.ScanBatch, error
 
 func (s *Scanner) next(ctx context.Context, j state.Job, guard *apiGuard) (state.ScanBatch, error) {
 	s.mu.Lock()
+	s.selectRoot(string(j.RootPath))
 	defer func() {
 		if s.closed.Load() {
-			s.reset()
+			s.resetAll()
 		}
 		s.mu.Unlock()
 	}()
@@ -381,7 +390,15 @@ func (s *Scanner) next(ctx context.Context, j state.Job, guard *apiGuard) (state
 		f.Close()
 		return fault(err)
 	}
-	if s.current != nil && (s.current.jobID != j.ID || !bytes.Equal(s.current.cursor, j.Cursor) || !sameStamp(s.current.stamp, st)) {
+	var openedVolume, openedMount string
+	if s.rootStreams != nil {
+		openedVolume, openedMount, err = s.filesystemGuarded(guard, int(f.Fd()))
+		if err != nil {
+			f.Close()
+			return fault(err)
+		}
+	}
+	if s.current != nil && (s.current.jobID != j.ID || !bytes.Equal(s.current.cursor, j.Cursor) || !sameStamp(s.current.stamp, st) || (s.rootStreams != nil && (s.current.volume != openedVolume || s.current.mount != openedMount))) {
 		s.reset()
 	}
 	if s.current == nil {
@@ -394,7 +411,7 @@ func (s *Scanner) next(ctx context.Context, j state.Job, guard *apiGuard) (state
 		if generation == 0 {
 			generation = 1
 		}
-		s.current = &stream{file: f, jobID: j.ID, generation: generation, stamp: st}
+		s.retainStream(&stream{file: f, jobID: j.ID, generation: generation, stamp: st, volume: openedVolume, mount: openedMount})
 	} else {
 		f.Close()
 	}
@@ -403,8 +420,11 @@ func (s *Scanner) next(ctx context.Context, j state.Job, guard *apiGuard) (state
 	if err != nil {
 		return fault(err)
 	}
+	if s.rootStreams != nil && (stream.volume != parentVolume || stream.mount != parentMount) {
+		return fault(errors.New("retained directory mount changed"))
+	}
 	b := state.ScanBatch{Identity: identity, Generation: stream.generation, Directory: observation(string(j.Path), st)}
-	// Keep unread names in the one bounded stream. Throttle deadlines yield a
+	// Keep unread names in this root's bounded stream. Throttle deadlines yield a
 	// valid partial batch; they must not discard names already enumerated.
 	if len(stream.pending) == 0 && !stream.eof {
 		if err := guard.before(s, APIDirectoryRead); err != nil {
@@ -414,6 +434,9 @@ func (s *Scanner) next(ctx context.Context, j state.Job, guard *apiGuard) (state
 		names, readErr := stream.file.Readdirnames(state.MaxBatchEntries)
 		if readErr != nil && !errors.Is(readErr, io.EOF) {
 			return fault(readErr)
+		}
+		if s.rootStreams != nil && !supportedPendingNames(string(j.Path), names) {
+			return fault(errors.New("directory names exceed retained stream bounds"))
 		}
 		stream.pending = names
 		stream.eof = errors.Is(readErr, io.EOF)
@@ -489,6 +512,13 @@ func (s *Scanner) next(ctx context.Context, j state.Job, guard *apiGuard) (state
 		return fault(err)
 	}
 	end, err := s.statFileGuarded(guard, check)
+	if err == nil && s.rootStreams != nil {
+		var endVolume, endMount string
+		endVolume, endMount, err = s.filesystemGuarded(guard, int(check.Fd()))
+		if err == nil && (endVolume != parentVolume || endMount != parentMount) {
+			err = errors.New("directory pathname mount changed during enumeration")
+		}
+	}
 	check.Close()
 	if err != nil {
 		return fault(err)

@@ -4,7 +4,7 @@ package state
 // must never be deleted/recreated as a migration strategy: future action/restore
 // records must stay separate from rebuildable inventory. Saved selections use
 // their own database; this inventory has a durable incarnation identity.
-const schemaVersion = 10
+const schemaVersion = 11
 const applicationID = 0x52594444 // RYDD
 
 const migration1 = `
@@ -61,7 +61,16 @@ var migrations = []struct{ name, sql string }{
 	{"complete-scope-coverage", migration8},
 	{"inventory-incarnation", migration9},
 	{"scanner-metadata-reservations", migration10},
+	{"fair-inventory-root-turns", migration11},
 }
+
+const migration11 = `
+CREATE INDEX jobs_inventory_root_due ON jobs(root_id,due_at_ns,id)
+ WHERE status='pending' AND kind='inventory';
+CREATE INDEX allocation_cache_pending_root ON allocation_cache(root_id)
+ WHERE phase!='done';
+CREATE INDEX allocation_cache_root_revision ON allocation_cache(root_id,revision);
+`
 
 const migration4 = `
 CREATE TABLE scan_dispatch (
