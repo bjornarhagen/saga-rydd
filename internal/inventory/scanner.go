@@ -47,7 +47,19 @@ type stream struct {
 }
 
 func New(roots, excludes, privatePaths []string, options ...Option) (*Scanner, error) {
+	return newScanner(roots, excludes, privatePaths, nil, options...)
+}
+
+func newScanner(roots, excludes, privatePaths []string, guard *apiGuard, options ...Option) (*Scanner, error) {
+	// Permit callbacks cannot replace any subsequent configured input.
+	roots = append([]string(nil), roots...)
+	excludes = append([]string(nil), excludes...)
+	privatePaths = append([]string(nil), privatePaths...)
+	options = append([]Option(nil), options...)
 	s := &Scanner{roots: make(map[string]bool), protectedIDs: make(map[string]bool)}
+	if err := guard.check(s); err != nil {
+		return nil, err
+	}
 	for _, option := range options {
 		if err := option(s); err != nil {
 			return nil, err
@@ -61,35 +73,52 @@ func New(roots, excludes, privatePaths []string, options ...Option) (*Scanner, e
 	}
 	for _, p := range protected {
 		var st unix.Stat_t
+		if err := guard.before(s, APIStat); err != nil {
+			return nil, err
+		}
 		s.metrics.stat.Add(1)
 		if unix.Stat(p, &st) == nil {
 			s.protectedIDs[objectID(st)] = true
 		}
 		s.excludes = append(s.excludes, filepath.Clean(p))
-		if canonical, err := s.resolve(p); err == nil {
+		if canonical, err := s.resolveGuarded(guard, p); err == nil {
 			s.excludes = append(s.excludes, canonical)
+		} else if errors.Is(err, ErrAPIPermitDenied) {
+			return nil, err
 		}
 	}
 	var canonicalRoots []string
 	var infos []os.FileInfo
 	for _, root := range roots {
 		s.roots[root] = true
-		canonical, err := s.resolve(root)
+		canonical, err := s.resolveGuarded(guard, root)
 		if err != nil {
+			if errors.Is(err, ErrAPIPermitDenied) {
+				return nil, err
+			}
 			continue
 		} // Unavailable roots become saved job errors.
+		if err := guard.before(s, APIStat); err != nil {
+			return nil, err
+		}
 		s.metrics.stat.Add(1)
 		info, err := os.Stat(canonical)
 		if err != nil {
 			continue
 		}
 		for i, prior := range canonicalRoots {
+			if err := guard.check(s); err != nil {
+				return nil, err
+			}
 			if config.Within(canonical, prior) || config.Within(prior, canonical) || os.SameFile(info, infos[i]) {
 				return nil, errors.New("scan roots physically overlap or alias each other")
 			}
 		}
 		canonicalRoots = append(canonicalRoots, canonical)
 		infos = append(infos, info)
+	}
+	if err := guard.check(s); err != nil {
+		return nil, err
 	}
 	return s, nil
 }
@@ -112,7 +141,14 @@ func (s *Scanner) Close() {
 }
 
 func (s *Scanner) openat(fd int, name string) (int, error) {
+	return s.openatGuarded(nil, fd, name)
+}
+
+func (s *Scanner) openatGuarded(guard *apiGuard, fd int, name string) (int, error) {
 	var before, after unix.Stat_t
+	if err := guard.before(s, APIStat); err != nil {
+		return -1, err
+	}
 	s.metrics.stat.Add(1)
 	if err := unix.Fstatat(fd, name, &before, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 		return -1, err
@@ -120,9 +156,16 @@ func (s *Scanner) openat(fd int, name string) (int, error) {
 	if dataless(before) || s.protectedIDs[objectID(before)] {
 		return -1, errors.New("dataless or protected directory")
 	}
+	if err := guard.before(s, APIDirectoryOpen); err != nil {
+		return -1, err
+	}
 	s.metrics.open.Add(1)
 	next, err := unix.Openat(fd, name, openFlags, 0)
 	if err != nil {
+		return -1, err
+	}
+	if err := guard.before(s, APIStat); err != nil {
+		unix.Close(next)
 		return -1, err
 	}
 	s.metrics.stat.Add(1)
@@ -159,6 +202,13 @@ const openFlags = unix.O_RDONLY | unix.O_DIRECTORY | unix.O_CLOEXEC | unix.O_NOF
 // Open every component relative to a directory descriptor. Only configured root
 // aliases are resolved, before opening; descendants are never followed.
 func (s *Scanner) openAbsolute(ctx context.Context, path string) (*os.File, error) {
+	return s.openAbsoluteGuarded(ctx, nil, path)
+}
+
+func (s *Scanner) openAbsoluteGuarded(ctx context.Context, guard *apiGuard, path string) (*os.File, error) {
+	if err := guard.before(s, APIDirectoryOpen); err != nil {
+		return nil, err
+	}
 	s.metrics.open.Add(1)
 	fd, err := unix.Open("/", openFlags, 0)
 	if err != nil {
@@ -172,7 +222,7 @@ func (s *Scanner) openAbsolute(ctx context.Context, path string) (*os.File, erro
 			unix.Close(fd)
 			return nil, err
 		}
-		next, err := s.openat(fd, part)
+		next, err := s.openatGuarded(guard, fd, part)
 		unix.Close(fd)
 		if err != nil {
 			return nil, err
@@ -185,7 +235,14 @@ func (s *Scanner) openAbsolute(ctx context.Context, path string) (*os.File, erro
 func objectID(st unix.Stat_t) string { return fmt.Sprintf("%d:%d", st.Dev, st.Ino) }
 
 func (s *Scanner) statFile(f *os.File) (unix.Stat_t, error) {
+	return s.statFileGuarded(nil, f)
+}
+
+func (s *Scanner) statFileGuarded(guard *apiGuard, f *os.File) (unix.Stat_t, error) {
 	var st unix.Stat_t
+	if err := guard.before(s, APIStat); err != nil {
+		return st, err
+	}
 	s.metrics.stat.Add(1)
 	err := unix.Fstat(int(f.Fd()), &st)
 	return st, err
@@ -211,28 +268,32 @@ func observation(path string, st unix.Stat_t) state.Entry {
 }
 
 func (s *Scanner) open(ctx context.Context, j state.Job) (*os.File, string, string, error) {
+	return s.openGuarded(ctx, nil, j)
+}
+
+func (s *Scanner) openGuarded(ctx context.Context, guard *apiGuard, j state.Job) (*os.File, string, string, error) {
 	root := string(j.RootPath)
 	path := string(j.Path)
 	if !s.roots[root] || !validPath(path) {
 		return nil, "", "", errors.New("invalid scan scope")
 	}
-	canonical, err := s.resolve(root)
+	canonical, err := s.resolveGuarded(guard, root)
 	if err != nil {
 		return nil, "", "", err
 	}
 	if s.excluded(root) || s.excluded(canonical) || s.excluded(filepath.Join(root, path)) || s.excluded(filepath.Join(canonical, path)) {
 		return nil, "", "", errors.New("directory is excluded or protected")
 	}
-	f, err := s.openAbsolute(ctx, canonical)
+	f, err := s.openAbsoluteGuarded(ctx, guard, canonical)
 	if err != nil {
 		return nil, "", "", err
 	}
 	fail := func(err error) (*os.File, string, string, error) { f.Close(); return nil, "", "", err }
-	st, err := s.statFile(f)
+	st, err := s.statFileGuarded(guard, f)
 	if err != nil {
 		return fail(err)
 	}
-	volume, mount, err := s.filesystem(int(f.Fd()))
+	volume, mount, err := s.filesystemGuarded(guard, int(f.Fd()))
 	if err != nil {
 		return fail(err)
 	}
@@ -247,13 +308,13 @@ func (s *Scanner) open(ctx context.Context, j state.Job) (*os.File, string, stri
 			if err := ctx.Err(); err != nil {
 				return fail(err)
 			}
-			fd, err := s.openat(int(f.Fd()), part)
+			fd, err := s.openatGuarded(guard, int(f.Fd()), part)
 			if err != nil {
 				return fail(err)
 			}
 			f.Close()
 			f = os.NewFile(uintptr(fd), path)
-			v, m, err := s.filesystem(fd)
+			v, m, err := s.filesystemGuarded(guard, fd)
 			if err != nil {
 				return fail(err)
 			}
@@ -274,6 +335,10 @@ func rootFingerprint(path, volume string, st unix.Stat_t) string {
 // restarts enumeration with a new generation; directory order/offsets are never
 // treated as portable durable cursors. Upserts make replay idempotent.
 func (s *Scanner) Next(ctx context.Context, j state.Job) (state.ScanBatch, error) {
+	return s.next(ctx, j, nil)
+}
+
+func (s *Scanner) next(ctx context.Context, j state.Job, guard *apiGuard) (state.ScanBatch, error) {
 	s.mu.Lock()
 	defer func() {
 		if s.closed.Load() {
@@ -281,11 +346,23 @@ func (s *Scanner) Next(ctx context.Context, j state.Job) (state.ScanBatch, error
 		}
 		s.mu.Unlock()
 	}()
+	if err := guard.check(s); err != nil {
+		s.reset()
+		return state.ScanBatch{}, err
+	}
 	if s.closed.Load() {
 		return state.ScanBatch{}, errors.New("scanner closed")
 	}
 	fault := func(err error) (state.ScanBatch, error) {
 		s.reset()
+		if errors.Is(err, ErrAPIPermitDenied) {
+			return state.ScanBatch{}, err
+		}
+		if guard != nil {
+			if denied := guard.check(s); denied != nil {
+				return state.ScanBatch{}, denied
+			}
+		}
 		if ctx.Err() != nil {
 			return state.ScanBatch{}, ctx.Err()
 		}
@@ -295,11 +372,11 @@ func (s *Scanner) Next(ctx context.Context, j state.Job) (state.ScanBatch, error
 		}
 		return state.ScanBatch{Fault: message}, nil
 	}
-	f, identity, canonical, err := s.open(ctx, j)
+	f, identity, canonical, err := s.openGuarded(ctx, guard, j)
 	if err != nil {
 		return fault(err)
 	}
-	st, err := s.statFile(f)
+	st, err := s.statFileGuarded(guard, f)
 	if err != nil {
 		f.Close()
 		return fault(err)
@@ -322,7 +399,7 @@ func (s *Scanner) Next(ctx context.Context, j state.Job) (state.ScanBatch, error
 		f.Close()
 	}
 	stream := s.current
-	parentVolume, parentMount, err := s.filesystem(int(stream.file.Fd()))
+	parentVolume, parentMount, err := s.filesystemGuarded(guard, int(stream.file.Fd()))
 	if err != nil {
 		return fault(err)
 	}
@@ -330,6 +407,9 @@ func (s *Scanner) Next(ctx context.Context, j state.Job) (state.ScanBatch, error
 	// Keep unread names in the one bounded stream. Throttle deadlines yield a
 	// valid partial batch; they must not discard names already enumerated.
 	if len(stream.pending) == 0 && !stream.eof {
+		if err := guard.before(s, APIDirectoryRead); err != nil {
+			return fault(err)
+		}
 		s.metrics.read.Add(1)
 		names, readErr := stream.file.Readdirnames(state.MaxBatchEntries)
 		if readErr != nil && !errors.Is(readErr, io.EOF) {
@@ -361,6 +441,9 @@ func (s *Scanner) Next(ctx context.Context, j state.Job) (state.ScanBatch, error
 			return fault(errors.New("invalid directory entry"))
 		}
 		var child unix.Stat_t
+		if err := guard.before(s, APIStat); err != nil {
+			return fault(err)
+		}
 		s.metrics.inspections.Add(1)
 		s.metrics.stat.Add(1)
 		if err := unix.Fstatat(int(stream.file.Fd()), name, &child, unix.AT_SYMLINK_NOFOLLOW); err != nil {
@@ -378,12 +461,18 @@ func (s *Scanner) Next(ctx context.Context, j state.Job) (state.ScanBatch, error
 			e.SkipReason = "excluded or protected"
 		}
 		if e.Kind == "directory" && e.SkipReason == "" {
-			fd, err := s.openat(int(stream.file.Fd()), name)
+			fd, err := s.openatGuarded(guard, int(stream.file.Fd()), name)
 			if err != nil {
+				if errors.Is(err, ErrAPIPermitDenied) {
+					return fault(err)
+				}
 				e.SkipReason = "directory unavailable"
 			} else {
-				v, m, err := s.filesystem(fd)
+				v, m, err := s.filesystemGuarded(guard, fd)
 				unix.Close(fd)
+				if errors.Is(err, ErrAPIPermitDenied) {
+					return fault(err)
+				}
 				if err != nil || v != parentVolume || m != parentMount {
 					e.SkipReason = "unsupported filesystem or mount boundary"
 				}
@@ -395,16 +484,16 @@ func (s *Scanner) Next(ctx context.Context, j state.Job) (state.ScanBatch, error
 	}
 	// Reopen the path as well as fstat'ing the stream: a renamed/replaced
 	// ancestor must not let an old descriptor certify the current pathname.
-	check, _, _, err := s.open(ctx, j)
+	check, _, _, err := s.openGuarded(ctx, guard, j)
 	if err != nil {
 		return fault(err)
 	}
-	end, err := s.statFile(check)
+	end, err := s.statFileGuarded(guard, check)
 	check.Close()
 	if err != nil {
 		return fault(err)
 	}
-	current, err := s.statFile(stream.file)
+	current, err := s.statFileGuarded(guard, stream.file)
 	if err != nil {
 		return fault(err)
 	}
@@ -422,10 +511,20 @@ func (s *Scanner) Next(ctx context.Context, j state.Job) (state.ScanBatch, error
 		}
 		stream.cursor = bytes.Clone(b.Cursor)
 	}
+	if err := guard.check(s); err != nil {
+		return fault(err)
+	}
 	return b, nil
 }
 
 func (s *Scanner) resolve(path string) (string, error) {
+	return s.resolveGuarded(nil, path)
+}
+
+func (s *Scanner) resolveGuarded(guard *apiGuard, path string) (string, error) {
+	if err := guard.before(s, APIPathResolution); err != nil {
+		return "", err
+	}
 	s.metrics.resolve.Add(1)
 	return filepath.EvalSymlinks(path)
 }

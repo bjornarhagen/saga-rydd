@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -26,6 +27,20 @@ func TestPlatformPaths(t *testing.T) {
 	}
 	if _, err := PathsFor("linux", "/home/test", "relative", env); err == nil {
 		t.Fatal("relative data dir accepted")
+	}
+}
+
+func TestMetadataDailyCapDefaultsAndBounds(t *testing.T) {
+	base := "roots=['/offline-root']\n[scan]\n"
+	if c, err := Decode([]byte(base), "/generated-home"); err != nil || c.Scan.MetadataAttemptsPerDay != 20_000_000 {
+		t.Fatal("missing cap did not inherit versioned defaults", c, err)
+	}
+	for _, n := range []int64{-1, 0, 1, 20_000_000, 1 << 50, 1<<50 + 1} {
+		c, err := Decode([]byte(base+"metadata_attempts_per_day="+strconv.FormatInt(n, 10)+"\n"), "/generated-home")
+		valid := n >= 1 && n <= 1<<50
+		if (err == nil) != valid || (valid && c.Scan.MetadataAttemptsPerDay != n) {
+			t.Fatal(n, c, err)
+		}
 	}
 }
 

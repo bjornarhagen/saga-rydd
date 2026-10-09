@@ -142,9 +142,13 @@ func TestServiceLifecycleErrorEnvelopeRetainsUncertainPublication(t *testing.T) 
 				Code string `json:"code"`
 			} `json:"error"`
 		}
-		if code != 1 || json.Unmarshal(out.Bytes(), &envelope) != nil || envelope.OK || envelope.Error.Code != test.code || envelope.Service.Publication != "uncertain" || envelope.Service.DescriptorPath != r.DescriptorPath || strings.Contains(out.String(), "untrusted") || strings.Contains(errOut.String(), "untrusted") || !strings.Contains(errOut.String(), "Created coordinator lock") || !strings.Contains(errOut.String(), `Created directory: "/generated/Library"`) {
+		if code != 1 || json.Unmarshal(out.Bytes(), &envelope) != nil || envelope.OK || envelope.Error.Code != test.code || envelope.Service.Publication != "uncertain" || envelope.Service.DescriptorPath != r.DescriptorPath || len(envelope.Service.DirectoriesCreated) != 2 || !envelope.Service.LockCreated || strings.Contains(out.String(), "untrusted") || errOut.Len() != 0 {
 			t.Fatal("error lost stages or leaked external output", code, out.String(), errOut.String())
 		}
+	}
+	var diagnostic bytes.Buffer
+	if code := serviceMachineFailure(serviceShortWriter{}, &diagnostic, r, service.ErrArtifactPublication); code != 1 || !strings.Contains(diagnostic.String(), "write JSON") || !strings.Contains(diagnostic.String(), "Created coordinator lock") || !strings.Contains(diagnostic.String(), `Created directory: "/generated/Library"`) {
+		t.Fatal("failed error reply lost publication inspection guidance", code, diagnostic.String())
 	}
 }
 

@@ -203,9 +203,11 @@ func serviceMachineFailure(out, errOut io.Writer, result any, err error) int {
 	if r, ok := result.(service.LifecycleResult); ok && r.DescriptorPath != "" {
 		envelope["service"] = r
 	}
-	exitCode := emit(out, errOut, envelope, 1)
-	if exitCode != 1 || result != nil {
+	// Use zero only to distinguish successful emission from a failed write;
+	// this operation still returns failure. Normal error envelopes keep stderr
+	// empty; the envelope already carries all partial publication stages.
+	if emit(out, errOut, envelope, 0) != 0 {
 		fmt.Fprintln(errOut, serviceReplyMessage(result))
 	}
-	return exitCode
+	return 1
 }

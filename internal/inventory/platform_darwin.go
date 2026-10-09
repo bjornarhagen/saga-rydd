@@ -18,7 +18,14 @@ func verifyManifestMount(parent int, mount string) error { return nil }
 func verifyNamedMount(parent int, name, mount string) error { return nil }
 
 func (s *Scanner) filesystem(fd int) (string, string, error) {
+	return s.filesystemGuarded(nil, fd)
+}
+
+func (s *Scanner) filesystemGuarded(guard *apiGuard, fd int) (string, string, error) {
 	var fs unix.Statfs_t
+	if err := guard.before(s, APIFilesystemStat); err != nil {
+		return "", "", err
+	}
 	s.metrics.filesystem.Add(1)
 	if err := unix.Fstatfs(fd, &fs); err != nil {
 		return "", "", err

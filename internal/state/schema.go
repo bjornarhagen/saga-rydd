@@ -4,7 +4,7 @@ package state
 // must never be deleted/recreated as a migration strategy: future action/restore
 // records must stay separate from rebuildable inventory. Saved selections use
 // their own database; this inventory has a durable incarnation identity.
-const schemaVersion = 9
+const schemaVersion = 10
 const applicationID = 0x52594444 // RYDD
 
 const migration1 = `
@@ -60,6 +60,7 @@ var migrations = []struct{ name, sql string }{
 	{"absent-subtree-retirement", migration7},
 	{"complete-scope-coverage", migration8},
 	{"inventory-incarnation", migration9},
+	{"scanner-metadata-reservations", migration10},
 }
 
 const migration4 = `
@@ -158,4 +159,37 @@ CREATE TRIGGER inventory_identity_no_update BEFORE UPDATE ON inventory_identity
  BEGIN SELECT RAISE(ABORT,'inventory identity is immutable'); END;
 CREATE TRIGGER inventory_identity_no_delete BEFORE DELETE ON inventory_identity
  BEGIN SELECT RAISE(ABORT,'inventory identity is immutable'); END;
+`
+
+const migration10 = `
+CREATE TABLE scan_metadata_budget (
+ singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+ tracking_started_ns INTEGER NOT NULL CHECK(typeof(tracking_started_ns)='integer' AND tracking_started_ns>0),
+ day TEXT NOT NULL CHECK(length(day)=10),
+ max_now_ns INTEGER NOT NULL CHECK(typeof(max_now_ns)='integer' AND max_now_ns>=tracking_started_ns),
+ reserved INTEGER NOT NULL CHECK(typeof(reserved)='integer' AND reserved>=0),
+ observed INTEGER NOT NULL CHECK(typeof(observed)='integer' AND observed>=0),
+ unknown_reserved INTEGER NOT NULL CHECK(typeof(unknown_reserved)='integer' AND unknown_reserved>=0),
+ total_reserved INTEGER NOT NULL CHECK(typeof(total_reserved)='integer' AND total_reserved>=reserved),
+ total_observed INTEGER NOT NULL CHECK(typeof(total_observed)='integer' AND total_observed>=observed),
+ total_unknown_reserved INTEGER NOT NULL CHECK(typeof(total_unknown_reserved)='integer' AND total_unknown_reserved>=unknown_reserved),
+ CHECK(observed<=reserved AND unknown_reserved<=reserved-observed),
+ CHECK(total_observed<=total_reserved AND total_unknown_reserved<=total_reserved-total_observed)
+);
+CREATE TABLE scan_metadata_reservations (
+ scope TEXT PRIMARY KEY CHECK(scope IN ('startup','next')),
+ token TEXT NOT NULL UNIQUE CHECK(length(token)=64 AND token NOT GLOB '*[^0-9a-f]*'),
+ job_id INTEGER NOT NULL CHECK(typeof(job_id)='integer' AND job_id>=0),
+ job_token TEXT NOT NULL,
+ day TEXT NOT NULL CHECK(length(day)=10),
+ started_ns INTEGER NOT NULL CHECK(typeof(started_ns)='integer' AND started_ns>0),
+ expires_ns INTEGER NOT NULL CHECK(typeof(expires_ns)='integer' AND expires_ns>started_ns),
+ high_water_ns INTEGER NOT NULL CHECK(typeof(high_water_ns)='integer' AND high_water_ns=started_ns),
+ allowance INTEGER NOT NULL CHECK(typeof(allowance)='integer' AND allowance BETWEEN 1 AND 65536),
+ status TEXT NOT NULL CHECK(status IN ('reserved','settled','unknown')),
+ observed INTEGER CHECK(observed IS NULL OR (typeof(observed)='integer' AND observed BETWEEN 0 AND allowance)),
+ CHECK((scope='startup' AND job_id=0 AND job_token='') OR
+       (scope='next' AND job_id>0 AND length(job_token)=32 AND job_token NOT GLOB '*[^0-9a-f]*')),
+ CHECK((status='settled' AND observed IS NOT NULL) OR (status!='settled' AND observed IS NULL))
+);
 `

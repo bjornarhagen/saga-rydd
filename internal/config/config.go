@@ -68,17 +68,22 @@ type Config struct {
 }
 
 type Scan struct {
-	WorkSeconds         int   `toml:"work_seconds"`
-	IntervalSeconds     int   `toml:"interval_seconds"`
-	MetadataPerSecond   int   `toml:"metadata_per_second"`
-	ReadBytesPerSecond  int64 `toml:"read_bytes_per_second"`
-	ReadBytesPerDay     int64 `toml:"read_bytes_per_day"`
-	PauseOnBattery      bool  `toml:"pause_on_battery"`
-	MaxScanChunksPerDay int   `toml:"max_scan_chunks_per_day"`
+	WorkSeconds            int   `toml:"work_seconds"`
+	IntervalSeconds        int   `toml:"interval_seconds"`
+	MetadataPerSecond      int   `toml:"metadata_per_second"`
+	MetadataAttemptsPerDay int64 `toml:"metadata_attempts_per_day"`
+	ReadBytesPerSecond     int64 `toml:"read_bytes_per_second"`
+	ReadBytesPerDay        int64 `toml:"read_bytes_per_day"`
+	PauseOnBattery         bool  `toml:"pause_on_battery"`
+	MaxScanChunksPerDay    int   `toml:"max_scan_chunks_per_day"`
 }
 
 func Default() Config {
-	return Config{Version: Version, Roots: []string{}, Excludes: []string{}, Scan: Scan{30, 300, 100, 5 << 20, 5 << 30, true, 288}}
+	return Config{Version: Version, Roots: []string{}, Excludes: []string{}, Scan: Scan{
+		WorkSeconds: 30, IntervalSeconds: 300, MetadataPerSecond: 100,
+		MetadataAttemptsPerDay: 20_000_000, ReadBytesPerSecond: 5 << 20,
+		ReadBytesPerDay: 5 << 30, PauseOnBattery: true, MaxScanChunksPerDay: 288,
+	}}
 }
 
 func normalizePath(value, home string) (string, error) {
@@ -136,6 +141,9 @@ func (c *Config) Validate(home string) error {
 	}
 	if s.MetadataPerSecond < 1 || s.MetadataPerSecond > 100000 {
 		return errors.New("metadata_per_second must be 1–100000")
+	}
+	if s.MetadataAttemptsPerDay < 1 || s.MetadataAttemptsPerDay > 1<<50 {
+		return errors.New("metadata_attempts_per_day must be 1–1125899906842624")
 	}
 	if s.ReadBytesPerSecond < 1 || s.ReadBytesPerSecond > 1<<30 || s.ReadBytesPerDay < 1 || s.ReadBytesPerDay > 1<<50 {
 		return errors.New("read budgets must be positive and at most 1 GiB/second and 1 PiB/day")

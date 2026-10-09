@@ -9,11 +9,13 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/bjornarhagen/saga-rydd/internal/config"
+	"github.com/bjornarhagen/saga-rydd/internal/inventory"
 	"github.com/bjornarhagen/saga-rydd/internal/state"
 )
 
@@ -49,10 +51,85 @@ func TestWorkerProcess(t *testing.T) {
 			return Result{}, ctx.Err()
 		}}
 	}
+	if os.Getenv("RYDD_TEST_METADATA_SLOW") == "1" {
+		c.Scan.MetadataPerSecond = 1
+		c.Scan.MaxScanChunksPerDay = 288
+	}
+	if cap := os.Getenv("RYDD_TEST_METADATA_CAP"); cap != "" {
+		value, err := strconv.ParseInt(cap, 10, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.Scan.MetadataAttemptsPerDay = value
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	if err := Run(ctx, dir, c, options); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMetadataWorkerSIGKILLRetainsUnknownCharge(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(t.TempDir(), "state")
+	for i := 0; i < 20; i++ {
+		if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("file-%03d", i)), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("RYDD_TEST_SCAN_ROOT", root)
+	t.Setenv("RYDD_TEST_METADATA_SLOW", "1")
+	child, ready := spawnWorker(t, dir, false)
+	if ready.InventoryMetrics != nil || ready.Metadata == nil || ready.Metadata.Status != "untracked" {
+		t.Fatal("eager source work before readiness", ready)
+	}
+	var admitted Snapshot
+	waitUntil(t, func() bool {
+		admitted = control(t, dir, "status")
+		return admitted.ActiveJob != 0 && admitted.InventoryMetrics != nil && admitted.InventoryMetrics.Throttled && admitted.Metadata.TotalCharges != nil && admitted.Metadata.TotalCharges.OutstandingReserved >= inventory.MaxAPIAttemptAllowance
+	})
+	reserved := admitted.Metadata.TotalCharges.Reserved
+	if reserved <= inventory.MaxAPIAttemptAllowance {
+		t.Fatal("missing construction charge", admitted)
+	}
+	if err := child.cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-child.done:
+		if err == nil {
+			t.Fatal("SIGKILL succeeded normally")
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatal("kill timed out")
+	}
+	r, err := state.OpenReader(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	// Saved-only status retains outstanding receipts until a writer restarts.
+	before, err := r.MetadataBudget(context.Background(), time.Now(), 20_000_000)
+	if err != nil || before.TotalCharges.OutstandingReserved != reserved || before.TotalCharges.UnknownReserved != 0 {
+		t.Fatal(before, err)
+	}
+	t.Setenv("RYDD_TEST_METADATA_CAP", strconv.FormatInt(reserved, 10))
+	child, restarted := spawnWorker(t, dir, false)
+	if restarted.RecoveredJobs != 1 || restarted.Metadata == nil || restarted.Metadata.TotalCharges.OutstandingReserved != 0 || restarted.Metadata.TotalCharges.UnknownReserved != reserved || restarted.InventoryMetrics != nil {
+		t.Fatal("restart failed to recover charges before source work", restarted)
+	}
+	waitUntil(t, func() bool { return control(t, dir, "status").WaitReason == "daily_metadata_limit" })
+	control(t, dir, "pause")
+	control(t, dir, "resume")
+	snapshot := control(t, dir, "status")
+	if snapshot.ActiveJob != 0 || snapshot.InventoryMetrics != nil || snapshot.Metadata.TotalCharges.Reserved != reserved || snapshot.Dispatch.Used != 1 {
+		t.Fatal("restart refunded usage or burned another dispatch", snapshot)
+	}
+	control(t, dir, "stop")
+	waitExit(t, child.done)
+	summary, err := r.Summary(context.Background())
+	if err != nil || summary.Entries != 0 || summary.CompleteDirectories != 0 || summary.DirectoryErrors != 0 {
+		t.Fatal("killed tentative source batch escaped", summary, err)
 	}
 }
 

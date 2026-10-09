@@ -34,7 +34,7 @@ func exclusionFixture(t *testing.T, split bool) (Paths, Config) {
 	cfg := Default()
 	cfg.Roots = []string{"/generated-root", "/other-offline-root"}
 	cfg.Excludes = []string{"/generated-root/keep", "/other-offline-root/retain", "/generated-root/keep"}
-	cfg.Scan = Scan{WorkSeconds: 2, IntervalSeconds: 8, MetadataPerSecond: 17, ReadBytesPerSecond: 257, ReadBytesPerDay: 1234, PauseOnBattery: false, MaxScanChunksPerDay: 8}
+	cfg.Scan = Scan{WorkSeconds: 2, IntervalSeconds: 8, MetadataPerSecond: 17, MetadataAttemptsPerDay: 20_000_000, ReadBytesPerSecond: 257, ReadBytesPerDay: 1234, PauseOnBattery: false, MaxScanChunksPerDay: 8}
 	if err := Create(paths.ConfigFile, "/generated-home", cfg); err != nil {
 		t.Fatal(err)
 	}

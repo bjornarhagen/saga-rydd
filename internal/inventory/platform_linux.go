@@ -25,7 +25,14 @@ func verifyNamedMount(parent int, name, mount string) error {
 }
 
 func (s *Scanner) filesystem(fd int) (string, string, error) {
+	return s.filesystemGuarded(nil, fd)
+}
+
+func (s *Scanner) filesystemGuarded(guard *apiGuard, fd int) (string, string, error) {
 	var fs unix.Statfs_t
+	if err := guard.before(s, APIFilesystemStat); err != nil {
+		return "", "", err
+	}
 	s.metrics.filesystem.Add(1)
 	if err := unix.Fstatfs(fd, &fs); err != nil {
 		return "", "", err
@@ -37,6 +44,9 @@ func (s *Scanner) filesystem(fd int) (string, string, error) {
 		return "", "", fmt.Errorf("unsupported filesystem type %#x", fs.Type)
 	}
 	var st unix.Statx_t
+	if err := guard.before(s, APIMountIdentity); err != nil {
+		return "", "", err
+	}
 	s.metrics.mount.Add(1)
 	if err := unix.Statx(fd, "", unix.AT_EMPTY_PATH|unix.AT_SYMLINK_NOFOLLOW, unix.STATX_MNT_ID, &st); err != nil {
 		return "", "", err

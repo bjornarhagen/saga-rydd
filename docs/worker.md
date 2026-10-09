@@ -30,6 +30,14 @@ Unavailable, decreasing, invalid or overflowing native observations are unknown 
 
 References: [Apple getrusage](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/getrusage.2.html), [Linux getrusage](https://man7.org/linux/man-pages/man2/getrusage.2.html), and [Go monotonic clocks](https://pkg.go.dev/time#hdr-Monotonic_Clocks).
 
+## Durable experimental scanner API allowances (P1-06b4)
+
+The source scanner is constructed lazily after the private control listener is ready. The owning loop checks that the full startup-plus-step charge fits before claiming a job or reserving dispatch. It commits a startup receipt and a 65,536-attempt Next receipt before invoking the permitted source APIs. Handler code holds no database connection or transaction. The operation guards cancellation, finite allowance, UTC/lease expiry, wall-clock high-water and an independent monotonic elapsed deadline. Admitted failed API calls count; denied calls publish no batch or filesystem-unavailable/coverage evidence.
+
+The owning loop settles known counts before saving job progress. Unused charge is retained. Panics and process-loss recovery retain full unknown charges; ordinary opening and saved status never recover outstanding work. This applies even when a later restart is idle. Fixed startup/Next slots and cumulative totals bound reservation storage. The first tracked partial day discloses earlier unknown activity. A later day resets daily counters only after outstanding work is settled or recovered; rollback cannot refill them.
+
+Quota waits preserve status, pause and stop. Current scanner metrics are absent until construction, then include only actually admitted APIs. The saved budget and live observations are separate snapshots. Manual scans and explicit read/inspection contracts are unchanged. These allowances count scanner source APIs, not every syscall, physical I/O, configuration/SQLite/runtime work or a universal operation rate. Existing cadence, daily dispatch, WAL, CPU and job-retry gates still apply. See the [configuration and output contract](cli.md#durable-scanner-api-allowances).
+
 ## Next integrations
 
 - **P1-05 implemented:** `--experimental-scan` registers metadata inventory, seeds root jobs and commits bounded batches atomically. Schema v3 adds directory watermarks and skip reasons. See [inventory design](inventory.md). Keep experimental activation explicit until budget enforcement is verified.

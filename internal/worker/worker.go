@@ -31,6 +31,7 @@ type Snapshot struct {
 	InventoryMetrics *inventory.Metrics    `json:"inventory_metrics,omitempty"`
 	Dispatch         *state.DispatchBudget `json:"dispatch,omitempty"`
 	CPU              *CPUObservation       `json:"cpu,omitempty"`
+	Metadata         *state.MetadataBudget `json:"metadata,omitempty"`
 }
 
 type Result struct {
@@ -55,11 +56,15 @@ type Options struct {
 	Interval, WorkDuration time.Duration
 	// cpuObserve is private so production always uses native process accounting.
 	cpuObserve func() (time.Duration, error)
+	// Source hooks are private, for bounded permit/failure lifecycle fixtures.
+	scannerNew  func(context.Context, []string, []string, []string, inventory.APIPermit, ...inventory.Option) (*inventory.Scanner, error)
+	scannerNext func(context.Context, *inventory.Scanner, state.Job, inventory.APIPermit) (state.ScanBatch, error)
 }
 type outcome struct {
 	result    Result
 	err       error
 	startedAt time.Time
+	panicked  bool
 }
 
 func Run(ctx context.Context, dir string, cfg config.Config, options Options) error {
@@ -77,6 +82,9 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 	}
 	if interval <= 0 || work <= 0 || work > 24*time.Hour {
 		return errors.New("invalid worker cadence")
+	}
+	if options.ExperimentalScan && (cfg.Scan.MetadataAttemptsPerDay < 1 || cfg.Scan.MetadataAttemptsPerDay > state.MetadataDailyLimit) {
+		return state.ErrMetadataInvalid
 	}
 	handlers := make(map[string]Handler, len(options.Handlers))
 	kinds := make([]string, 0, len(options.Handlers))
@@ -101,28 +109,35 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 	if err := w.SyncRoots(ctx, cfg.Roots); err != nil {
 		return err
 	}
-	var scannerMetrics func() inventory.Metrics
+	var source scannerHolder
+	defer source.close()
+	var privatePaths []string
+	var startupAllowance int64
+	scannerNew := options.scannerNew
+	if scannerNew == nil {
+		scannerNew = inventory.NewPermitted
+	}
+	scannerNext := options.scannerNext
+	if scannerNext == nil {
+		scannerNext = func(ctx context.Context, scanner *inventory.Scanner, job state.Job, permit inventory.APIPermit) (state.ScanBatch, error) {
+			return scanner.NextPermitted(ctx, job, permit)
+		}
+	}
 	if options.ExperimentalScan {
 		endpoint, err := Endpoint(dir)
 		if err != nil {
 			return err
 		}
-		scanner, err := inventory.New(cfg.Roots, cfg.Excludes, append(append([]string{}, options.PrivatePaths...), dir, filepath.Dir(endpoint)), inventory.WithEntryRate(cfg.Scan.MetadataPerSecond))
+		privatePaths = append(append([]string{}, options.PrivatePaths...), dir, filepath.Dir(endpoint))
+		startupAllowance, err = inventory.StartupAPIAttemptAllowance(cfg.Roots, cfg.Excludes, privatePaths)
 		if err != nil {
 			return err
 		}
-		defer scanner.Close()
-		scannerMetrics = scanner.Metrics
 		if _, exists := handlers[state.ScanKind]; exists {
 			return errors.New("inventory handler already registered")
 		}
-		handlers[state.ScanKind] = func(ctx context.Context, j state.Job) (Result, error) {
-			batch, err := scanner.Next(ctx, j)
-			if err != nil {
-				return Result{}, err
-			}
-			return Result{Scan: &batch}, nil
-		}
+		// The source handler is bound to reserved windows at dispatch time.
+		handlers[state.ScanKind] = nil
 		kinds = append(kinds, state.ScanKind)
 		compact, modeErr := w.ConfigureCompact(ctx, nil)
 		if modeErr != nil {
@@ -134,6 +149,11 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 		if err := w.SeedInventory(ctx); err != nil {
 			return err
 		}
+	}
+	// Writer-owned restart recovery retains full unknown charges. Status and
+	// ordinary store opening never perform this mutation, including idle mode.
+	if _, err := w.RecoverMetadataReservations(ctx, time.Now()); err != nil {
+		return err
 	}
 	recovered, err := w.RecoverJobs(ctx, time.Now())
 	if err != nil {
@@ -152,10 +172,23 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 	refreshMetrics := func() {
 		observation := cpu.observation
 		live.CPU = &observation
-		if scannerMetrics != nil {
-			metrics := scannerMetrics()
+		if scanner := source.value.Load(); scanner != nil {
+			metrics := scanner.Metrics()
 			live.InventoryMetrics = &metrics
 		}
+	}
+	refreshMetadata := func(queryCtx context.Context, now time.Time) error {
+		if !options.ExperimentalScan {
+			return nil
+		}
+		budget, err := w.MetadataBudget(queryCtx, now, cfg.Scan.MetadataAttemptsPerDay)
+		if err == nil {
+			live.Metadata = &budget
+		}
+		return err
+	}
+	if err := refreshMetadata(ctx, time.Now()); err != nil {
+		return err
 	}
 	refreshMetrics()
 	calls := make(chan controlCall, 8)
@@ -194,6 +227,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 	nextAllowed := time.Time{}
 	walNextAllowed := time.Time{}
 	var activeCPUWindow cpuWindow
+	var activeMetadata []*metadataWindow
 	stop := func() {
 		live.Stopping = true
 		live.WaitReason = "stopping"
@@ -254,6 +288,24 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 							due = budget.NextAllowed
 							live.WaitReason = budget.Reason
 						}
+						if err := refreshMetadata(ctx, now); err != nil {
+							if ctx.Err() != nil {
+								stop()
+								continue
+							}
+							return err
+						}
+						neededStartup := int64(0)
+						if source.value.Load() == nil {
+							neededStartup = startupAllowance
+						}
+						allowed, reason, err := metadataReadiness(*live.Metadata, now, neededStartup)
+						if err != nil {
+							return err
+						}
+						if reason != "" && !allowed.Before(due) {
+							due, live.WaitReason = allowed, reason
+						}
 					}
 					if due.Before(nextAllowed) {
 						due = nextAllowed
@@ -312,6 +364,9 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 				response.Error = "unknown control command"
 			}
 			refreshMetrics()
+			if err := refreshMetadata(call.ctx, time.Now()); err != nil {
+				response.OK, response.Error = false, err.Error()
+			}
 			response.Status = live
 			call.reply <- response
 		case <-tick:
@@ -345,6 +400,26 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 					reschedule = true
 					continue
 				}
+				now := time.Now()
+				if err := refreshMetadata(ctx, now); err != nil {
+					if ctx.Err() != nil {
+						stop()
+						continue
+					}
+					return err
+				}
+				neededStartup := int64(0)
+				if source.value.Load() == nil {
+					neededStartup = startupAllowance
+				}
+				_, reason, err := metadataReadiness(*live.Metadata, now, neededStartup)
+				if err != nil {
+					return err
+				}
+				if reason != "" {
+					reschedule = true
+					continue
+				}
 			}
 			now := time.Now()
 			job, err := w.ClaimJob(ctx, kinds, now, work+10*time.Second)
@@ -359,6 +434,8 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 				reschedule = true
 				continue
 			}
+			handler := handlers[job.Kind]
+			activeMetadata = nil
 			if options.ExperimentalScan && job.Kind == state.ScanKind {
 				budget, err := w.ReserveScanChunk(ctx, time.Now(), interval, cfg.Scan.MaxScanChunksPerDay)
 				if errors.Is(err, state.ErrDispatchDeferred) {
@@ -372,12 +449,74 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 					return fmt.Errorf("reserve scan dispatch: %w", err)
 				}
 				live.Dispatch = &budget
+				var startupWindow *metadataWindow
+				var reserveErr error
+				if source.value.Load() == nil {
+					reservation, err := w.ReserveMetadata(ctx, time.Now(), state.MetadataStartup, nil, startupAllowance, cfg.Scan.MetadataAttemptsPerDay)
+					reserveErr = err
+					if err == nil {
+						startupWindow = newMetadataWindow(reservation, work)
+						activeMetadata = append(activeMetadata, startupWindow)
+					}
+				}
+				var reservation state.MetadataReservation
+				if reserveErr == nil {
+					reservation, reserveErr = w.ReserveMetadata(ctx, time.Now(), state.MetadataNext, job, inventory.MaxAPIAttemptAllowance, cfg.Scan.MetadataAttemptsPerDay)
+				}
+				if reserveErr != nil {
+					// A rollback or cancellation can race with readiness. No
+					// source call has run: settle any charge as known zero, then
+					// retain the old cursor and keep the control loop available.
+					settleCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+					settleErr := settleMetadata(settleCtx, w, activeMetadata, false, time.Now())
+					if settleErr == nil {
+						settleErr = w.FinishJob(settleCtx, *job, false, job.Cursor, time.Unix(0, 1), "")
+					}
+					cancel()
+					activeMetadata = nil
+					if settleErr != nil {
+						return errors.Join(reserveErr, settleErr)
+					}
+					if ctx.Err() != nil {
+						stop()
+						continue
+					}
+					if errors.Is(reserveErr, state.ErrMetadataDeferred) {
+						reschedule = true
+						continue
+					}
+					return fmt.Errorf("reserve scanner metadata: %w", reserveErr)
+				}
+				nextWindow := newMetadataWindow(reservation, work)
+				if startupWindow != nil {
+					startupWindow.highWater = reservation.ClockHighWater
+				}
+				activeMetadata = append(activeMetadata, nextWindow)
+				handler = func(ctx context.Context, j state.Job) (Result, error) {
+					scanner := source.value.Load()
+					if scanner == nil {
+						created, err := scannerNew(ctx, cfg.Roots, cfg.Excludes, privatePaths, startupWindow.permit, inventory.WithEntryRate(cfg.Scan.MetadataPerSecond))
+						if err != nil {
+							return Result{}, err
+						}
+						source.publish(created)
+						scanner = created
+						// Construction may have observed wall time newer than
+						// both reservations. Fence Next before its first call.
+						nextWindow.inheritHighWater(startupWindow)
+					}
+					batch, err := scannerNext(ctx, scanner, j, nextWindow.permit)
+					if err != nil {
+						return Result{}, err
+					}
+					return Result{Scan: &batch}, nil
+				}
 			}
 			active = job
 			activeCPUWindow = window
 			live.WaitReason = "running"
 			live.ActiveJob = job.ID
-			cancelTask = startChunk(ctx, work, *job, handlers[job.Kind], done)
+			cancelTask = startChunk(ctx, work, *job, handler, done)
 		case result := <-done:
 			cancelTask()
 			cancelTask = nil
@@ -392,7 +531,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 			if result.err != nil {
 				result.result = Result{Cursor: active.Cursor}
 				lastError = result.err.Error()
-				if errors.Is(result.err, context.Canceled) || errors.Is(result.err, context.DeadlineExceeded) {
+				if metadataInterruption(result.err) {
 					lastError = ""
 					due = time.Now()
 					if active.Kind == state.ScanKind {
@@ -403,16 +542,26 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 				}
 			}
 			finishCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			if err := settleMetadata(finishCtx, w, activeMetadata, result.panicked, time.Now()); err != nil {
+				cancel()
+				return fmt.Errorf("settle scanner metadata: %w", err)
+			}
+			activeMetadata = nil
 			var err error
 			if result.result.Scan != nil {
 				err = w.CommitScan(finishCtx, *active, *result.result.Scan)
 			} else {
 				err = w.FinishJob(finishCtx, *active, result.result.Done, result.result.Cursor, due, lastError)
 			}
-			cancel()
 			if err != nil {
+				cancel()
 				return fmt.Errorf("save job progress: %w", err)
 			}
+			if err := refreshMetadata(finishCtx, time.Now()); err != nil {
+				cancel()
+				return err
+			}
+			cancel()
 			// Include claiming, reservation, handler and owning-loop commit work.
 			// Errors/cancellation still consumed process CPU in this window.
 			after, cpuErr := observeCPU()
@@ -434,6 +583,7 @@ func startChunk(ctx context.Context, duration time.Duration, job state.Job, hand
 			if recover() != nil {
 				result.result = Result{}
 				result.err = errors.New("job handler panicked")
+				result.panicked = true
 			}
 			done <- result
 		}()

@@ -323,6 +323,15 @@ func TestDailyDispatchCapAcrossWorkerRestart(t *testing.T) {
 	options := Options{ExperimentalScan: true, Interval: 10 * time.Millisecond}
 	_, done := start(t, dir, c, options)
 	waitUntil(t, func() bool { return control(t, dir, "status").WaitReason == "daily_chunk_limit" })
+	first := control(t, dir, "status")
+	if first.ActiveJob != 0 || first.InventoryMetrics == nil || first.Metadata == nil || first.Metadata.TotalCharges == nil {
+		t.Fatal("missing settled native scanner accounting", first)
+	}
+	m := first.InventoryMetrics
+	apiAttempts := m.StatCalls + m.DirectoryOpenCalls + m.DirectoryReadCalls + m.FilesystemStatCalls + m.MountIdentityCalls + m.PathResolutionCalls
+	if first.Metadata.TotalCharges.OutstandingReserved != 0 || first.Metadata.TotalCharges.Observed != int64(apiAttempts) || apiAttempts == 0 {
+		t.Fatal("settled permits differ from actual scanner API counters", first.Metadata, m)
+	}
 	control(t, dir, "pause")
 	control(t, dir, "resume")
 	control(t, dir, "stop")
@@ -330,8 +339,11 @@ func TestDailyDispatchCapAcrossWorkerRestart(t *testing.T) {
 	_, done = start(t, dir, c, options)
 	waitUntil(t, func() bool { return control(t, dir, "status").WaitReason == "daily_chunk_limit" })
 	snapshot := control(t, dir, "status")
-	if snapshot.InventoryMetrics == nil || snapshot.InventoryMetrics.StatCalls == 0 {
-		t.Fatal("missing live scanner counters", snapshot)
+	if snapshot.InventoryMetrics != nil {
+		t.Fatal("quota-blocked restart eagerly constructed the scanner", snapshot)
+	}
+	if snapshot.Metadata == nil || snapshot.Metadata.TotalCharges == nil || snapshot.Metadata.TotalCharges.Reserved < 65536 || snapshot.Metadata.TotalCharges.OutstandingReserved != 0 {
+		t.Fatal("missing retained metadata accounting", snapshot)
 	}
 	if snapshot.Dispatch == nil || snapshot.Dispatch.Used != 1 || snapshot.ActiveJob != 0 {
 		t.Fatal(snapshot)
