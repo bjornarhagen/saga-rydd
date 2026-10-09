@@ -366,6 +366,20 @@ JSON `service` uses contract `service_runtime_request_v1`. It binds action/platf
 
 Capabilities expose `service_activation_requests` and `service_stop_requests`; full runtime controls/state verification, service installation and native installed-manager/login/logout acceptance remain open. These commands do not authorize cleanup.
 
+## Exact service descriptor removal
+
+```sh
+rydd service uninstall --executable /absolute/path/to/rydd [--directory /exact/user/service/directory] [--json]
+```
+
+Use the exact installed executable, data directory and service directory. This finite mode requires the existing owned supported directory and stable coordinator lock. It opens the descriptor through held no-follow ancestors, verifies private single-link ownership, bounded exact bytes and stamps, then removes only its fixed name and syncs the parent. Missing parent or lock refuses without initialization. It preserves configuration, inventory, plans, consent, hashes, action/restore history, quarantine, executable, directories, lock and external enablement links. One cooperative five-second deadline covers the operation.
+
+The managed metadata protocol coordinates cooperating Rydd processes. Pre/post checks do not make unlink conditional on an inode against deliberate same-user replacement; it supplies no original-source cleanup authority. An absent retry reports current absence under the existing scope. It does not prove that a previous command removed the selected file.
+
+JSON `service` uses `service_descriptor_removal_v1`. `removal_status` is `not_requested`, `not_needed`, `removed` or `unknown`. Separate fields retain `removal_attempted`, `unlink_completed`, nullable `removal_observed` (held selected file has zero links), nullable `descriptor_absent`, observation time and `sync_completed`. Later errors/cancellation retain known partial effects. Checked absence, selected-object evidence and completed sync are historical observations, not promises of lasting absence or physical power-loss durability. Operational failures retain the result in one normal error envelope; lost output includes inspection guidance.
+
+No manager, stop, disable, reload or scanning request occurs. `running`, `stopped` and global `future_login_may_start` remain null; runtime/loaded-origin verification stays false. A loaded or registered service can continue, and external enablement links remain. Request the Rydd stop adapter before removal if wanted because it requires the exact descriptor; acknowledgment still does not prove shutdown. After removal, use manager-specific inspection/action or exact reinstall before that adapter. `service_descriptor_removal` advertises this artifact-only scope. Installed-manager/login/logout acceptance and packaging executable removal remain open.
+
 ## Foreground manual scans
 
 `scan -d PATH [-s MS | --now] [--json]` scans one selected folder without initialization or service installation. Long aliases are `--directory` and `--sleep`. Default spacing is 10 ms between child-entry inspection starts; accepted spacing is 0–60000 ms. `--now` means zero spacing. Combining `--now` with a sleep flag, or both aliases of an option, is invalid usage. Relative and home-relative paths normalize to absolute lexical paths; aliases/symlinks are not canonicalized into the same inventory key.

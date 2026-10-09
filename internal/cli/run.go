@@ -34,6 +34,10 @@ Commands:
   service preview --executable ABSOLUTE_PATH [--json]  Preview an idle-only service descriptor
   service install/status --executable ABSOLUTE_PATH [--directory ABSOLUTE_PATH] [--json]
                                                      Publish or inspect the exact idle descriptor
+  service start/stop --executable ABSOLUTE_PATH [--directory ABSOLUTE_PATH] [--json]
+                                                     Request idle-service start or stop; runtime unknown
+  service uninstall --executable ABSOLUTE_PATH [--directory ABSOLUTE_PATH] [--json]
+                                                     Remove the exact descriptor; does not stop a service
   pause / resume                                       Persistently pause or resume work
   stop                                                 Request graceful worker shutdown
   ignore --preview -d ROOT [--min-age-days N] FINDING_ID [--json]
@@ -95,9 +99,9 @@ Commands:
 
 Options: --help, --version; --json on finite commands
 
-Experimental foreground metadata scanning is available for selected folders. Fine-grained
-metadata/content, CPU and power budgets are not enforced yet. Service installation, duplicate
-detection and cleanup are not available yet.
+Experimental metadata scanning, charged background scanner API allowances, explicit hashing
+and idle-service descriptor controls are available. Full global CPU/I/O/power limits, verified
+service runtime state and cleanup remain unavailable.
 `
 
 type pathsFlag []string

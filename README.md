@@ -437,7 +437,7 @@ rydd --data-dir /path/to/private/state service preview --executable /absolute/pa
 
 This proposes an idle-only launchd or systemd user descriptor. It binds the exact executable, configuration, state and control-runtime paths. It renders plain `daemon`, with no scanner. It opens no configuration, state or executable contents, writes no descriptor and invokes no service manager. The output declares a supported profile; installed support and future executable identity are unverified.
 
-Installing a descriptor in a login service directory can affect future logins. Exact artifact installation/status is available below; explicit start/stop requests are available below; descriptor removal remains separate work. The worker would update normal root/recovery bookkeeping when started. Scheduling hints supplement resource pacing; they do not prove effective CPU/I/O priority or hourly limits. See the [service preview contract](docs/cli.md#user-service-descriptor-preview).
+Installing a descriptor in a login service directory can affect future logins. Exact artifact installation/status is available below; explicit start/stop requests are available below; exact descriptor removal is available below. The worker would update normal root/recovery bookkeeping when started. Scheduling hints supplement resource pacing; they do not prove effective CPU/I/O priority or hourly limits. See the [service preview contract](docs/cli.md#user-service-descriptor-preview).
 
 ## Install or inspect an idle service descriptor
 
@@ -458,6 +458,14 @@ rydd service stop --executable /absolute/path/to/rydd
 ```
 
 Use the exact installed spec and selected data directory. These send one explicit request for the idle service. A queued Linux job or successful macOS client reply is historical acceptance evidence; running/stopped state remains unknown. Linux checks declared loaded settings; macOS addresses the fixed current-user managed label without loaded-origin proof. Normal manager dependencies and preflight bookkeeping can be affected. Stop preserves the descriptor and its future-login effects. Inspect an uncertain reply before deciding to retry. See the [request contract](docs/cli.md#explicit-idle-service-start-and-stop-requests).
+
+## Remove the managed service descriptor
+
+```sh
+rydd service uninstall --executable /absolute/path/to/rydd
+```
+
+Use the exact installed scope. This removes only the managed descriptor and preserves the executable, configuration, saved history, quarantine, directories and lock. It sends no stop, disable or reload request. A loaded service can continue running. The Rydd stop adapter requires the descriptor, so request stop before uninstall when wanted; an accepted request does not prove shutdown. See the [removal contract](docs/cli.md#exact-service-descriptor-removal).
 
 ## Background scan revisits
 
