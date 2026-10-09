@@ -86,7 +86,7 @@ func openExistingDismissalWriter(ctx context.Context, base string) (*sql.DB, fun
 	if err = db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return fail(err)
 	}
-	if app != applicationID || version != 5 {
+	if app != applicationID || (version != 5 && version != 6) {
 		return fail(ErrDismissalCorrupt)
 	}
 	if err = ctx.Err(); err != nil {

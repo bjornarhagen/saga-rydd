@@ -184,15 +184,12 @@ func TestReviewMigrationAndRollback(t *testing.T) {
 		t.Run(map[bool]string{false: "migrate", true: "rollback"}[conflict], func(t *testing.T) {
 			ctx := context.Background()
 			base, saved := reviewFixture(t)
-			db, closeDB, err := open(ctx, base, true)
+			admissionLegacyFixture(t, base, 1)
+			db, closeDB, err := openWithMigration(ctx, base, true, false)
 			if err != nil {
 				t.Fatal(err)
 			}
-			// Reproduce schema 1 from an existing plan, preserving its exact bytes.
-			_, err = db.Exec("DROP TABLE observations; DROP TABLE review_revocations; DROP TABLE review_approvals; DROP TABLE plan_store_identity; PRAGMA user_version=1")
-			if err != nil {
-				t.Fatal(err)
-			}
+			// Preserve schema1 through the conflict/publication transaction.
 			if conflict {
 				if _, err = db.Exec("CREATE TABLE review_approvals(conflict TEXT)"); err != nil {
 					t.Fatal(err)

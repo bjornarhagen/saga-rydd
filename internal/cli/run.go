@@ -63,6 +63,7 @@ Commands:
   plan --revoke PLAN_ID                               Revoke review consent; no inventory needed
   journal --show INTENT_ID [--json]                 Read saved preparation/history; no operations
   journal --observe INTENT_ID [--json]              Observe recovery locations; no operations
+  hashes --store-budget [--json]                       Read shared saved reservation accounting
   hashes [--work WORK_ID | --groups] [--json]       Read saved hash observations or historical matches
   hashes --preview SELECTION_ID --keeper WORK_ID COPY_ID... [--json]
                                                 Preview possible roles from saved historical hashes
@@ -217,7 +218,12 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 		var r any
 		r, err = plan(ctx, remaining[1:], paths)
 		if err == nil {
-			printPlan(out, r, paths)
+			err = printPlanResult(out, r, paths)
+		} else if candidate, ok := r.(planPublicationCandidate); ok {
+			printPlanCandidate(out, candidate)
+		}
+		if err == nil && ctx.Err() != nil {
+			err = fmt.Errorf("%s; reply was canceled: %w", planReplyMessage(r, paths), ctx.Err())
 		}
 	case "ignore":
 		var r any
@@ -241,6 +247,9 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 		r, err = hashes(ctx, remaining[1:], paths)
 		if err == nil {
 			err = printHashes(out, r)
+		}
+		if _, shared := r.(HashStoreBudgetReport); shared && err == nil && ctx.Err() != nil {
+			err = fmt.Errorf("Shared read accounting reply was canceled; no saved records or source files were changed: %w", ctx.Err())
 		}
 	case "hash":
 		var r any

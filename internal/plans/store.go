@@ -63,31 +63,8 @@ func validDigest(s string) bool {
 }
 
 func Save(ctx context.Context, base string, selection state.SelectionSnapshot) (Saved, error) {
-	if err := ctx.Err(); err != nil {
-		return Saved{}, err
-	}
 	r := Record{Version: 1, CreatedAt: time.Now().UTC(), Status: "unapproved", Action: "same_filesystem_quarantine", Activity: "unconfirmed", Selection: selection}
-	if err := validate(r); err != nil {
-		return Saved{}, err
-	}
-	payload, err := json.Marshal(r)
-	if err != nil {
-		return Saved{}, err
-	}
-	if len(payload) > MaxRecordBytes {
-		return Saved{}, errors.New("selected evidence exceeds the 1 MiB saved-plan limit; select fewer targets")
-	}
-	id := fmt.Sprintf("plan-v1-%x", sha256.Sum256(payload))
-	db, closeDB, err := open(ctx, base, true)
-	if err != nil {
-		return Saved{}, err
-	}
-	defer closeDB()
-	// One FULL-synchronous SQLite commit publishes the entire immutable record.
-	if _, err = db.ExecContext(ctx, "INSERT INTO plans(id,payload) VALUES(?,?)", id, payload); err != nil {
-		return Saved{}, err
-	}
-	return Saved{ID: id, Record: r}, nil
+	return SaveRecord(ctx, base, r)
 }
 
 func Load(ctx context.Context, base, id string) (Saved, error) {
@@ -288,7 +265,7 @@ PRAGMA application_id=0x5259504c; PRAGMA user_version=1;`)
 			return fail(e)
 		}
 		version = 1
-	} else if app != applicationID || (version != 1 && version != 2 && version != 3 && version != 4 && version != 5) {
+	} else if app != applicationID || (version != 1 && version != 2 && version != 3 && version != 4 && version != 5 && version != 6) {
 		return fail(errors.New("unsupported or unidentified plan database; left intact"))
 	}
 	if write && migrate && version < 3 {

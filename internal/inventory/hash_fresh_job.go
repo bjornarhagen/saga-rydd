@@ -239,7 +239,7 @@ func (s *HashStore) saveFreshJob(ctx context.Context, request *KeeperChoiceFresh
 		return SavedFreshJob{}, err
 	}
 	var version int
-	if err = tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil || version < 3 || version > 6 {
+	if err = tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil || version < 3 || version > 7 {
 		return SavedFreshJob{}, hashFreshJobFailure(ctx, ErrHashFreshJobCorrupt)
 	}
 	if version >= 4 {
@@ -509,7 +509,7 @@ func (s *HashStore) readFreshJob(ctx context.Context, db hashQuery, id string) (
 	if version >= 1 && version <= 3 {
 		return SavedFreshJob{}, fmt.Errorf("saved fresh job %s is unavailable: %w", id, os.ErrNotExist)
 	}
-	if version != 4 && version != 5 && version != 6 {
+	if version != 4 && version != 5 && version != 6 && version != 7 {
 		return SavedFreshJob{}, ErrHashFreshJobCorrupt
 	}
 	if _, err := hashFreshJobCount(ctx, db); err != nil {

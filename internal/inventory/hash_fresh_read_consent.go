@@ -179,7 +179,7 @@ func (s *HashStore) readHashFreshReadConsent(ctx context.Context, db hashQuery, 
 	if version == 4 {
 		return nil, nil
 	}
-	if version != 5 && version != 6 || hashFreshReadCount(ctx, db) != nil {
+	if version != 5 && version != 6 && version != 7 || hashFreshReadCount(ctx, db) != nil {
 		return nil, hashFreshReadFailure(ctx, nil)
 	}
 	var id string
@@ -305,7 +305,7 @@ func hashFreshReadApprovalJob(ctx context.Context, db hashQuery, id string) (str
 	if version >= 1 && version <= 4 {
 		return "", ErrHashFreshReadApprovalMissing
 	}
-	if version != 5 && version != 6 {
+	if version != 5 && version != 6 && version != 7 {
 		return "", ErrHashFreshReadCorrupt
 	}
 	var jobID string
@@ -393,7 +393,7 @@ func (s *HashStore) approveFreshRead(ctx context.Context, req HashFreshReadAppro
 		if _, err = tx.ExecContext(ctx, hashFreshReadSchema); err != nil {
 			return HashFreshReadConsent{}, hashFreshReadFailure(ctx, err)
 		}
-	} else if version != 5 && version != 6 {
+	} else if version != 5 && version != 6 && version != 7 {
 		return HashFreshReadConsent{}, ErrHashFreshReadCorrupt
 	}
 	id := hashFreshReadApprovalID(payload)

@@ -1,0 +1,277 @@
+{
+  "CPU_feedback": {
+    "baseline": {
+      "available": true,
+      "completed_unknown_windows": 0,
+      "recovered_unknown_windows": 0,
+      "status": "observed",
+      "window": {
+        "backoff_ns": 292744583,
+        "cpu_time_ns": 2948000,
+        "elapsed_ns": 2055417,
+        "kind": "maintenance",
+        "status": "observed"
+      }
+    },
+    "terminal": {
+      "available": true,
+      "completed_unknown_windows": 0,
+      "recovered_unknown_windows": 0,
+      "status": "observed",
+      "window": {
+        "backoff_ns": 880291416,
+        "cpu_time_ns": 8863000,
+        "elapsed_ns": 6008584,
+        "kind": "maintenance",
+        "status": "observed"
+      }
+    }
+  },
+  "archived_original_pins_unchanged": {
+    "aggregate.json": "58cfdf5c5e02a9c1b8df18673fe473bc2a77e91145f353305d336125a4a98a43",
+    "healthy-after.sqlite": "4bf6f642d37ae57bab74e580f2b986308a8273b0c3376a9332d4f2801365c431",
+    "healthy-before.sqlite": "4bf6f642d37ae57bab74e580f2b986308a8273b0c3376a9332d4f2801365c431",
+    "primary-after.sqlite": "8c6d9f542e18636784c2597206cf1637031f1cddf1084f494ce6595d5fc180a5",
+    "primary-before.sqlite": "8c6d9f542e18636784c2597206cf1637031f1cddf1084f494ce6595d5fc180a5",
+    "saved-terminal.json": "9810f1cb5653ede4da4765fe48510119ce88f2879f0b57e1aa244cc27e65b3cc",
+    "state/config.toml": "5251a8f0abeb0e65388e083ef3bd37795eb89bfe4daa160b09dc824c279ae90b"
+  },
+  "baseline_counts": {
+    "Caches": 2,
+    "CompleteDirs": 64,
+    "Dispatch": 464,
+    "Errors": 0,
+    "Files": 4096,
+    "HealthyCompleteDirs": 33,
+    "ReadyCaches": 1,
+    "Running": 0,
+    "Scratch": 1,
+    "Skips": 0
+  },
+  "contract": "sanitized_generated_deep_continuation_v1",
+  "default_profile_accepted": false,
+  "dispatch": {
+    "additional_reserved_chunks": 110,
+    "baseline_reserved_chunks": 464,
+    "configured_daily_limit": 100000,
+    "terminal_reserved_chunks": 574
+  },
+  "hourly_target_accepted": false,
+  "metadata": {
+    "additional_total": {
+      "known_unused_reserved_attempts": 0,
+      "observed_attempts": 0,
+      "outstanding_reserved_attempts": 0,
+      "reserved_attempts": 0,
+      "unknown_reserved_attempts": 0
+    },
+    "baseline_total": {
+      "known_unused_reserved_attempts": 12729291,
+      "observed_attempts": 50297,
+      "outstanding_reserved_attempts": 0,
+      "reserved_attempts": 12779588,
+      "unknown_reserved_attempts": 0
+    },
+    "terminal_total": {
+      "known_unused_reserved_attempts": 12729291,
+      "observed_attempts": 50297,
+      "outstanding_reserved_attempts": 0,
+      "reserved_attempts": 12779588,
+      "unknown_reserved_attempts": 0
+    }
+  },
+  "million_entry_gate_accepted": false,
+  "new_job_scope": "Only the expected new future primary inventory root-listing job; old jobs exact and future due tied to saved completed listing+24h.",
+  "original_job_count": 1,
+  "outcome": "completed",
+  "physical_IO_verified": false,
+  "profile": {
+    "config_sha256": "5251a8f0abeb0e65388e083ef3bd37795eb89bfe4daa160b09dc824c279ae90b",
+    "gates_unchanged": true,
+    "no_reset_reseed_or_cap_override": true,
+    "real_production_SELF_CPU": true,
+    "sampling_window_limit_seconds": 600,
+    "separate_stop_grace_seconds": 15
+  },
+  "provenance": {
+    "helper_binary_sha256": "061dfbd5e9ac14d965256da7f6e838edfa7d2e0965ba67c485a1de27187e22cc",
+    "original_partial_aggregate_sha256": "58cfdf5c5e02a9c1b8df18673fe473bc2a77e91145f353305d336125a4a98a43",
+    "owned_helper_sources": {
+      "experiments/backgroundtopologycontinue/main.go": "7f7bef211aa5db60b635f4ef34c96c60132663938ef0bfa757c3933ee36cc17f",
+      "experiments/backgroundtopologycontinue/main_test.go": "1814c61d71ab7de69af4c20c42200fd57f6bf6a84c36b3c76c70370ec1b7f6d2",
+      "experiments/backgroundtopologycontinue/oracle.go": "acd31755f0038a0273b80d41e8a2bc06cc2353467addd03421ebefae80b9d7b7",
+      "experiments/backgroundtopologycontinue/process.go": "00746d44c940478e0525090bf8e4332bbca58d70374b1c1c0b000c7c5f7cc080",
+      "experiments/backgroundtopologycontinue/support.go": "b0538c5214ce275b3d067de4cdc6722215ef9adda831c89de7cdb121e33df09f"
+    },
+    "production_binary_sha256": "59579e2793c42c888f8b141b31d514a7f05280af9e954277916987143d1179ec",
+    "production_source_revision_externally_audited": "d9f0bf3a046e89eda616d118bdd7f77fb00a8b84",
+    "raw_continuation_aggregate_sha256": "f2b9f889cb1d4a711adc362f6eac594f39d1e656da19cc227c63a8577e3cb018",
+    "receipt_sha256": {
+      "aggregate.json": "f2b9f889cb1d4a711adc362f6eac594f39d1e656da19cc227c63a8577e3cb018",
+      "command-001.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command-001.stdout": "4c01f27a34ee5c3b7496199ff084563da3d5a0e84c80bf5723a0a125e88fa0de",
+      "command-002.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command-002.stdout": "14b0d2d2bc41e5e91c64299bbbab8cb94f553d445b63588b1ff3303ad054b393",
+      "command-003.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command-003.stdout": "42b0a4a11c6578fdf9481f15bb667455c7ac9d5df47007d929cc0e2f015f535a",
+      "command-004.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command-004.stdout": "df8c6844df38f72c3acd008df2a5a069f881d10ccf7b0c801e56aa3ae34d8a86",
+      "command-005.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command-005.stdout": "df8c6844df38f72c3acd008df2a5a069f881d10ccf7b0c801e56aa3ae34d8a86",
+      "command-006.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command-006.stdout": "53817de1bd0a2591f896b5d81d428c9434fca4194cb5051d353b61ad403ada1b",
+      "command-007.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command-007.stdout": "7446ad7af0357d1d8bdbbe37164f37aaa5024da70ca94c25e02d725bfdf99bc5",
+      "command-008.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command-008.stdout": "d352d13471e95080ef00baac4e7f85c827453cd6a305443e26ed97d4d408ebb0",
+      "command-009.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command-009.stdout": "edadb64bc4fa0974830e7b36115a0038fd68852129625e3466385f3ac1269db7",
+      "command-010.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command-010.stdout": "25a59543b5e2655ef117272b72fef129a75b4d54e8f0ea972c6a670374c50fd7",
+      "command-011.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command-011.stdout": "5350fb26bb88b4f0f74121659a9f2cd3c0c67777f32deb0065a386348282b5cd",
+      "command-012.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command-012.stdout": "7e12580b0130b854f56879b4ec9d8cb65747ee75cad594919f8cbf0670bb120c",
+      "command-013.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command-013.stdout": "9507f111c6423101e3f05e65f828a63307752a0e945b568d8d5d6871b7ad3843",
+      "command-014.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command-014.stdout": "7784577614a131673cb54b98d4ced3d6162c9bafcbbd62ccbe717a0f096c0480",
+      "command-015.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command-015.stdout": "588a1a500599f022204ae3a5e5f56bddb159381c7d2c5b3b56ad118341ff5ad3",
+      "command-016.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command-016.stdout": "3e30c55240e7fcbf3155905996d6f11cb1506c4db9f58557fe143929e7b62886",
+      "command-017.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command-017.stdout": "a0117e8a692c9c99ada9449a8126cce4491224fb11cc7bc949d6fe0b500201db",
+      "command-018.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command-018.stdout": "49726de7ba5ad21a683312f65bfd51d0851a3b3cbce412317aa84734703982c9",
+      "command-019.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command-019.stdout": "d4f430ba6d7c3a114aad4470705236fd0041e1c24c54e95f9d2c1805a68f1fe9",
+      "command-020.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command-020.stdout": "61ac0eeb4fcb02583413218a3439a0192d8fe6997d1ee7ad8a6743b4bf060f2a",
+      "command-021.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command-021.stdout": "bf576eda1f54e6545f67f3b25d197d453e486ea1c937ceb10963aa5e8182e201",
+      "command-022.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command-022.stdout": "e241fb623228a7d6af71ca7189262c2973cd7ed5353b27d093094328916b3bf5",
+      "command-023.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command-023.stdout": "4d6f5c5a9fe27c421f5b804db1ea8707ddcc9d675960b662c4d3bf369335c405",
+      "command-024.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command-024.stdout": "c084018012a5a517a95f6b44cc6898d347fab92bfa68605ebb4151b665168f1c",
+      "command-025.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command-025.stdout": "a261da17410c8f9fe819eee813de0c42981f9df1046ebf67715346775d46f566",
+      "command-026.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command-026.stdout": "d8c0d54406ecc631ac27402a215862a33483611376a95e588957a2fb2e7611b6",
+      "command-027.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command-027.stdout": "606c5d14d362f0317572a16b34b654390379c6d06547b3b85e63f5d2c7753a38",
+      "command-028.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command-028.stdout": "6775cea2ffbfba40310a49a9a4b7e2fef30f2ac29a274c69696532dc40e45ad7",
+      "command-029.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command-029.stdout": "0ea74e40db6a09dbadacdfd8f7a192de292d1281d9dc8cfd138077694faf23da",
+      "command-030.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command-030.stdout": "7cbf7ef499b62cd7521fe0558f937cbbc36c93fc55ce994ba1e226d34c1fecf2",
+      "command-031.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command-031.stdout": "59ac9a201fbc406901bbf7ee022ec9cc131823c3da953119c445115ad2cc21e3",
+      "command-032.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command-032.stdout": "79f4d026858cabd5739fd8e75ddbf4532432c649ca844338afb171608f3d9953",
+      "command-033.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command-033.stdout": "16d0dfc48b29914185780e838f645b1d1cc056f9a4b0caca65a95b55106865ff",
+      "healthy-after.sqlite": "4bf6f642d37ae57bab74e580f2b986308a8273b0c3376a9332d4f2801365c431",
+      "healthy-preflight.sqlite": "4bf6f642d37ae57bab74e580f2b986308a8273b0c3376a9332d4f2801365c431",
+      "preflight-saved.json": "9810f1cb5653ede4da4765fe48510119ce88f2879f0b57e1aa244cc27e65b3cc",
+      "preflight-status.json": "f6acd6470af4ff93adc59d29d65ae35489dc16473bb565c5ecb6a8d83d1dc8d6",
+      "primary-after.sqlite": "8c6d9f542e18636784c2597206cf1637031f1cddf1084f494ce6595d5fc180a5",
+      "primary-preflight.sqlite": "8c6d9f542e18636784c2597206cf1637031f1cddf1084f494ce6595d5fc180a5",
+      "saved-terminal.json": "6666f832d2bb0fd9b165450af77c4e9772041a56222ba0fd634a5b52049b80eb",
+      "terminal-status.json": "84d8c1b80a0f6560fc7b5a4b482b73f190da02a2e0a03c552bb157cfe7ecedbf",
+      "worker.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "worker.stdout": "85991582871ee30bcf2d251246f7a28879f319ac71db56d3997c034c94e6aa06"
+    },
+    "scalar_samples_canonical_json_sha256": "7d11fc880937e5b45108071574ee4a132280344b0e8e3c542f84ba4087734f8f",
+    "source_hash_count": 432,
+    "source_map_sha256": "b5cbfd6595c95c607dfc68d2f68973661d5479ed14ce6c60b6fba1d9ca8af60a",
+    "verification_canonical_json_sha256": "504a72571c747f524dd7728a9aaea5c05123ad63ee52625fa19eb89af70bc40f"
+  },
+  "provider_accepted": false,
+  "qualifications": [
+    "The initial600-second DEEP result remains archived as partial; this separately approved continuation completed the retained state.",
+    "Worker SELF includes this worker child launch through Wait only; initial pilot windows, oracle/helper and observer costs remain separate. No inferred combined resource total.",
+    "Parent phase RSS is lifetime high-water through phase end. Observer RSS is maximum individual child, not simultaneous aggregate.",
+    "Saved-state sampling in the helper is observer work; its whole-process CPU is not separately measured beyond the recorded oracle phases. Concurrent development can affect elapsed time.",
+    "Logical and allocated source totals are checked by the independent actual metadata/body/identity oracle; no physical IO or storage durability claim.",
+    "No default/hourly/representative-owner/provider/remount/million-entry/soak acceptance follows from this finite generated profile."
+  ],
+  "sampling": {
+    "count": 26,
+    "last_sample_elapsed_ns": 125683207084,
+    "last_wait_reason": "inventory_revisit",
+    "sampled_WAL_max_bytes": 4120032,
+    "sampled_database_max_bytes": 1359872
+  },
+  "scope": {
+    "healthy_directories": 33,
+    "healthy_files": 512,
+    "primary_file_bearing_levels_including_root": 64,
+    "primary_file_observations": 4096,
+    "source_bodies": "zero-byte distinct regular objects with bounded32-byte sentinels"
+  },
+  "separate_resources": {
+    "control_calls": 1,
+    "maximum_control_latency_ns": 13780833,
+    "observer_children": {
+      "available": true,
+      "launch_to_wait_or_phase_elapsed_ns": 556740082,
+      "peak_rss_bytes": 21856256,
+      "peak_rss_scope": "maximum_individual_observer_child",
+      "system_cpu_ns": 203929000,
+      "user_cpu_ns": 277254000
+    },
+    "oracle_after": {
+      "available": true,
+      "launch_to_wait_or_phase_elapsed_ns": 292407584,
+      "peak_rss_bytes": 26836992,
+      "peak_rss_scope": "helper_process_lifetime_through_phase_end",
+      "system_cpu_ns": 176595000,
+      "user_cpu_ns": 94135000
+    },
+    "oracle_before": {
+      "available": true,
+      "launch_to_wait_or_phase_elapsed_ns": 275168250,
+      "peak_rss_bytes": 26689536,
+      "peak_rss_scope": "helper_process_lifetime_through_phase_end",
+      "system_cpu_ns": 187804000,
+      "user_cpu_ns": 94413000
+    },
+    "worker_full_launch_to_Wait": {
+      "available": true,
+      "launch_to_wait_or_phase_elapsed_ns": 125704010375,
+      "peak_rss_bytes": 27131904,
+      "peak_rss_scope": "individual_child_lifetime",
+      "system_cpu_ns": 395133000,
+      "user_cpu_ns": 740166000
+    }
+  },
+  "soak_accepted": false,
+  "terminal_counts": {
+    "Caches": 2,
+    "CompleteDirs": 64,
+    "Dispatch": 574,
+    "Errors": 0,
+    "Files": 4096,
+    "HealthyCompleteDirs": 33,
+    "ReadyCaches": 2,
+    "Running": 0,
+    "Scratch": 0,
+    "Skips": 0
+  },
+  "terminal_job_count": 2,
+  "verification": {
+    "ConfigUnchanged": true,
+    "ExactCachedTotals": true,
+    "ExactFutureDailyJobs": true,
+    "ExistingJobsPreserved": true,
+    "ForcedDirectChildCancellationRequested": false,
+    "PreflightPassed": true,
+    "SourceOracleAfterPassed": true,
+    "SourceOracleBeforePassed": true,
+    "TerminalEvidenceSaved": true
+  }
+}

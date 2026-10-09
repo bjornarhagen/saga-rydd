@@ -61,6 +61,9 @@ func hashRunFreshJob(ctx context.Context, paths config.Paths, id string) (HashFr
 	if err = checkCLIHashReadPacing(ctx, cfg.Scan.ReadBytesPerSecond, freshHashReadMinimum(job)); err != nil {
 		return HashFreshStepReport{}, err
 	}
+	if err = checkCLIHashReadDailyLimit(ctx, cfg.Scan.ReadBytesPerDay, freshHashReadMinimum(job)); err != nil {
+		return HashFreshStepReport{}, err
+	}
 	locator := request.SourceLocator()
 	root := string(locator.RootPathBytes)
 	if err = checkHashSourceStorage(ctx, manualState(paths, root), proposal); err != nil {
@@ -80,7 +83,7 @@ func hashRunFreshJob(ctx context.Context, paths config.Paths, id string) (HashFr
 	if err != nil {
 		return HashFreshStepReport{}, fmt.Errorf("fresh job %s run writer could not open; inspect hash --show-job %s before another explicit run: %w", job.ID, job.ID, hashFreshJobMissing(err, "existing fresh-job storage became unavailable; no replacement was initialized"))
 	}
-	run, err := writer.RunFreshConsentedPaced(ctx, id, scanner, cfg.Scan.ReadBytesPerSecond)
+	run, err := writer.RunFreshConsentedBudgeted(ctx, id, scanner, inventory.HashReadExecutionLimits{RequestedBytesPerSecond: cfg.Scan.ReadBytesPerSecond, DailyReservedByteLimit: cfg.Scan.ReadBytesPerDay})
 	if err == nil {
 		c, err = writer.FreshReadApproval(ctx, id)
 	}
@@ -89,7 +92,7 @@ func hashRunFreshJob(ctx context.Context, paths config.Paths, id string) (HashFr
 	if err != nil {
 		if errors.Is(err, inventory.ErrHashDeferred) {
 			switch run.Code {
-			case "daily_byte_limit", "lifetime_byte_limit", "durable_quantum":
+			case "daily_byte_limit", "lifetime_byte_limit", "durable_quantum", "configured_daily_byte_limit":
 				err = hashRunDeferredError{code: run.Code, error: err}
 			}
 		}
@@ -133,6 +136,7 @@ func printHashFreshStepReport(out io.Writer, report HashFreshStepReport) error {
 	printField(guard, "Fresh read bytes", r.Usage.ReadBytes)
 	printField(guard, "Observed elapsed", r.Usage.Elapsed.String())
 	printHashReadPacing(guard, r.ReadPacing)
+	printHashStoreReadBudget(guard, r.StoreReadBudget, r.ConfiguredDailyReservedByteLimit)
 	printHashPacingZeroProgress(guard, r.Code)
 	fmt.Fprintf(guard, "Job: %s\nJob key: %s\nRequest: %s\nChoice: %s\nFresh read consent: %s\n", r.JobID, r.JobKey, r.RequestID, r.ChoiceID, r.ApprovalID)
 	printHashBudgetScope(guard, r.FreshBudget, "FRESH-JOB RESERVATION BUDGET", "fresh job", "whole exact fresh job")

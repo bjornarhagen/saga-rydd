@@ -1,0 +1,207 @@
+{
+  "contract": "generated_background_topology_pilot_safe_aggregate_v1",
+  "source_revision": "d9f0bf3a046e89eda616d118bdd7f77fb00a8b84",
+  "harness_manifest_sha256": "23add8eba43b717126bf1b0b65611c6373cdd0ce6a791e9c3e058fdc3076218c",
+  "harness_binary_sha256": "c92fa368e3d5f69927634b335d1ce41a7f890dfbf01b3b653913500dbe83478f",
+  "production_binary_sha256": "59579e2793c42c888f8b141b31d514a7f05280af9e954277916987143d1179ec",
+  "private_aggregate_sha256": "3d7b9c4454166f9478b92311d35b289cebd4e679a15aa86541962e12d12536a7",
+  "config_sha256": "e56b0d6daa4e157c786bbafd91504dc9c246b35c09e95f78a36e719db34623a5",
+  "oracle_artifact_sha256": {
+    "healthy_after": "3de52e8b5dd98f5459e41a303e07e076e483f908ce2163d9ff3094f25c57815a",
+    "healthy_before": "3de52e8b5dd98f5459e41a303e07e076e483f908ce2163d9ff3094f25c57815a",
+    "primary_after": "aa1c58e7794a927764a28be8205ca9f328c70498a4813f9e9ec29643396ead00",
+    "primary_before": "aa1c58e7794a927764a28be8205ca9f328c70498a4813f9e9ec29643396ead00"
+  },
+  "shape": "wide",
+  "expected_primary_file_observations": 4096,
+  "file_bearing_levels_including_root": 1,
+  "finite_profile": {
+    "WorkSeconds": 1,
+    "IntervalSeconds": 1,
+    "MetadataPerSecond": 100000,
+    "APIAttemptsPerSecond": 0,
+    "MetadataAttemptsPerDay": 1099511627776,
+    "ReadBytesPerSecond": 5242880,
+    "ReadBytesPerDay": 5368709120,
+    "PauseOnBattery": false,
+    "MaxScanChunksPerDay": 100000,
+    "MaxStateBytes": 1073741824,
+    "AdaptiveRevisits": false,
+    "CompactInventory": true
+  },
+  "sampling_window_limit_seconds": 600,
+  "separate_graceful_stop_window_seconds": 15,
+  "outcome": "completed",
+  "finished_stage": "finished",
+  "checks": {
+    "Completed": true,
+    "BodyIdentityOracleUnchanged": true,
+    "PauseNoProgress": true,
+    "SIGKILLProven": true,
+    "RestartPreserved": true,
+    "FairProgress": true,
+    "FairCompletion": true,
+    "ExactCachedTotals": true,
+    "ExactFutureDailyJobs": true,
+    "terminal_evidence_saved": true,
+    "forced_direct_child_cancellation_requested": false
+  },
+  "independent_primary_oracle": {
+    "Files": 4096,
+    "Directories": 1,
+    "Logical": 128,
+    "Allocated": 16384,
+    "DirectoryAllocated": 0,
+    "BodiesSHA256": "1aa198556ccd1da8943cf39cef12f88c4431f6916e280ee3320120b602a41b0c"
+  },
+  "terminal_counts": {
+    "Files": 4096,
+    "CompleteDirs": 1,
+    "HealthyCompleteDirs": 33,
+    "ReadyCaches": 2,
+    "Caches": 2,
+    "Scratch": 0,
+    "Errors": 0,
+    "Skips": 0,
+    "Running": 0,
+    "Dispatch": 262
+  },
+  "sample_count": 66,
+  "last_sample_elapsed_ns": 329122504791,
+  "last_sample_dispatch_day": "2026-10-09",
+  "last_sample_metadata_charges": {
+    "reserved_attempts": 6684740,
+    "observed_attempts": 12190,
+    "unknown_reserved_attempts": 0,
+    "outstanding_reserved_attempts": 0,
+    "known_unused_reserved_attempts": 6672550
+  },
+  "last_sample_saved_cpu_status": "observed",
+  "last_worker_lifetime_api_counters_at_sample": {
+    "entry_inspections": 4640,
+    "entry_rate_per_second": 100000,
+    "throttle_wait_ns": 0,
+    "throttled": false,
+    "stat_calls": 8640,
+    "directory_open_calls": 1942,
+    "directory_read_calls": 99,
+    "filesystem_stat_calls": 655,
+    "mount_identity_calls": 0,
+    "path_resolution_calls": 215
+  },
+  "sampled_database_bytes_max": 638976,
+  "sampled_wal_bytes_max": 4251872,
+  "worker_instances": 2,
+  "worker_resource_records": [
+    {
+      "available": true,
+      "user_cpu_ns": 52808000,
+      "system_cpu_ns": 26758000,
+      "peak_rss_bytes": 26476544,
+      "launch_to_wait_or_phase_elapsed_ns": 7186952208,
+      "peak_rss_scope": "individual_child_lifetime"
+    },
+    {
+      "available": true,
+      "user_cpu_ns": 1759795000,
+      "system_cpu_ns": 886135000,
+      "peak_rss_bytes": 27738112,
+      "launch_to_wait_or_phase_elapsed_ns": 321949324542,
+      "peak_rss_scope": "individual_child_lifetime"
+    }
+  ],
+  "worker_cpu_sum_ns": 2725496000,
+  "maximum_individual_worker_peak_rss_bytes": 27738112,
+  "control_calls": 3,
+  "control_latency_ns_max": 10969041,
+  "costs_separate_from_worker": {
+    "Generation": {
+      "available": true,
+      "user_cpu_ns": 8400000,
+      "system_cpu_ns": 220419000,
+      "peak_rss_bytes": 12156928,
+      "launch_to_wait_or_phase_elapsed_ns": 272422583,
+      "peak_rss_scope": "helper_process_lifetime_through_phase_end"
+    },
+    "OracleBefore": {
+      "available": true,
+      "user_cpu_ns": 67160000,
+      "system_cpu_ns": 124550000,
+      "peak_rss_bytes": 18694144,
+      "launch_to_wait_or_phase_elapsed_ns": 154683458,
+      "peak_rss_scope": "helper_process_lifetime_through_phase_end"
+    },
+    "OracleAfter": {
+      "available": true,
+      "user_cpu_ns": 72577000,
+      "system_cpu_ns": 145830000,
+      "peak_rss_bytes": 21282816,
+      "launch_to_wait_or_phase_elapsed_ns": 203067542,
+      "peak_rss_scope": "helper_process_lifetime_through_phase_end"
+    },
+    "Observer": {
+      "available": true,
+      "user_cpu_ns": 575177000,
+      "system_cpu_ns": 413161000,
+      "peak_rss_bytes": 21692416,
+      "launch_to_wait_or_phase_elapsed_ns": 2355197792,
+      "peak_rss_scope": "maximum_individual_observer_child"
+    }
+  },
+  "default_profile_accepted": false,
+  "hourly_target_accepted": false,
+  "physical_io_verified": false,
+  "provider_accepted": false,
+  "soak_accepted": false,
+  "million_entry_acceptance": false,
+  "qualifiers": [
+    "Finite generated zero-byte topology with bounded sentinel bodies; not representative content or defaults acceptance.",
+    "Worker SELF CPU excludes generator, independent oracle and observer children; those costs are separate.",
+    "Scanner/API accounting is not physical-I/O accounting. Entered native operations can outlast cancellation.",
+    "Only new owned source roots are used; saved cursors, quotas and daily due times are not reset.",
+    "Healthy source progress precedes primary EOF; healthy EOF precedes full primary cache/scratch drain.",
+    "Concurrent development can affect elapsed time and host scheduling.",
+    "Sampling ends at its declared window; source work can continue until the stop request is received. Full worker resources cover launch through Wait return, including separate stop/cleanup grace.",
+    "Generator/oracle RSS is the parent process lifetime high-water through each phase. Observer RSS is the maximum individual CLI child, not combined simultaneous memory.",
+    "Oracle comparisons request at most 4 MiB total named-database page cache, disable mmap, and use file-backed temporary sorting; temporary disk and helper overhead are separate from worker costs.",
+    "Child cancellation addresses the guarded direct child only. No descendant/process-group cleanup is claimed."
+  ],
+  "api_retained_status_crosscheck": {
+    "instance_count": 2,
+    "last_observations": [
+      {
+        "last_sample_paused": true,
+        "last_observed_api_counters": {
+          "directory_open_calls": 86,
+          "directory_read_calls": 3,
+          "entry_inspections": 288,
+          "entry_rate_per_second": 100000,
+          "filesystem_stat_calls": 47,
+          "mount_identity_calls": 0,
+          "path_resolution_calls": 23,
+          "stat_calls": 480,
+          "throttle_wait_ns": 0,
+          "throttled": false
+        }
+      },
+      {
+        "last_sample_paused": false,
+        "last_observed_api_counters": {
+          "directory_open_calls": 1942,
+          "directory_read_calls": 99,
+          "entry_inspections": 4640,
+          "entry_rate_per_second": 100000,
+          "filesystem_stat_calls": 655,
+          "mount_identity_calls": 0,
+          "path_resolution_calls": 215,
+          "stat_calls": 8640,
+          "throttle_wait_ns": 0,
+          "throttled": false
+        }
+      }
+    ],
+    "sum_of_six_api_counters": 12190,
+    "matches_saved_observed_attempts": true,
+    "scope": "Last retained status per worker instance; first instance is paused before intentional SIGKILL. This is a receipt crosscheck, not physical I/O."
+  }
+}

@@ -161,7 +161,7 @@ func (s *HashStore) readHashReadConsent(ctx context.Context, db hashQuery, recor
 	if version == 1 {
 		return nil, nil
 	}
-	if version != 2 && version != 3 && version != 4 && version != 5 && version != 6 {
+	if version != 2 && version != 3 && version != 4 && version != 5 && version != 6 && version != 7 {
 		return nil, ErrHashStoreCorrupt
 	}
 	var count int
@@ -474,6 +474,14 @@ func (s *HashStore) observeHashReadApproval(ctx context.Context, record *hashSel
 	c, guardErr := s.observeHashReadConsent(ctx, tx, record, selectionID, budget, id, now)
 	if c == nil {
 		return HashReadConsent{}, guardErr
+	}
+	if _, e := s.advanceHashStoreReadBudget(ctx, tx, now); e != nil {
+		if !errors.Is(e, ErrHashReadClockRollback) {
+			return HashReadConsent{}, e
+		}
+		if guardErr == nil {
+			guardErr = e
+		}
 	}
 	if before != nil {
 		before()

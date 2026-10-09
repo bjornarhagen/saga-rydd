@@ -93,7 +93,10 @@ func TestWorkerCompactBackgroundBeyondReportLimit(t *testing.T) {
 	c.Scan.MetadataPerSecond = 100000
 	c.Scan.MaxScanChunksPerDay = 100000
 	var admitted atomic.Int64
-	options := Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second}
+	// This fixture checks compact inventory and accounting endpoints, not native
+	// CPU behavior. Race instrumentation must not add production CPU cooldowns
+	// to its finite completion assertion; resource profiles use native SELF CPU.
+	options := Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, cpuObserve: func() (time.Duration, error) { return 0, nil }}
 	options.scannerNew = func(ctx context.Context, roots, excludes, private []string, permit inventory.APIPermit, opts ...inventory.Option) (*inventory.Scanner, error) {
 		return inventory.NewPermitted(ctx, roots, excludes, private, func(ctx context.Context, kind inventory.APICallKind) error {
 			if err := permit(ctx, kind); err != nil {

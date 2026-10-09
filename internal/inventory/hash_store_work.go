@@ -14,16 +14,18 @@ import (
 // HashRunResult distinguishes checked live progress from block-aligned durable
 // progress and charged allowance. Actual usage never refunds the reservation.
 type HashRunResult struct {
-	ApprovalID    string                     `json:"approval_id,omitempty"`
-	Status        string                     `json:"status"`
-	Code          string                     `json:"code,omitempty"`
-	WorkID        string                     `json:"work_id,omitempty"`
-	Progress      FullHashProgress           `json:"progress"`
-	DurableOffset int64                      `json:"durable_offset"`
-	ReservedBytes int64                      `json:"reserved_bytes"`
-	Usage         FileReadUsage              `json:"usage"`
-	Budget        *HashBudget                `json:"budget,omitempty"`
-	ReadPacing    *HashReadPacingObservation `json:"read_pacing,omitempty"`
+	StoreReadBudget                  *HashStoreReadBudget       `json:"store_read_budget,omitempty"`
+	ConfiguredDailyReservedByteLimit *int64                     `json:"configured_daily_reserved_byte_limit,omitempty"`
+	ApprovalID                       string                     `json:"approval_id,omitempty"`
+	Status                           string                     `json:"status"`
+	Code                             string                     `json:"code,omitempty"`
+	WorkID                           string                     `json:"work_id,omitempty"`
+	Progress                         FullHashProgress           `json:"progress"`
+	DurableOffset                    int64                      `json:"durable_offset"`
+	ReservedBytes                    int64                      `json:"reserved_bytes"`
+	Usage                            FileReadUsage              `json:"usage"`
+	Budget                           *HashBudget                `json:"budget,omitempty"`
+	ReadPacing                       *HashReadPacingObservation `json:"read_pacing,omitempty"`
 }
 
 type hashStoreHooks struct {
@@ -33,6 +35,8 @@ type hashStoreHooks struct {
 	afterSettleCommit   func()
 	file                fileHashHooks
 	pacing              *hashReadPacer
+	execution           *HashReadExecutionLimits
+	storeBudgetHooks    *hashStoreReadBudgetHooks
 }
 
 // RunNext selects one affordable job from the persisted finite round-robin
@@ -75,6 +79,12 @@ func (s *HashStore) runHashStep(ctx context.Context, source *state.Store, scanne
 	}
 	stop := context.AfterFunc(s.life, cancel)
 	defer stop()
+	if hooks.execution == nil {
+		if _, err := s.admitHashStoreReadBudget(ctx, nil, time.Time{}); err != nil {
+			result.Status, result.Code = "refused", "configured_budget_required"
+			return result, err
+		}
+	}
 	if source == nil || scanner == nil || scanner.closed.Load() {
 		return result, errors.New("current source inventory and an open scanner are required")
 	}
@@ -91,6 +101,31 @@ func (s *HashStore) runHashStep(ctx context.Context, source *state.Store, scanne
 	if approvalID == "" && snapshot.ReadConsent != nil {
 		result.Status, result.Code = "refused", "read_consent_required"
 		return result, ErrHashReadBinding
+	}
+	var sharedAvailable int64 = math.MaxInt64
+	if hooks.execution != nil {
+		if snapshot.ReadConsent == nil || snapshot.ReadConsent.ID != approvalID {
+			return result, ErrHashReadApprovalMissing
+		}
+		cap := hooks.execution.DailyReservedByteLimit
+		result.ConfiguredDailyReservedByteLimit = &cap
+		result.ApprovalID = approvalID
+		shared, e := s.admitHashStoreReadBudget(ctx, hooks.execution, hashReadPacingClock(hooks.pacing, ctx, s.now().UTC()), hooks.storeBudgetHooks)
+		result.StoreReadBudget = shared
+		if shared != nil {
+			defer func() {
+				if e := s.finishHashStoreReadBudget(ctx, hooks.pacing, &result.StoreReadBudget, false); e != nil {
+					s.poisoned = true
+					result.Progress.SHA256 = ""
+					result.Status, result.Code, retErr = "recovery_required", "publication_uncertain", ErrHashRecoveryRequired
+				}
+			}()
+			sharedAvailable = max(cap-shared.ReservedBytes, int64(0))
+		}
+		if e != nil {
+			result.Status, result.Code = hashStoreBudgetErrorState(e)
+			return result, e
+		}
 	}
 	var consent *HashReadConsent
 	reserved := false
@@ -220,7 +255,7 @@ func (s *HashStore) runHashStep(ctx context.Context, source *state.Store, scanne
 		result.Status = "idle"
 		return result, nil
 	}
-	available := max(dailyLimit-budget.ReservedBytes, int64(0))
+	available := min(sharedAvailable, max(dailyLimit-budget.ReservedBytes, int64(0)))
 	if consent != nil {
 		available = min(available, max(consent.Approval.LifetimeReservedByteLimit-budget.TotalReservedBytes, int64(0)))
 	}
@@ -250,7 +285,10 @@ func (s *HashStore) runHashStep(ctx context.Context, source *state.Store, scanne
 	}
 	if !found {
 		result.Status, result.Code = "deferred", "durable_quantum"
-		if available == 0 {
+		if hooks.execution != nil && sharedAvailable < 64 {
+			result.Code = "configured_daily_byte_limit"
+		}
+		if available == 0 && sharedAvailable != 0 {
 			result.Code = "daily_byte_limit"
 			if consent != nil && budget.TotalReservedBytes >= consent.Approval.LifetimeReservedByteLimit {
 				result.Code = "lifetime_byte_limit"
@@ -287,7 +325,7 @@ func (s *HashStore) runHashStep(ctx context.Context, source *state.Store, scanne
 	if err = ctx.Err(); err != nil {
 		return result, err
 	}
-	attempt, err := s.reserveHashAttempt(ctx, record, snapshot.SelectionID, chosen, budget, grant, hooks.beforeReserveCommit, approvalID, hooks.pacing)
+	attempt, err := s.reserveHashAttempt(ctx, record, snapshot.SelectionID, chosen, budget, grant, hooks.beforeReserveCommit, approvalID, hooks.pacing, hooks.execution)
 	if err != nil {
 		if approvalID != "" {
 			result.Status, result.Code = "refused", hashReadPacingCode(err)
@@ -499,7 +537,7 @@ func writeHashBudget(ctx context.Context, tx *sql.Tx, b HashBudget) error {
 	return err
 }
 
-func (s *HashStore) reserveHashAttempt(ctx context.Context, record *hashSelectionRecord, selectionID string, w hashStoredWork, b HashBudget, grant int64, beforeCommit func(), approvalID string, pacing ...*hashReadPacer) (hashStoredAttempt, error) {
+func (s *HashStore) reserveHashAttempt(ctx context.Context, record *hashSelectionRecord, selectionID string, w hashStoredWork, b HashBudget, grant int64, beforeCommit func(), approvalID string, pacer *hashReadPacer, execution *HashReadExecutionLimits) (hashStoredAttempt, error) {
 	a := hashStoredAttempt{HashAttempt: HashAttempt{Status: "reserved", ReservationDay: b.Day, ReservedBytes: grant}, sequence: w.sequence, offset: w.offset}
 	token, err := hashStoreToken()
 	if err != nil {
@@ -511,6 +549,7 @@ func (s *HashStore) reserveHashAttempt(ctx context.Context, record *hashSelectio
 		return a, err
 	}
 	defer tx.Rollback()
+	var shared *HashStoreReadBudget
 	if approvalID != "" {
 		// This seam remains before any charge/work mutation. The real clock
 		// and ledger are read after it, in the same reservation transaction.
@@ -518,8 +557,8 @@ func (s *HashStore) reserveHashAttempt(ctx context.Context, record *hashSelectio
 			beforeCommit()
 			beforeCommit = nil
 		}
-		if len(pacing) != 0 && pacing[0] != nil {
-			if e := pacing[0].preflight(ctx, record.Targets[w.id-1].File.Size-w.offset); e != nil {
+		if pacer != nil {
+			if e := pacer.preflight(ctx, record.Targets[w.id-1].File.Size-w.offset); e != nil {
 				return a, e
 			}
 		}
@@ -528,8 +567,8 @@ func (s *HashStore) reserveHashAttempt(ctx context.Context, record *hashSelectio
 			return a, e
 		}
 		now := s.now().UTC()
-		if len(pacing) != 0 {
-			now = hashReadPacingClock(pacing[0], ctx, now)
+		if pacer != nil {
+			now = hashReadPacingClock(pacer, ctx, now)
 		}
 		c, guardErr := s.observeHashReadConsent(ctx, tx, record, selectionID, current, approvalID, now)
 		if c == nil {
@@ -553,6 +592,19 @@ func (s *HashStore) reserveHashAttempt(ctx context.Context, record *hashSelectio
 			b.MaxNow = now
 		}
 		available := min(max(c.Approval.DailyReservedByteLimit-b.ReservedBytes, int64(0)), max(c.Approval.LifetimeReservedByteLimit-b.TotalReservedBytes, int64(0)))
+		if execution != nil {
+			var e error
+			shared, available, e = s.reserveHashStoreReadBudget(ctx, tx, execution, now, available)
+			if e != nil {
+				if errors.Is(e, ErrHashReadClockRollback) {
+					if tx.Commit() != nil {
+						s.poisoned = true
+						return a, ErrHashRecoveryRequired
+					}
+				}
+				return a, e
+			}
+		}
 		remaining := record.Targets[w.id-1].File.Size - w.offset
 		grant = min(grant, available, remaining, FileHashStepByteLimit)
 		if grant < remaining {
@@ -560,6 +612,9 @@ func (s *HashStore) reserveHashAttempt(ctx context.Context, record *hashSelectio
 		}
 		if grant == 0 && remaining > 0 {
 			a.guardCode = "durable_quantum"
+			if execution != nil && shared != nil && execution.DailyReservedByteLimit-shared.ReservedBytes < min(remaining, int64(64)) {
+				a.guardCode = "configured_daily_byte_limit"
+			}
 			if b.ReservedBytes >= c.Approval.DailyReservedByteLimit {
 				a.guardCode = "daily_byte_limit"
 			}
@@ -610,14 +665,17 @@ func (s *HashStore) reserveHashAttempt(ctx context.Context, record *hashSelectio
 	if err = writeHashBudget(ctx, tx, b); err != nil {
 		return a, err
 	}
+	if err = chargeHashStoreReadBudget(ctx, tx, shared, grant); err != nil {
+		return a, err
+	}
 	if beforeCommit != nil {
 		beforeCommit()
 	}
 	if err = ctx.Err(); err != nil {
 		return a, err
 	}
-	if len(pacing) != 0 && pacing[0] != nil {
-		if e := pacing[0].preflight(ctx, record.Targets[w.id-1].File.Size-w.offset); e != nil {
+	if pacer != nil {
+		if e := pacer.preflight(ctx, record.Targets[w.id-1].File.Size-w.offset); e != nil {
 			return a, e
 		}
 	}
@@ -703,6 +761,14 @@ func (s *HashStore) settleHashAttempt(ctx, callerCtx context.Context, record *ha
 			}
 		}
 		_, guardErr := s.observeHashReadConsent(ctx, tx, record, selectionID, b, approvalID, now)
+		if _, e := s.advanceHashStoreReadBudget(ctx, tx, now); e != nil {
+			if !errors.Is(e, ErrHashReadClockRollback) {
+				return fail()
+			}
+			if guardErr == nil {
+				guardErr = e
+			}
+		}
 		if guardErr != nil && !errors.Is(guardErr, ErrHashReadExpired) && !errors.Is(guardErr, ErrHashReadClockRollback) {
 			return fail()
 		}

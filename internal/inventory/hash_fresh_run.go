@@ -62,6 +62,14 @@ func (s *HashStore) observeFreshRunApprovalAt(ctx context.Context, id string, no
 	if guardErr != nil && !errors.Is(guardErr, ErrHashReadExpired) && !errors.Is(guardErr, ErrHashReadRevoked) && !errors.Is(guardErr, ErrHashReadClockRollback) {
 		return SavedFreshJob{}, guardErr
 	}
+	if _, e := s.advanceHashStoreReadBudget(ctx, tx, now); e != nil {
+		if !errors.Is(e, ErrHashReadClockRollback) {
+			return SavedFreshJob{}, e
+		}
+		if guardErr == nil {
+			guardErr = e
+		}
+	}
 	if err = s.commitFreshProgress(ctx, tx, job, nil, nil, nil, "read lifecycle observation"); err != nil {
 		return SavedFreshJob{}, err
 	}
@@ -105,6 +113,40 @@ func (s *HashStore) runFreshConsented(ctx context.Context, id string, scanner *S
 	if err := s.freshReadStorage(opCtx); err != nil {
 		return result, err
 	}
+	var sharedAvailable int64 = math.MaxInt64
+	if hooks.execution == nil {
+		if _, e := s.admitHashStoreReadBudget(opCtx, nil, time.Time{}); e != nil {
+			result.Status, result.Code = "refused", "configured_budget_required"
+			return result, e
+		}
+	} else {
+		initial, e := s.readFreshJob(opCtx, s.db, s.freshRunJobID)
+		if e != nil {
+			return result, e
+		}
+		if initial.ReadConsent == nil || initial.ReadConsent.ID != id {
+			return result, ErrHashFreshReadApprovalMissing
+		}
+		cap := hooks.execution.DailyReservedByteLimit
+		result.ConfiguredDailyReservedByteLimit = &cap
+		result.JobID, result.JobKey, result.RequestID, result.ChoiceID, result.ApprovalID = initial.ID, initial.Record.JobKey, initial.Record.Request.RequestID, initial.Record.Request.ChoiceID, id
+		shared, e := s.admitHashStoreReadBudget(opCtx, hooks.execution, hashReadPacingClock(hooks.pacing, opCtx, s.now().UTC()), hooks.storeBudgetHooks)
+		result.StoreReadBudget = shared
+		if shared != nil {
+			defer func() {
+				if e := s.finishHashStoreReadBudget(opCtx, hooks.pacing, &result.StoreReadBudget, true); e != nil {
+					s.poisoned = true
+					result.Progress.SHA256 = ""
+					result.Status, result.Code, retErr = "recovery_required", "publication_uncertain", ErrHashRecoveryRequired
+				}
+			}()
+			sharedAvailable = max(cap-shared.ReservedBytes, int64(0))
+		}
+		if e != nil {
+			result.Status, result.Code = hashStoreBudgetErrorState(e)
+			return result, e
+		}
+	}
 	var job SavedFreshJob
 	var err error
 	if hooks.pacing == nil {
@@ -113,7 +155,7 @@ func (s *HashStore) runFreshConsented(ctx context.Context, id string, scanner *S
 		job, err = s.observeFreshRunApprovalAt(opCtx, id, hashReadPacingClock(hooks.pacing, opCtx, s.now().UTC()))
 	}
 	if job.ID != "" {
-		result = HashFreshRunResult{JobID: job.ID, JobKey: job.Record.JobKey, RequestID: job.Record.Request.RequestID, ChoiceID: job.Record.Request.ChoiceID, ApprovalID: id, FreshBudget: job.FreshBudget}
+		result = HashFreshRunResult{StoreReadBudget: result.StoreReadBudget, ConfiguredDailyReservedByteLimit: result.ConfiguredDailyReservedByteLimit, JobID: job.ID, JobKey: job.Record.JobKey, RequestID: job.Record.Request.RequestID, ChoiceID: job.Record.Request.ChoiceID, ApprovalID: id, FreshBudget: job.FreshBudget}
 	}
 	if hooks.pacing != nil && job.ReadConsent != nil {
 		defer func() {
@@ -219,7 +261,7 @@ func (s *HashStore) runFreshConsented(ctx context.Context, id string, scanner *S
 	if now.Format(time.DateOnly) > b.Day {
 		b.ReservedBytes, b.RequestedBytes, b.ReadBytes, b.UnknownReservedBytes = 0, 0, 0, 0
 	}
-	available := min(max(job.ReadConsent.Approval.DailyReservedByteLimit-b.ReservedBytes, int64(0)), max(job.ReadConsent.Approval.LifetimeReservedByteLimit-b.TotalReservedBytes, int64(0)))
+	available := min(sharedAvailable, max(job.ReadConsent.Approval.DailyReservedByteLimit-b.ReservedBytes, int64(0)), max(job.ReadConsent.Approval.LifetimeReservedByteLimit-b.TotalReservedBytes, int64(0)))
 	var chosen hashStoredWork
 	found := false
 	for _, ordinal := range ids {
@@ -239,6 +281,9 @@ func (s *HashStore) runFreshConsented(ctx context.Context, id string, scanner *S
 	}
 	if !found {
 		result.Status, result.Code = "deferred", freshDeferralCode(job.ReadConsent, b, available)
+		if hooks.execution != nil && sharedAvailable < 64 {
+			result.Code = "configured_daily_byte_limit"
+		}
 		return result, ErrHashDeferred
 	}
 	if chosen.sequence == math.MaxInt64 {
@@ -564,6 +609,18 @@ func (s *HashStore) reserveFreshHashAttempt(ctx context.Context, job SavedFreshJ
 	}
 	b.MaxNow = now
 	available := min(max(current.ReadConsent.Approval.DailyReservedByteLimit-b.ReservedBytes, int64(0)), max(current.ReadConsent.Approval.LifetimeReservedByteLimit-b.TotalReservedBytes, int64(0)))
+	var shared *HashStoreReadBudget
+	if hooks.execution != nil {
+		shared, available, err = s.reserveHashStoreReadBudget(ctx, tx, hooks.execution, now, available)
+		if err != nil {
+			if errors.Is(err, ErrHashReadClockRollback) {
+				if e := s.commitFreshProgress(ctx, tx, current, nil, nil, hooks.reserveCommit, "shared clock refusal"); e != nil {
+					return a, e
+				}
+			}
+			return a, err
+		}
+	}
 	left := job.Record.Request.Targets[w.id-1].Target.File.Size - w.offset
 	grant := min(FileHashStepByteLimit, available, left)
 	if grant < left {
@@ -571,6 +628,9 @@ func (s *HashStore) reserveFreshHashAttempt(ctx context.Context, job SavedFreshJ
 	}
 	if grant == 0 && left > 0 {
 		a.guardCode = freshDeferralCode(current.ReadConsent, b, available)
+		if shared != nil && hooks.execution.DailyReservedByteLimit-shared.ReservedBytes < min(left, int64(64)) {
+			a.guardCode = "configured_daily_byte_limit"
+		}
 		if err = s.commitFreshProgress(ctx, tx, current, nil, nil, hooks.reserveCommit, "deferred reservation clock"); err != nil {
 			return a, err
 		}
@@ -609,6 +669,9 @@ func (s *HashStore) reserveFreshHashAttempt(ctx context.Context, job SavedFreshJ
 	if err = writeFreshHashBudget(ctx, tx, job.ID, b); err != nil {
 		return a, hashFreshProgressFailure(ctx, err)
 	}
+	if err = chargeHashStoreReadBudget(ctx, tx, shared, grant); err != nil {
+		return a, err
+	}
 	if _, err = s.readFreshJob(ctx, tx, job.ID); err != nil {
 		return a, err
 	}
@@ -643,6 +706,14 @@ func (s *HashStore) settleFreshHashAttempt(ctx, readCtx context.Context, cancelC
 	guardErr := s.observeHashFreshReadConsent(ctx, tx, current.ReadConsent, now)
 	if guardErr != nil && !errors.Is(guardErr, ErrHashReadExpired) && !errors.Is(guardErr, ErrHashReadClockRollback) && !errors.Is(guardErr, ErrHashReadRevoked) {
 		return fail()
+	}
+	if _, e := s.advanceHashStoreReadBudget(ctx, tx, now); e != nil {
+		if !errors.Is(e, ErrHashReadClockRollback) {
+			return fail()
+		}
+		if guardErr == nil {
+			guardErr = e
+		}
 	}
 	if guardErr != nil {
 		cancelCause(guardErr)

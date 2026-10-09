@@ -6,7 +6,7 @@ Rydd will gradually discover developer clutter and duplicate files, explain what
 
 **Status: experimental read-only inventory and explicit hashing.** The worker can scan explicitly selected fixture directories in bounded, resumable batches and save metadata, skip reasons and directory reconciliation markers in SQLite. Use `scan -d PATH` for a foreground scan, or `daemon --experimental-scan` for configured roots; ordinary `daemon` stays idle. Durable dispatch cadence, a daily batch cap, charged scanner API allowances, child-entry pacing and WAL backpressure are enforced; saved largest-file and selected-directory size reports and review-required `node_modules` candidates are available. Explicit full-file hashing requires separate exact consent and one bounded invocation at a time. Process CPU observations, cooperative dispatch backoff, source-thread priority requests and sparse experimental source-power admission are live; exact idle-only service descriptors can be installed and inspected, with explicit start/stop requests and descriptor removal. Full CPU/I/O/power quotas, runtime verification and cleanup remain pending. Nothing runs in the background when you clone, build or initialize this repository.
 
-For humans and AI: readable output by default, versioned JSON with `--json`, and `rydd capabilities --json` for discovery. Status separates live process CPU observations from saved experimental-turn feedback. Interrupted tracked turns require explicit writer recovery and retain a one-hour cooldown; saved views never recover them. Scanner metadata API counters help inspect background work. Explicit hash runs space requested bytes using the configured read ceiling, with immutable consent and full reservation charges. See the [CLI contract](docs/cli.md). The [finite generated resource harness](experiments/backgroundresources/README.md) measures native worker CPU, peak memory, control/report latency and qualified Linux kernel I/O with separate observer overhead; hourly and soak acceptance remain open.
+For humans and AI: readable output by default, versioned JSON with `--json`, and `rydd capabilities --json` for discovery. Status separates live process CPU observations from saved experimental-turn feedback. Interrupted tracked turns require explicit writer recovery and retain a one-hour cooldown; saved views never recover them. Scanner metadata API counters help inspect background work. Explicit hash runs space requested bytes using the configured read ceiling, with immutable consent and full reservation charges. See the [CLI contract](docs/cli.md). The [finite generated resource harness](experiments/backgroundresources/README.md) measures native worker CPU, peak memory, control/report latency and qualified Linux kernel I/O with separate observer overhead; hourly and soak acceptance remain open. Generated [wide/deep topology pilots](experiments/backgroundtopology/results/README.md) retain complete and partial compact-background evidence; million-entry acceptance remains open.
 
 Start with [first use and recovery](docs/getting-started.md) for explicit folder/private-state selection, the available review flow and common waits or interrupted commands.
 
@@ -270,12 +270,15 @@ After reviewing the exact proposal, choose explicit byte limits:
 rydd hash --approve SELECTION_ID --confirm-content-read --max-day-bytes 8388608 --max-total-bytes 33554432
 rydd hash --run APPROVAL_ID
 rydd hashes
+rydd hashes --store-budget
 rydd hash --revoke APPROVAL_ID
 ```
 
 Replace the example IDs with the saved selection and returned approval IDs. Keep the same global `--data-dir` throughout. Approval permits full-file hashing of that exact selection for 24 hours, within both limits. It opens no source files. The limits cover byte reservations, including canceled or interrupted attempts and charges recorded before approval. Retrying approval cannot extend expiry or raise limits.
 
 Each explicit run attempts one step of at most 1 MiB. Rydd rechecks consent, limits, current saved inventory, configuration exclusions and live paths before publishing checked progress. Run again explicitly to continue later; there is no automatic loop or retry. Opening the writer can recover interrupted accounting even if the new read is refused. Saved readers do not perform that recovery. Revocation works offline and blocks later reservations after taking the writer lock; it cannot interrupt a step that already holds the lock.
+
+Both explicit run modes also share the configured daily reservation ceiling within one private hash store (default 5 GiB). Existing and interrupted reservations stay charged. `hashes --store-budget` shows saved accounting without checking current permission. Other stores and physical I/O remain outside this ceiling. See the [reservation contract](docs/cli.md#shared-daily-reservation-ceiling-for-explicit-hash-steps).
 
 Completed hashes are historical observations. They do not prove that files are still equal, choose a keeper automatically or authorize cleanup. Hashing currently supports one immutable selection per state directory. Background hashing, current duplicate verification, savings estimates and cleanup remain pending.
 
@@ -315,6 +318,8 @@ rydd plan --compare OBSERVATION_ID -d /path/to/project
 ```
 
 Use an actual finding ID, then replace `PLAN_ID` with the returned saved plan ID. Keep the same global `--data-dir` if you override it. The saved record contains the exact selection and evidence from one inventory snapshot. Later scans cannot add targets to it. Reopening works while the source folder or its inventory is offline.
+
+Each private plan store admits 128 distinct saved plans. A new save uses a fresh timestamp and can consume another slot, even for the same targets. Capacity refusal retains historical records. If a save reply is uncertain, inspect its exact candidate ID before saving again. See [capacity and reply recovery](docs/cli.md#new-plan-capacity-and-uncertain-replies).
 
 `--check` compares the selection with its saved inventory and reports changed or incomplete evidence. Use the original manual scan directory, or omit `-d` for configured inventory. The check reads saved observations only: it can match while the source folder is offline. A match does not establish safe cleanup. Scanning again changes inventory revisions and requires a new selection for review.
 

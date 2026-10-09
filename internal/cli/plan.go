@@ -61,6 +61,10 @@ type ComparedPlan struct {
 }
 
 func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
+	return planWithSaver(ctx, args, paths, plans.Save)
+}
+
+func planWithSaver(ctx context.Context, args []string, paths config.Paths, savePlan planSaver) (any, error) {
 	r := PlanPreview{}
 	f := flag.NewFlagSet("plan", flag.ContinueOnError)
 	f.SetOutput(io.Discard)
@@ -282,7 +286,10 @@ func plan(ctx context.Context, args []string, paths config.Paths) (any, error) {
 			}
 			return r, err
 		}
-		return plans.Save(ctx, base, selection)
+		saved, err := savePlan(ctx, base, selection)
+		// Keep the global plan store prefix, not the derived manual inventory.
+		paths.StateDir = base
+		return planPublicationResult(saved, err, paths)
 	}
 	evidence, err := s.PreviewFindings(ctx, f.Args(), *days)
 	if err != nil {

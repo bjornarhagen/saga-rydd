@@ -30,6 +30,9 @@ func journalFixture(t *testing.T) (string, Saved, CapturedObservation, Preparati
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Exercise the original schema3 -> journal migration, independently of the
+	// schema6 installed by new saved-plan admission.
+	admissionLegacyFixture(t, base, 3)
 	saved, err = Load(ctx, base, saved.ID)
 	if err != nil {
 		t.Fatal(err)

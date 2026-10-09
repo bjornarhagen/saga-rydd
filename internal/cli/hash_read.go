@@ -137,6 +137,9 @@ func runConsentedHash(ctx context.Context, id string, paths config.Paths, propos
 	if err = checkCLIHashReadPacing(ctx, cfg.Scan.ReadBytesPerSecond, minimum); err != nil {
 		return HashStepReport{}, err
 	}
+	if err = checkCLIHashReadDailyLimit(ctx, cfg.Scan.ReadBytesPerDay, minimum); err != nil {
+		return HashStepReport{}, err
+	}
 	if err = checkHashSourceStorage(ctx, derived, proposal); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			err = missingHashError{fmt.Errorf("the frozen manual inventory is unavailable; no replacement inventory was initialized: %w", err)}
@@ -168,7 +171,7 @@ func runConsentedHash(ctx context.Context, id string, paths config.Paths, propos
 		}
 		return HashStepReport{}, err
 	}
-	result, err := writer.RunConsentedPaced(ctx, id, source, scanner, cfg.Scan.ReadBytesPerSecond)
+	result, err := writer.RunConsentedBudgeted(ctx, id, source, scanner, inventory.HashReadExecutionLimits{RequestedBytesPerSecond: cfg.Scan.ReadBytesPerSecond, DailyReservedByteLimit: cfg.Scan.ReadBytesPerDay})
 	var consent inventory.HashReadConsent
 	if err == nil {
 		consent, err = writer.Approval(ctx, id)
@@ -177,7 +180,7 @@ func runConsentedHash(ctx context.Context, id string, paths config.Paths, propos
 	if err != nil {
 		if errors.Is(err, inventory.ErrHashDeferred) {
 			switch result.Code {
-			case "daily_byte_limit", "lifetime_byte_limit", "durable_quantum":
+			case "daily_byte_limit", "lifetime_byte_limit", "durable_quantum", "configured_daily_byte_limit":
 				err = hashRunDeferredError{code: result.Code, error: fmt.Errorf("hash step deferred: %s: %w", result.Code, err)}
 			}
 		}

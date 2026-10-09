@@ -303,13 +303,30 @@ func openHashStoreMigrationMode(ctx context.Context, base string, readOnly, sele
 			return fail(e)
 		}
 		version = 1
-	} else if app != hashStoreApplicationID || (version != 1 && version != 2 && version != 3 && version != 4 && version != 5 && version != 6) {
+	} else if app != hashStoreApplicationID || (version != 1 && version != 2 && version != 3 && version != 4 && version != 5 && version != 6 && version != 7) {
 		return fail(ErrHashStoreCorrupt)
 	}
 	s.schemaVersion = version
 	if !readOnly && migrate && version == 1 {
 		if err = s.migrateHashReadSchema(ctx); err != nil {
 			return fail(err)
+		}
+	}
+	// Active shared tracking is validated before any legacy recovery or new
+	// handle escapes. Readers never migrate, recover or sample the clock.
+	if version == 7 {
+		tx, e := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+		if e != nil {
+			return fail(e)
+		}
+		_, e = s.readHashStoreReadBudget(ctx, tx)
+		if e == nil {
+			e = tx.Commit()
+		} else {
+			_ = tx.Rollback()
+		}
+		if e != nil {
+			return fail(e)
 		}
 	}
 	if !readOnly && !selectionOnly {

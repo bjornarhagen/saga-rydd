@@ -49,6 +49,7 @@ func TestDismissalActualProcessLossAtomicMigrationAndLostReply(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			admissionLegacyFixture(t, base, 3)
 			plan, err = Load(ctx, base, plan.ID)
 			if err != nil {
 				t.Fatal(err)

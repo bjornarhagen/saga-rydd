@@ -94,18 +94,7 @@ func TestObservationCaptureLoadAndRetry(t *testing.T) {
 
 func downgradeObservationStore(t *testing.T, base string, version int) {
 	t.Helper()
-	db, closeDB, err := open(context.Background(), base, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer closeDB()
-	query := "DROP TABLE observations; PRAGMA user_version=2"
-	if version == 1 {
-		query = "DROP TABLE observations; DROP TABLE review_revocations; DROP TABLE review_approvals; DROP TABLE plan_store_identity; PRAGMA user_version=1"
-	}
-	if _, err = db.Exec(query); err != nil {
-		t.Fatal(err)
-	}
+	admissionLegacyFixture(t, base, version)
 }
 
 func TestObservationInvalidEvidenceDoesNotMigrate(t *testing.T) {

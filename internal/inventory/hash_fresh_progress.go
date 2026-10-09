@@ -37,22 +37,24 @@ type SavedFreshHashWork struct {
 }
 
 type HashFreshRunResult struct {
-	ReadPacing       *HashReadPacingObservation `json:"read_pacing,omitempty"`
-	JobID            string                     `json:"job_id"`
-	JobKey           string                     `json:"job_key"`
-	RequestID        string                     `json:"request_id"`
-	ChoiceID         string                     `json:"choice_id"`
-	ApprovalID       string                     `json:"approval_id"`
-	Status           string                     `json:"status"`
-	Code             string                     `json:"code,omitempty"`
-	Ordinal          int                        `json:"ordinal,omitempty"`
-	HistoricalWorkID string                     `json:"historical_work_id,omitempty"`
-	Role             string                     `json:"role,omitempty"`
-	Progress         FullHashProgress           `json:"progress"`
-	DurableOffset    int64                      `json:"durable_offset"`
-	ReservedBytes    int64                      `json:"reserved_bytes"`
-	Usage            FileReadUsage              `json:"usage"`
-	FreshBudget      *HashBudget                `json:"fresh_budget,omitempty"`
+	StoreReadBudget                  *HashStoreReadBudget       `json:"store_read_budget,omitempty"`
+	ConfiguredDailyReservedByteLimit *int64                     `json:"configured_daily_reserved_byte_limit,omitempty"`
+	ReadPacing                       *HashReadPacingObservation `json:"read_pacing,omitempty"`
+	JobID                            string                     `json:"job_id"`
+	JobKey                           string                     `json:"job_key"`
+	RequestID                        string                     `json:"request_id"`
+	ChoiceID                         string                     `json:"choice_id"`
+	ApprovalID                       string                     `json:"approval_id"`
+	Status                           string                     `json:"status"`
+	Code                             string                     `json:"code,omitempty"`
+	Ordinal                          int                        `json:"ordinal,omitempty"`
+	HistoricalWorkID                 string                     `json:"historical_work_id,omitempty"`
+	Role                             string                     `json:"role,omitempty"`
+	Progress                         FullHashProgress           `json:"progress"`
+	DurableOffset                    int64                      `json:"durable_offset"`
+	ReservedBytes                    int64                      `json:"reserved_bytes"`
+	Usage                            FileReadUsage              `json:"usage"`
+	FreshBudget                      *HashBudget                `json:"fresh_budget,omitempty"`
 }
 
 type hashFreshRunOpenHooks struct {
@@ -65,6 +67,8 @@ type hashFreshRunOpenHooks struct {
 
 type hashFreshRunHooks struct {
 	pacing                    *hashReadPacer
+	execution                 *HashReadExecutionLimits
+	storeBudgetHooks          *hashStoreReadBudgetHooks
 	beforeReserveCommit       func()
 	afterReserve              func()
 	beforeSettleCommit        func()
@@ -205,7 +209,7 @@ func (s *HashStore) readFreshProgress(ctx context.Context, db hashQuery, job Sav
 	if version == 4 || version == 5 {
 		return nil, nil, nil
 	}
-	if version != 6 {
+	if version != 6 && version != 7 {
 		return nil, nil, ErrHashFreshProgressCorrupt
 	}
 	if err := hashFreshProgressCount(ctx, db); err != nil {
@@ -380,7 +384,7 @@ func (s *HashStore) initializeFreshProgress(ctx context.Context, jobID string, h
 		if _, err = tx.ExecContext(ctx, hashFreshProgressSchema); err != nil {
 			return hashFreshProgressFailure(ctx, err)
 		}
-	} else if version != 6 {
+	} else if version != 6 && version != 7 {
 		return ErrHashFreshProgressCorrupt
 	}
 	if _, err = tx.ExecContext(ctx, "INSERT INTO hash_fresh_run_state VALUES(?,?)", job.ID, len(job.Work)); err != nil {
@@ -481,6 +485,12 @@ func (s *HashStore) commitFreshProgress(ctx context.Context, tx *sql.Tx, job Sav
 			return err
 		}
 	}
+	// Capture the actual version inside the committing snapshot; a known
+	// successful commit followed by cancellation is not uncertain publication.
+	var publishedVersion int
+	if err := tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&publishedVersion); err != nil {
+		return err
+	}
 	var err error
 	if commit != nil {
 		err = commit(tx)
@@ -491,7 +501,7 @@ func (s *HashStore) commitFreshProgress(ctx context.Context, tx *sql.Tx, job Sav
 		s.poisoned = true
 		return fmt.Errorf("fresh job %s with key %s %s publication is uncertain; close and reopen exact-job recovery: %w", job.ID, job.Record.JobKey, operation, ErrHashRecoveryRequired)
 	}
-	s.schemaVersion = 6
+	s.schemaVersion = publishedVersion
 	if after != nil {
 		after()
 	}

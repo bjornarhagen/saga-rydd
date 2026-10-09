@@ -23,6 +23,10 @@ const reviewInputLimit = 4096
 // review never holds an inventory reader or transaction while waiting for input.
 // Numbers address only the frozen records displayed on the current page.
 func review(ctx context.Context, args []string, paths config.Paths, in io.Reader, out io.Writer) error {
+	return reviewWithPlanSaver(ctx, args, paths, in, out, plans.Save)
+}
+
+func reviewWithPlanSaver(ctx context.Context, args []string, paths config.Paths, in io.Reader, out io.Writer, savePlan planSaver) error {
 	f := flag.NewFlagSet("review", flag.ContinueOnError)
 	f.SetOutput(io.Discard)
 	var path string
@@ -152,10 +156,17 @@ func review(ctx context.Context, args []string, paths config.Paths, in io.Reader
 					return fmt.Errorf("cannot display evidence qualification; nothing saved: %w", display.err)
 				}
 				opCtx, cancel = context.WithTimeout(ctx, 5*time.Second)
-				saved, err := plans.Save(opCtx, paths.StateDir, selection)
+				saved, err := savePlan(opCtx, paths.StateDir, selection)
 				cancel()
+				if err == nil && ctx.Err() != nil {
+					return fmt.Errorf("%s; completion reply was canceled: %w", planReplyMessage(saved, paths), ctx.Err())
+				}
 				if err != nil {
-					return err
+					result, publicationErr := planPublicationResult(saved, err, paths)
+					if candidate, ok := result.(planPublicationCandidate); ok {
+						printPlanCandidate(out, candidate)
+					}
+					return publicationErr
 				}
 				printResultBanner(out, "SELECTION SAVED - CLEANUP UNAVAILABLE")
 				fmt.Fprintf(out, "Saved plan: %s\n", saved.ID)
@@ -164,7 +175,10 @@ func review(ctx context.Context, args []string, paths config.Paths, in io.Reader
 				fmt.Fprintf(out, "\nStart another explicit scan when needed:\n  %s scan -d %s\n", commandPrefix(paths), shellQuote(root))
 				fmt.Fprintf(out, "\nThen review saved candidates:\n  %s review -d %s --min-age-days %d\n", commandPrefix(paths), shellQuote(root), *age)
 				if display.err != nil {
-					return fmt.Errorf("selection %s was saved, but its completion output failed: %w", saved.ID, display.err)
+					return fmt.Errorf("%s; completion output failed: %w", planReplyMessage(saved, paths), display.err)
+				}
+				if ctx.Err() != nil {
+					return fmt.Errorf("%s; completion reply was canceled: %w", planReplyMessage(saved, paths), ctx.Err())
 				}
 				return nil
 			}

@@ -30,14 +30,20 @@ func hashes(ctx context.Context, args []string, paths config.Paths) (any, error)
 	f := flag.NewFlagSet("hashes", flag.ContinueOnError)
 	f.SetOutput(io.Discard)
 	var work, preview, keeper, choice hashOption
-	var groups hashSelectOption
+	var groups, storeBudget hashSelectOption
 	f.Var(&work, "work", "show one saved work ID (1–20); whole-selection budget remains visible")
 	f.Var(&groups, "groups", "group matching completed historical hashes from the whole saved selection")
+	f.Var(&storeBudget, "store-budget", "show saved shared-store read reservations; no current permission check")
 	f.Var(&preview, "preview", "preview possible keeper/copy roles for one exact saved selection")
 	f.Var(&keeper, "keeper", "one explicitly selected possible keeper work ID (1–20)")
 	f.Var(&choice, "choice", "reopen one full saved historical keeper/copy choice ID")
 	if err := f.Parse(args); err != nil {
 		return HashReport{}, usageError{err}
+	}
+	if storeBudget.set {
+		if !storeBudget.value || work.set || groups.set || preview.set || keeper.set || choice.set || f.NArg() != 0 {
+			return nil, usageError{errors.New("hashes --store-budget accepts no other mode, work, root or selection options")}
+		}
 	}
 	if choice.set {
 		if work.set || groups.set || preview.set || keeper.set || f.NArg() != 0 || !inventory.ValidHashKeeperChoiceID(choice.value) {
@@ -73,6 +79,20 @@ func hashes(ctx context.Context, args []string, paths config.Paths) (any, error)
 			err = missingHashError{fmt.Errorf("saved hash storage is unavailable; hashes only reads existing observations: %w", err)}
 		}
 		return HashReport{}, err
+	}
+	if storeBudget.value {
+		r, readErr := reader.StoreReadBudget(ctx)
+		closeErr := reader.Close()
+		if readErr != nil {
+			return nil, readErr
+		}
+		if closeErr != nil {
+			return nil, closeErr
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return HashStoreBudgetReport{Contract: inventory.HashStoreReadBudgetContract, Activated: r != nil, SavedBudget: r}, nil
 	}
 	if choice.set {
 		r, readErr := reader.KeeperChoice(ctx, choice.value)
@@ -149,6 +169,8 @@ func printHashes(out io.Writer, report any) error {
 	switch r := report.(type) {
 	case HashReport:
 		return printHashObservations(out, r)
+	case HashStoreBudgetReport:
+		return printHashStoreBudgetReport(out, r)
 	case inventory.HashGroupsReport:
 		return printHashGroups(out, r)
 	case inventory.HashKeeperPreview:
