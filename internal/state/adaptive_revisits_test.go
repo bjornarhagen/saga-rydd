@@ -435,7 +435,7 @@ func TestAdaptiveRevisitReaderMigrationAndRestartBinding(t *testing.T) {
 	if err := s.db.QueryRow("SELECT token FROM inventory_identity").Scan(&incarnation); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.Exec("DROP TABLE adaptive_inventory_revisits; DELETE FROM schema_migrations WHERE version=13; PRAGMA user_version=12"); err != nil {
+	if _, err := s.db.Exec("ALTER TABLE jobs DROP COLUMN inventory_claimed; DROP TABLE adaptive_inventory_revisits; DELETE FROM schema_migrations WHERE version>=13; PRAGMA user_version=12"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Close(); err != nil {
@@ -460,7 +460,7 @@ func TestAdaptiveRevisitReaderMigrationAndRestartBinding(t *testing.T) {
 	}
 	defer w.Close()
 	var preserved string
-	if err = w.db.QueryRow("SELECT token FROM inventory_identity").Scan(&preserved); err != nil || preserved != incarnation || w.schema != 13 {
+	if err = w.db.QueryRow("SELECT token FROM inventory_identity").Scan(&preserved); err != nil || preserved != incarnation || w.schema != schemaVersion {
 		t.Fatal(preserved, err)
 	}
 	roots, err := w.ResolveFairInventoryRoots(ctx, []string{"/fixture/a"})

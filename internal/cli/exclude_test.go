@@ -445,3 +445,24 @@ func TestExcludeCLIInvalidByteDataDirectoryLinux(t *testing.T) {
 		t.Fatal("raw global data-dir lost authoritative bytes or safe human quoting", code, human, stderr)
 	}
 }
+
+func TestExcludeCLICompactSettingsPreserved(t *testing.T) {
+	f := newExcludeCLIFixture(t, true, "compact settings")
+	f.initial.Scan.AdaptiveRevisits = false
+	f.initial.Scan.CompactInventory = true
+	if err := os.Remove(f.paths.ConfigFile); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Create(f.paths.ConfigFile, f.home, f.initial); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(f.initial.Roots[0], "generated-cache")
+	code, raw, stderr := f.run(context.Background(), "exclude", "--add", path, "--json")
+	excludeCLIReport(t, f, code, raw, stderr)
+	cfg, err := config.Load(f.paths.ConfigFile, f.home)
+	expected := f.initial
+	expected.Excludes = append(append([]string(nil), expected.Excludes...), path)
+	if err != nil || !reflect.DeepEqual(cfg, expected) {
+		t.Fatal("compact storage or other settings changed", cfg, expected, err)
+	}
+}

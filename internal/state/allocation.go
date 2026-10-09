@@ -71,7 +71,7 @@ func (s *Store) ReduceAllocations(ctx context.Context) (bool, error) {
 	return s.reduceAllocationsForRoot(ctx, 0)
 }
 
-func (s *Store) reduceAllocationsForRoot(ctx context.Context, rootID int64) (bool, error) {
+func (s *Store) reduceAllocationsForRoot(ctx context.Context, rootID int64, background ...BackgroundInventoryScope) (bool, error) {
 	if s.readOnly {
 		return false, errors.New("state is read-only")
 	}
@@ -80,6 +80,11 @@ func (s *Store) reduceAllocationsForRoot(ctx context.Context, rootID int64) (boo
 		return false, err
 	}
 	defer tx.Rollback()
+	if len(background) > 0 {
+		if err = s.checkBackgroundInventoryScope(ctx, tx, &background[0], rootID); err != nil {
+			return false, err
+		}
+	}
 	var w allocationWork
 	var current int64
 	var coverage []byte

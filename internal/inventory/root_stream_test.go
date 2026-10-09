@@ -303,7 +303,7 @@ func TestRootStreamsNativeChild(t *testing.T) {
 	for i := range counts {
 		counts[i] = 129
 	}
-	s, jobs := rootStreamFixture(t, counts, WithEntryRate(100))
+	s, jobs := rootStreamFixture(t, counts)
 	for _, job := range jobs {
 		for i := 0; i < 129; i++ {
 			name := fmt.Sprintf("file-%04d", i)
@@ -330,9 +330,12 @@ func TestRootStreamsNativeChild(t *testing.T) {
 	var fds []int
 	pending := 0
 	for _, job := range jobs {
-		s.nextEntry = time.Now().Add(time.Hour)
-		ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
-		b, err := s.Next(ctx, job)
+		// This fixture measures retained buffers and descriptors. Yield before
+		// consuming a child without depending on a short wall-clock timeout.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		b, err := s.NextPermittedPaced(ctx, job,
+			func(context.Context, APICallKind) error { return nil },
+			func(context.Context, int64) (bool, error) { return false, nil })
 		cancel()
 		if err != nil || b.Fault != "" || b.Complete || len(b.Entries) != 0 {
 			t.Fatal(b, err)

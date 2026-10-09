@@ -37,6 +37,7 @@ type Snapshot struct {
 	Power            *PowerPolicySnapshot          `json:"power,omitempty"`
 	InventoryState   *InventoryStatePolicySnapshot `json:"inventory_state,omitempty"`
 	AdaptiveRevisits *AdaptiveRevisitSnapshot      `json:"adaptive_revisits,omitempty"`
+	InventoryMode    *InventoryModeSnapshot        `json:"inventory_mode,omitempty"`
 	APIPacing        *APIPacingSnapshot            `json:"api_pacing,omitempty"`
 	Metadata         *state.MetadataBudget         `json:"metadata,omitempty"`
 	Priority         *ThreadPriorityObservation    `json:"thread_priority,omitempty"`
@@ -142,6 +143,9 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 		return state.ErrInventoryStateBudgetInput
 	}
 	if options.ExperimentalScan {
+		if cfg.Scan.CompactInventory && cfg.Scan.AdaptiveRevisits {
+			return fmt.Errorf("compact inventory uses fixed daily revisits: %w", state.ErrBackgroundInventoryInput)
+		}
 		if err := state.ValidateFairInventoryPaths(cfg.Roots); err != nil {
 			return err
 		}
@@ -215,20 +219,6 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 		// The source handler is bound to reserved windows at dispatch time.
 		handlers[state.ScanKind] = nil
 		kinds = append(kinds, state.ScanKind)
-		compact, modeErr := w.ConfigureCompact(ctx, nil)
-		if modeErr != nil {
-			return modeErr
-		}
-		if compact {
-			return errors.New("compact inventories currently require the manual scan command; background compact scanning is not enabled")
-		}
-		if !cfg.Scan.AdaptiveRevisits {
-			page, err := w.SeedInventoryRevisitPage(ctx, 0, wallNow(), revisitInterval)
-			if err != nil {
-				return err
-			}
-			revisitCursor, revisitMore = page.Cursor, page.More
-		}
 		fairRoots, err = w.ResolveFairInventoryRoots(ctx, cfg.Roots)
 		if err != nil {
 			return err
@@ -244,6 +234,11 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 		return err
 	}
 	if options.ExperimentalScan {
+		background, err := w.ConfigureBackgroundInventoryMode(ctx, fairRoots, cfg.Scan.CompactInventory, wallNow())
+		if err != nil {
+			return fmt.Errorf("configure background inventory mode: %w", err)
+		}
+		adaptive.background = background
 		home, _ := os.UserHomeDir()
 		digest, err := adaptiveRevisitDigest(cfg.Roots, cfg.Excludes, privatePaths, home)
 		if err != nil {
@@ -251,6 +246,13 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 		}
 		if err = adaptive.configure(ctx, w, fairRoots, cfg.Scan.AdaptiveRevisits, digest, wallNow()); err != nil {
 			return fmt.Errorf("configure adaptive inventory revisits: %w", err)
+		}
+		if !adaptive.enabled {
+			page, err := w.SeedBackgroundInventoryRevisitPage(ctx, adaptive.background, 0, wallNow(), revisitInterval)
+			if err != nil {
+				return err
+			}
+			revisitCursor, revisitMore = page.Cursor, page.More
 		}
 	}
 	paused, err := w.Paused(ctx)
@@ -314,6 +316,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 			live.Power = powerState.snapshot()
 			live.InventoryState = inventoryState.snapshot()
 			live.AdaptiveRevisits = adaptive.snapshot()
+			live.InventoryMode = &InventoryModeSnapshot{Compact: adaptive.background.Compact()}
 			live.APIPacing = apiPacer.snapshot()
 		}
 		live.Priority = priorityObservation.Load()
@@ -666,7 +669,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 				}
 				if revisitMore {
 					pageCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-					page, err := w.SeedInventoryRevisitPage(pageCtx, revisitCursor, wallNow(), revisitInterval)
+					page, err := w.SeedBackgroundInventoryRevisitPage(pageCtx, adaptive.background, revisitCursor, wallNow(), revisitInterval)
 					cancel()
 					if err != nil {
 						if ctx.Err() != nil {
@@ -903,7 +906,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						return err // Pending provenance remains; no work has run.
 					}
 					if turn.Kind == state.FairInventoryMaintenance {
-						step, retireErr := w.RetireInventoryForRoot(turnCtx, turn.RootID)
+						step, retireErr := w.RetireBackgroundInventoryForRoot(turnCtx, adaptive.background, turn.RootID)
 						if retireErr == nil && step.Eligible && !step.Remaining {
 							retireErr = adaptive.finalize(turnCtx, w, turn.RootID, wallNow(), revisitInterval)
 						}

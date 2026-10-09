@@ -71,7 +71,7 @@ rydd --data-dir /path/to/private/state resume
 rydd --data-dir /path/to/private/state stop
 ```
 
-Pause persists across restart. An acknowledgment can precede the end of an active cooperative chunk; inspect status while it drains. Stop acknowledges a shutdown request. Wait for the foreground daemon to exit before opening another writer. Configuration changes take effect on the next worker start.
+Pause persists across restart. An acknowledgment can precede the end of an active cooperative chunk; inspect status while it drains. Stop acknowledges a shutdown request. Wait for the foreground daemon to exit before opening another writer. Configuration changes take effect on the next worker start. The optional `scan.compact_inventory = true` setting changes dependency-tree storage for experimental scanning and keeps fixed daily revisits. It cannot be combined with adaptive revisits. A refused mode change requires restoring the previous configuration and finishing saved work; do not clear the queue. See [compact mode and recovery](cli.md#opt-in-compact-background-inventory).
 
 Use the same short absolute `RYDD_RUNTIME_DIR` for the daemon and controls if overriding the default. Keep state on a local filesystem. See [worker ownership and recovery](worker.md#ownership-and-controls).
 
@@ -94,6 +94,7 @@ Start with the same data directory, folder and IDs used by the original command.
 | WAL backpressure delays work | Finish long-lived readers when appropriate. The worker retries under its existing gates. A large reusable WAL is not evidence that history must be deleted. |
 | State threshold delays work | Inspect cached DB/WAL lengths and availability. Pending work remains saved. Restart is not a remedy for the threshold; freed SQLite pages may not shrink file lengths. |
 | Optional API pacing blocks source work | Inspect the rate, work window and blocked reason. Low rates can fail conservative capacity planning; unsupported canonical paths block the current run. Stop before changing configuration. Pending work and charges remain saved. |
+| Explicit hash read rate cannot fit a durable block | Inspect `scan.read_bytes_per_second` and the remaining work window. A known impossible rate refuses a new reservation. Existing consent and charges remain unchanged; inspect saved progress before another explicit run. |
 | Power evidence is unknown | Read the qualified status. Unknown evidence retains fixed pacing; it does not establish external power. macOS performs no provider probe. |
 | Clock rollback is refused | Check the machine clock and saved high-water evidence. Preserve the ledger. Do not reset timestamps or budgets to bypass the refusal. |
 | Configuration changed during startup | Reload the intended configuration and start a new worker after the previous writer exits. A worker cannot adopt a mixture of old and new settings. |

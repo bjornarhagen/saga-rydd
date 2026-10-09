@@ -205,7 +205,11 @@ func (s *Store) ConfigureAdaptiveRevisits(ctx context.Context, roots FairInvento
 		return AdaptiveRevisitScope{}, err
 	}
 	defer tx.Rollback()
-	if err = adaptiveDetailedMode(ctx, tx); err != nil {
+	if enabled {
+		if err = adaptiveDetailedMode(ctx, tx); err != nil {
+			return AdaptiveRevisitScope{}, err
+		}
+	} else if _, err = readBackgroundInventoryMode(ctx, tx); err != nil {
 		return AdaptiveRevisitScope{}, err
 	}
 	for _, root := range roots.roots {
@@ -405,7 +409,7 @@ func (s *Store) finalizeAdaptiveRevisit(ctx context.Context, scope AdaptiveRevis
 		due = n
 	}
 	var job int64
-	if err = tx.QueryRowContext(ctx, `INSERT INTO jobs(root_id,kind,path,due_at_ns) VALUES(?,?,X'2e',?) RETURNING id`, rootID, ScanKind, due).Scan(&job); err != nil {
+	if err = tx.QueryRowContext(ctx, `INSERT INTO jobs(root_id,kind,path,due_at_ns,inventory_claimed) VALUES(?,?,X'2e',?,0) RETURNING id`, rootID, ScanKind, due).Scan(&job); err != nil {
 		return AdaptiveRevisitResult{}, err
 	}
 	result = AdaptiveRevisitResult{Scheduled: true, Initialized: initializing, Due: time.Unix(0, due), Interval: time.Duration(interval), Epoch: r.epoch, UnchangedStreak: r.streak, Changed: r.changed, Unknown: r.unknown}

@@ -89,6 +89,14 @@ Claim provenance is durable even if a released job later has zero attempts. Disa
 
 Status returns a cloned, dated scalar cache without source access or a new scheduling query. It can precede later denial-driven uncertainty in SQLite. Interval counts are archived scheduling evidence; they do not evaluate current permission or verify source contents. Schema 13 stores bounded scalars without a whole-tree digest or new walk. At most 32 roots are admitted together; retained disabled/historical rows have no lifetime retention claim. See [adaptive CLI fields](cli.md#opt-in-adaptive-historical-metadata-revisits).
 
+## Opt-in compact background storage (P2-02b8)
+
+Only experimental configured scanning adopts `scan.compact_inventory` (default false). Compact uses fixed daily revisits and refuses detailed adaptive learning. Startup recovers existing jobs, then binds the exact admitted roots, saved mode and mode epoch before configuring scheduling. Schema 14 records sticky ever-claimed source provenance in the same claim transaction; legacy jobs default to unknown. Every production source insertion records untouched provenance explicitly, and no release/recovery clears a claim.
+
+A store-wide change admits only exact configured untouched root listings after all saved maintenance drains. It preserves job IDs/due times and refuses children, started/interrupted/running/legacy-unknown and out-of-scope work. Restore the old configuration to finish refused work. Same-mode adoption resumes it. Fixed seed/finalization/pending and per-root maintenance recheck an opaque store/root/mode-epoch scope in their transactions. Detailed adaptive scheduling keeps its existing scope and behavior; compact cannot learn quiet epochs.
+
+The existing scanner and operation-local permits remain unchanged. Compact persistence, retirement and reductions use bounded saved turns under every existing resource, fair-root and control gate. Live status exposes only a cached selected-mode boolean. Native generated metered and interruption evidence is separate from prior unpaced manual scale results; default rollout and representative resource acceptance remain open. See [compact CLI mode and recovery](cli.md#opt-in-compact-background-inventory).
+
 ## Sparse experimental power admission (P1-06b8b)
 
 When `scan.pause_on_battery` is true, an otherwise admissible due source turn can start one asynchronous power check before dispatch reservation. A fresh positive discharge witness delays source work; unknown or unsupported evidence retains fixed pacing. Checks start at least five minutes apart and have a five-second admission window in independent wall and elapsed clocks. A blocked callback keeps the process-wide slot occupied, including across in-process worker restarts. Controls and eligible saved-only maintenance continue. Pause/stop cancels only the worker's own check without waiting for its callback.

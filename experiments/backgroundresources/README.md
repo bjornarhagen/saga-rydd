@@ -30,6 +30,22 @@ Native `ProcessState`/`getrusage` measurements report worker user/system CPU and
 
 State/WAL peaks are sampled lower bounds. Scanner counters count declared API attempts, not physical disk operations. Physical-read bytes and system wakeups remain null/unknown. The file-body digest checks unchanged generated contents; those deliberate harness reads are separate from scanner activity.
 
+### Sampled Linux kernel I/O
+
+`worker_kernel_io` adds the `linux_proc_io_samples_v1` contract on Linux. It observes only the harness's direct worker process and accounting for children that process has waited for. The current Rydd worker creates no children. macOS reports unsupported observations without probing a process filesystem.
+
+| Counter | Meaning |
+| --- | --- |
+| `rchar`, `wchar` | Bytes accounted to read/write calls, including cached reads and pipes |
+| `syscr`, `syscw` | Accounted read/write call counts |
+| `read_bytes` | Storage-layer read accounting |
+| `write_bytes` | Storage-layer write accounting, including page dirtying |
+| `cancelled_write_bytes` | Cancelled write accounting; never subtracted from writes |
+
+These counters do not measure device traffic, scanner budgets or system wakeups. Samples are sequential, can cover waited-child work, and are not atomic snapshots. `sampled_delta` covers only the observed prefix between successful samples. A zero counter is an observed value; an unavailable counter is null. Regression invalidates the delta and disables further positive observations. The summary never claims full-lifetime coverage, including when the final post-reap sample is unavailable. See the [Linux proc documentation](https://www.kernel.org/doc/html/latest/filesystems/proc.html) for the accounting semantics.
+
+The harness binds the worker before starting its sole `Wait`, verifies an aligned process namespace, and retains one no-follow proc directory descriptor. It never reopens a numeric PID. Missing kernel support or an unverifiable scope produces a qualified unavailable result. Setup retains at most three descriptors temporarily; sampling retains at most two. Setup or sample collection uses at most 28 filesystem calls, or 29 including a refused/terminal retained-descriptor close. The ordinary final close is separate and occurs once. Fixed attribute limits and four read calls per attribute bound copied data: at most 8,205 bytes during setup and 9,219 during a sample. A cooperative two-second timeout does not interrupt an already blocked kernel call. Observer work and these probes remain outside worker CPU/I/O accounting.
+
 No hourly extrapolation, representative-machine tuning, physical power acceptance or soak acceptance follows from a finite run. The full plan still requires measured hourly targets and a representative native macOS/Linux soak.
 
 ## Recorded native observations

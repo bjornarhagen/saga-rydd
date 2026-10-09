@@ -58,6 +58,9 @@ func hashRunFreshJob(ctx context.Context, paths config.Paths, id string) (HashFr
 	if err != nil {
 		return HashFreshStepReport{}, err
 	}
+	if err = checkCLIHashReadPacing(ctx, cfg.Scan.ReadBytesPerSecond, freshHashReadMinimum(job)); err != nil {
+		return HashFreshStepReport{}, err
+	}
 	locator := request.SourceLocator()
 	root := string(locator.RootPathBytes)
 	if err = checkHashSourceStorage(ctx, manualState(paths, root), proposal); err != nil {
@@ -77,7 +80,7 @@ func hashRunFreshJob(ctx context.Context, paths config.Paths, id string) (HashFr
 	if err != nil {
 		return HashFreshStepReport{}, fmt.Errorf("fresh job %s run writer could not open; inspect hash --show-job %s before another explicit run: %w", job.ID, job.ID, hashFreshJobMissing(err, "existing fresh-job storage became unavailable; no replacement was initialized"))
 	}
-	run, err := writer.RunFreshConsented(ctx, id, scanner)
+	run, err := writer.RunFreshConsentedPaced(ctx, id, scanner, cfg.Scan.ReadBytesPerSecond)
 	if err == nil {
 		c, err = writer.FreshReadApproval(ctx, id)
 	}
@@ -129,6 +132,8 @@ func printHashFreshStepReport(out io.Writer, report HashFreshStepReport) error {
 	printField(guard, "Fresh requested bytes", r.Usage.RequestedBytes)
 	printField(guard, "Fresh read bytes", r.Usage.ReadBytes)
 	printField(guard, "Observed elapsed", r.Usage.Elapsed.String())
+	printHashReadPacing(guard, r.ReadPacing)
+	printHashPacingZeroProgress(guard, r.Code)
 	fmt.Fprintf(guard, "Job: %s\nJob key: %s\nRequest: %s\nChoice: %s\nFresh read consent: %s\n", r.JobID, r.JobKey, r.RequestID, r.ChoiceID, r.ApprovalID)
 	printHashBudgetScope(guard, r.FreshBudget, "FRESH-JOB RESERVATION BUDGET", "fresh job", "whole exact fresh job")
 	printWrapped(guard, "One step runs and exits. Only this exact job can be recovered by an explicit run writer; original work and charges stay separate. Historical digests prove no current equality or safe cleanup.", "")

@@ -43,8 +43,8 @@ func (s *Store) SeedInventory(ctx context.Context) error {
 	if s.readOnly {
 		return errors.New("state is read-only")
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO jobs(root_id,kind,path,due_at_ns)
- SELECT r.id,?,X'2e',? FROM roots r WHERE r.enabled=1
+	_, err := s.db.ExecContext(ctx, `INSERT INTO jobs(root_id,kind,path,due_at_ns,inventory_claimed)
+ SELECT r.id,?,X'2e',?,0 FROM roots r WHERE r.enabled=1
  AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.root_id=r.id AND j.kind=?)
  AND NOT EXISTS (SELECT 1 FROM compact_retirement c WHERE c.root_id=r.id)
  AND NOT EXISTS (SELECT 1 FROM subtree_reconcile t WHERE t.root_id=r.id)
@@ -153,7 +153,7 @@ func (s *Store) commitScan(ctx context.Context, j Job, b ScanBatch, adaptive *Ad
 			return err
 		}
 		if e.Kind == "directory" && e.SkipReason == "" {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO jobs(root_id,kind,path,due_at_ns) VALUES(?,?,?,?) ON CONFLICT(root_id,kind,path) DO NOTHING`, j.RootID, ScanKind, e.Path, now.UnixNano()); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO jobs(root_id,kind,path,due_at_ns,inventory_claimed) VALUES(?,?,?,?,0) ON CONFLICT(root_id,kind,path) DO NOTHING`, j.RootID, ScanKind, e.Path, now.UnixNano()); err != nil {
 				return err
 			}
 		}

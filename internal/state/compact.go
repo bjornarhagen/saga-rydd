@@ -24,23 +24,23 @@ func generatedDirectory(root, path []byte) bool {
 // ConfigureCompact pins the selected storage mode until both inventory and
 // retirement work have finished. Nil keeps the saved mode (default detailed).
 func (s *Store) ConfigureCompact(ctx context.Context, requested *bool) (bool, error) {
-	var value []byte
-	err := s.db.QueryRowContext(ctx, "SELECT value FROM settings WHERE key='inventory.compact'").Scan(&value)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
 		return false, err
 	}
-	if len(value) > 0 && string(value) != "0" && string(value) != "1" {
-		return false, errors.New("invalid saved compact inventory mode")
+	defer tx.Rollback()
+	enabled, err := readBackgroundInventoryMode(ctx, tx)
+	if err != nil {
+		return false, err
 	}
-	enabled := string(value) == "1"
 	if requested == nil || *requested == enabled {
-		return enabled, nil
+		return enabled, tx.Commit()
 	}
 	var pending bool
-	if err = s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM jobs WHERE kind=?) OR EXISTS(SELECT 1 FROM compact_retirement)
+	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM jobs WHERE kind=?) OR EXISTS(SELECT 1 FROM compact_retirement)
  OR EXISTS(SELECT 1 FROM subtree_reconcile) OR EXISTS(SELECT 1 FROM subtree_retirement)
  OR EXISTS(SELECT 1 FROM allocation_cache c JOIN allocation_revisions v ON v.root_id=c.root_id WHERE c.revision!=v.revision OR c.phase!='done')`, ScanKind).Scan(&pending); err != nil {
-		return false, err
+		return enabled, err
 	}
 	if pending {
 		return enabled, errors.New("finish the pending scan before changing --compact/--detailed mode; rerun scan without a mode flag to resume")
@@ -48,12 +48,22 @@ func (s *Store) ConfigureCompact(ctx context.Context, requested *bool) (bool, er
 	if s.readOnly {
 		return enabled, errors.New("state is read-only")
 	}
-	value = []byte("0")
+	value := []byte("0")
 	if *requested {
 		value = []byte("1")
 	}
-	_, err = s.db.ExecContext(ctx, "INSERT INTO settings(key,value) VALUES('inventory.compact',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", value)
-	return *requested, err
+	if _, err = tx.ExecContext(ctx, "INSERT INTO settings(key,value) VALUES('inventory.compact',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", value); err != nil {
+		return enabled, err
+	}
+	if s.schema >= 14 {
+		if _, err = advanceBackgroundInventoryEpoch(ctx, tx); err != nil {
+			return enabled, err
+		}
+	}
+	if err = ctx.Err(); err != nil {
+		return enabled, err
+	}
+	return *requested, tx.Commit()
 }
 
 func addCompact(total *int64, n int64) error {
@@ -142,7 +152,7 @@ func (s *Store) RetireCompact(ctx context.Context) (bool, error) {
 	return s.retireCompactForRoot(ctx, 0)
 }
 
-func (s *Store) retireCompactForRoot(ctx context.Context, rootID int64) (bool, error) {
+func (s *Store) retireCompactForRoot(ctx context.Context, rootID int64, background ...BackgroundInventoryScope) (bool, error) {
 	if s.readOnly {
 		return false, errors.New("state is read-only")
 	}
@@ -151,6 +161,11 @@ func (s *Store) retireCompactForRoot(ctx context.Context, rootID int64) (bool, e
 		return false, err
 	}
 	defer tx.Rollback()
+	if len(background) > 0 {
+		if err = s.checkBackgroundInventoryScope(ctx, tx, &background[0], rootID); err != nil {
+			return false, err
+		}
+	}
 	var root, generation int64
 	var path []byte
 	query := "SELECT root_id,path,generation FROM compact_retirement"

@@ -90,7 +90,18 @@ jobs:
               assert measured['resume_acknowledged'] and measured['worker_graceful_exit_reaped']
               assert measured['physical_read_bytes'] is None and measured['system_wakeups'] is None
               assert measured['hourly_target_accepted'] is False and measured['physical_power_accepted'] is False
-              print(json.dumps({key: measured[key] for key in ('platform', 'profile', 'requested_seconds', 'worker_full_lifetime_usage', 'sampled_peak_database_bytes', 'sampled_peak_wal_bytes', 'command_latencies', 'final_saved_summary')}))
+              kernel_io = measured['worker_kernel_io']
+              assert kernel_io['contract'] == 'linux_proc_io_samples_v1'
+              assert kernel_io['scope'] == 'owned_worker_process_and_waited_children'
+              assert kernel_io['full_lifetime'] is False and kernel_io['atomic_snapshot'] is False
+              if measured['platform'].startswith('linux/'):
+                  assert kernel_io['observed_samples'] >= 2
+                  assert kernel_io['sampled_delta'] is not None
+                  assert kernel_io['gaps'] is False
+              else:
+                  assert kernel_io['status'] == 'unsupported'
+                  assert kernel_io['observed_samples'] == 0 and kernel_io['sampled_delta'] is None
+              print(json.dumps({key: measured[key] for key in ('platform', 'profile', 'requested_seconds', 'worker_full_lifetime_usage', 'worker_kernel_io', 'sampled_peak_database_bytes', 'sampled_peak_wal_bytes', 'command_latencies', 'final_saved_summary')}))
           PY
 
   candidate-package:

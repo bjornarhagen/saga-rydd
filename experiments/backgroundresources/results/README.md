@@ -1,5 +1,7 @@
 # Generated native background-resource observations
 
+The [generated compact background check](compact-macos-arm64-20261009.md) records an independent size oracle above 10,000 identities, resumable maintenance completion and separate finite resource observations. It retains partial earlier windows and unknown cleanup costs; default tuning and representative acceptance remain open.
+
 ## One default-paced macOS hour
 
 On 2026-10-09, the exact e8df4a68005a9a4b5fe5e7161b397b887f1c58b1 source ran for one hour on native macOS/arm64. The fixture used two generated flat roots with 512 deterministic 512-byte files. Production scan defaults were retained except `pause_on_battery = false`. All 388 frozen source fingerprints and both executable hashes matched before publication.

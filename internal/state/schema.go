@@ -4,7 +4,7 @@ package state
 // must never be deleted/recreated as a migration strategy: future action/restore
 // records must stay separate from rebuildable inventory. Saved selections use
 // their own database; this inventory has a durable incarnation identity.
-const schemaVersion = 13
+const schemaVersion = 14
 const applicationID = 0x52594444 // RYDD
 
 const migration1 = `
@@ -64,6 +64,7 @@ var migrations = []struct{ name, sql string }{
 	{"fair-inventory-root-turns", migration11},
 	{"experimental-worker-cpu-feedback", migration12},
 	{"adaptive-historical-metadata-revisits", migration13},
+	{"background-compact-mode", migration14},
 }
 
 const migration12 = `

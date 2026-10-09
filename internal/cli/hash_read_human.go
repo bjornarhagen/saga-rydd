@@ -94,6 +94,8 @@ func printHashStepReport(out io.Writer, report HashStepReport) error {
 	printField(guard, "Requested bytes", result.Usage.RequestedBytes)
 	printField(guard, "Read bytes", result.Usage.ReadBytes)
 	printField(guard, "Observed elapsed", result.Usage.Elapsed.String())
+	printHashReadPacing(guard, result.ReadPacing)
+	printHashPacingZeroProgress(guard, result.Code)
 	fmt.Fprintf(guard, "Read consent ID: %s\nStore: %s\nSelection: %s\nInventory: %s\n", report.ApprovalID, approval.StoreID, approval.SelectionID, approval.InventoryID)
 	printHashBudget(guard, result.Budget)
 	if result.Status == "pending" {

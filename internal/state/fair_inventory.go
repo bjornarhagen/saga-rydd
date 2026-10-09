@@ -89,15 +89,15 @@ func (s *Store) ResolveFairInventoryRoots(ctx context.Context, paths []string) (
 	scope := FairInventoryRoots{store: s, roots: make([]fairInventoryRoot, 0, len(paths))}
 	for _, path := range paths {
 		var root fairInventoryRoot
-		var enabled int64
+		var enabled sql.NullInt64
 		var pathType, enabledType string
-		if err = tx.QueryRowContext(ctx, "SELECT id,path,enabled,typeof(path),typeof(enabled) FROM roots WHERE path=?", []byte(path)).Scan(&root.id, &root.path, &enabled, &pathType, &enabledType); err != nil {
+		if err = tx.QueryRowContext(ctx, "SELECT id,path,CASE WHEN typeof(enabled)='integer' THEN enabled ELSE NULL END,typeof(path),typeof(enabled) FROM roots WHERE path=?", []byte(path)).Scan(&root.id, &root.path, &enabled, &pathType, &enabledType); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				err = ErrFairInventoryInput
 			}
 			return FairInventoryRoots{}, err
 		}
-		if root.id <= 0 || enabled != 1 || pathType != "blob" || enabledType != "integer" || !bytes.Equal(root.path, []byte(path)) {
+		if root.id <= 0 || !enabled.Valid || enabled.Int64 != 1 || pathType != "blob" || enabledType != "integer" || !bytes.Equal(root.path, []byte(path)) {
 			return FairInventoryRoots{}, ErrFairInventoryCorrupt
 		}
 		scope.roots = append(scope.roots, root)
@@ -371,6 +371,11 @@ func (s *Store) ClaimFairInventoryTurn(ctx context.Context, scope FairInventoryR
 			return nil, ErrFairInventoryCorrupt
 		}
 		job.LeaseUntil = time.Unix(0, until)
+		if s.schema >= 14 {
+			if err = inventoryClaim(ctx, tx, job); err != nil {
+				return nil, err
+			}
+		}
 		if s.schema >= 13 {
 			if err = adaptiveClaim(ctx, tx, job); err != nil {
 				return nil, err

@@ -29,7 +29,10 @@ type InventoryRetirementPage struct {
 	More   bool
 }
 
-type inventoryRetirementHooks struct{ beforeCommit func() }
+type inventoryRetirementHooks struct {
+	beforeCommit func()
+	background   *BackgroundInventoryScope
+}
 
 func inventoryRetirementRemaining(ctx context.Context, tx *sql.Tx, rootID int64, remaining *bool) error {
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM subtree_reconcile WHERE root_id=?)
@@ -85,6 +88,10 @@ func inventoryMaintenanceRemaining(ctx context.Context, tx *sql.Tx, rootID int64
 // rechecked in each mutation transaction. Completed current caches and source
 // observations are never treated as stale merely because the worker restarted.
 func (s *Store) RetireInventoryForRoot(ctx context.Context, rootID int64) (InventoryRetirementStep, error) {
+	return s.retireInventoryForRoot(ctx, rootID, nil)
+}
+
+func (s *Store) retireInventoryForRoot(ctx context.Context, rootID int64, background *BackgroundInventoryScope) (InventoryRetirementStep, error) {
 	if ctx == nil || rootID <= 0 {
 		return InventoryRetirementStep{}, ErrInventoryRetirementInput
 	}
@@ -94,7 +101,7 @@ func (s *Store) RetireInventoryForRoot(ctx context.Context, rootID int64) (Inven
 	if s.readOnly {
 		return InventoryRetirementStep{}, errors.New("state is read-only")
 	}
-	eligible, remaining, err := s.inventoryMaintenanceState(ctx, rootID)
+	eligible, remaining, err := s.inventoryMaintenanceState(ctx, rootID, background)
 	if err != nil {
 		return InventoryRetirementStep{}, err
 	}
@@ -102,19 +109,23 @@ func (s *Store) RetireInventoryForRoot(ctx context.Context, rootID int64) (Inven
 	if !eligible || !remaining {
 		return step, ctx.Err()
 	}
-	step.Worked, err = s.retireCompactForRoot(ctx, rootID)
+	var scopes []BackgroundInventoryScope
+	if background != nil {
+		scopes = []BackgroundInventoryScope{*background}
+	}
+	step.Worked, err = s.retireCompactForRoot(ctx, rootID, scopes...)
 	if err == nil && !step.Worked {
 		var subtree InventoryRetirementStep
-		subtree, err = s.RetireSubtreesForRoot(ctx, rootID)
+		subtree, err = s.retireSubtrees(ctx, rootID, inventoryRetirementHooks{background: background})
 		step.Worked = subtree.Worked
 	}
 	if err == nil && !step.Worked {
-		step.Worked, err = s.reduceAllocationsForRoot(ctx, rootID)
+		step.Worked, err = s.reduceAllocationsForRoot(ctx, rootID, scopes...)
 	}
 	if err != nil {
 		return InventoryRetirementStep{}, err
 	}
-	step.Eligible, step.Remaining, err = s.inventoryMaintenanceState(ctx, rootID)
+	step.Eligible, step.Remaining, err = s.inventoryMaintenanceState(ctx, rootID, background)
 	if err != nil {
 		return InventoryRetirementStep{}, err
 	}
@@ -124,12 +135,15 @@ func (s *Store) RetireInventoryForRoot(ctx context.Context, rootID int64) (Inven
 	return step, nil
 }
 
-func (s *Store) inventoryMaintenanceState(ctx context.Context, rootID int64) (bool, bool, error) {
+func (s *Store) inventoryMaintenanceState(ctx context.Context, rootID int64, background *BackgroundInventoryScope) (bool, bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, false, err
 	}
 	defer tx.Rollback()
+	if err = s.checkBackgroundInventoryScope(ctx, tx, background, rootID); err != nil {
+		return false, false, err
+	}
 	var enabled int64
 	var busy, remaining bool
 	if err = tx.QueryRowContext(ctx, `SELECT enabled,EXISTS(SELECT 1 FROM jobs WHERE root_id=roots.id AND kind=?) FROM roots WHERE id=?`, ScanKind, rootID).Scan(&enabled, &busy); err != nil {

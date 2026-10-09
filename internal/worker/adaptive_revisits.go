@@ -17,11 +17,12 @@ type AdaptiveRevisitSnapshot struct {
 }
 
 type adaptiveRevisitPolicy struct {
-	enabled bool
-	scope   state.AdaptiveRevisitScope
-	rootIDs []int64
-	startup int
-	cached  *AdaptiveRevisitSnapshot
+	enabled    bool
+	background state.BackgroundInventoryScope
+	scope      state.AdaptiveRevisitScope
+	rootIDs    []int64
+	startup    int
+	cached     *AdaptiveRevisitSnapshot
 }
 
 // These lexical protections match the scanner's fixed detailed/skip profile.
@@ -92,7 +93,7 @@ func (p *adaptiveRevisitPolicy) initializeNext(ctx context.Context, w *state.Sto
 
 func (p *adaptiveRevisitPolicy) finalize(ctx context.Context, w *state.Store, root int64, now time.Time, fixedInterval time.Duration) error {
 	if !p.enabled {
-		_, err := w.ScheduleInventoryRevisit(ctx, root, now, fixedInterval)
+		_, err := w.ScheduleBackgroundInventoryRevisit(ctx, p.background, root, now, fixedInterval)
 		return err
 	}
 	if _, err := w.FinalizeAdaptiveRevisit(ctx, p.scope, root, now); err != nil {
@@ -112,5 +113,5 @@ func (p *adaptiveRevisitPolicy) pending(ctx context.Context, w *state.Store, due
 	if p.enabled {
 		return w.AdaptiveRevisitPending(ctx, p.scope, due)
 	}
-	return w.InventoryRevisitPending(ctx, due, fixedInterval)
+	return w.BackgroundInventoryRevisitPending(ctx, p.background, due, fixedInterval)
 }

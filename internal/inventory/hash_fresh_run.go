@@ -39,6 +39,10 @@ func freshInventoryFailure(err error) error {
 }
 
 func (s *HashStore) observeFreshRunApproval(ctx context.Context, id string) (SavedFreshJob, error) {
+	return s.observeFreshRunApprovalAt(ctx, id, time.Time{})
+}
+
+func (s *HashStore) observeFreshRunApprovalAt(ctx context.Context, id string, now time.Time) (SavedFreshJob, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return SavedFreshJob{}, err
@@ -51,7 +55,10 @@ func (s *HashStore) observeFreshRunApproval(ctx context.Context, id string) (Sav
 	if job.ReadConsent == nil || job.ReadConsent.ID != id || !equalHashFreshJobRequests(job.Record.Request, s.freshJobRequest.report) || len(job.Progress) != len(job.Work) || job.FreshBudget == nil {
 		return SavedFreshJob{}, ErrHashFreshRunBinding
 	}
-	guardErr := s.observeHashFreshReadConsent(ctx, tx, job.ReadConsent, s.now().UTC())
+	if now.IsZero() {
+		now = s.now().UTC()
+	}
+	guardErr := s.observeHashFreshReadConsent(ctx, tx, job.ReadConsent, now)
 	if guardErr != nil && !errors.Is(guardErr, ErrHashReadExpired) && !errors.Is(guardErr, ErrHashReadRevoked) && !errors.Is(guardErr, ErrHashReadClockRollback) {
 		return SavedFreshJob{}, guardErr
 	}
@@ -66,6 +73,18 @@ func (s *HashStore) observeFreshRunApproval(ctx context.Context, id string) (Sav
 // Reservations are durable before bytes; every result is a sequential
 // observation, never simultaneous equality, execution or cleanup authority.
 func (s *HashStore) runFreshConsented(ctx context.Context, id string, scanner *Scanner, hooks hashFreshRunHooks) (result HashFreshRunResult, retErr error) {
+	reserved := false
+	if hooks.pacing != nil {
+		defer func() {
+			result.ReadPacing = hooks.pacing.observation()
+			if hooks.pacing.refusal != nil && result.Status != "recovery_required" && !errors.Is(retErr, ErrHashRecoveryRequired) {
+				retErr = hooks.pacing.refusal
+				result.Progress.SHA256 = ""
+				result.Status, result.Code = hashReadPacingRefusalState(retErr)
+				result.Progress.Status, result.Progress.Code = result.Status, result.Code
+			}
+		}()
+	}
 	if !ValidHashFreshReadApprovalID(id) {
 		return result, ErrHashFreshReadApprovalMissing
 	}
@@ -86,9 +105,37 @@ func (s *HashStore) runFreshConsented(ctx context.Context, id string, scanner *S
 	if err := s.freshReadStorage(opCtx); err != nil {
 		return result, err
 	}
-	job, err := s.observeFreshRunApproval(opCtx, id)
+	var job SavedFreshJob
+	var err error
+	if hooks.pacing == nil {
+		job, err = s.observeFreshRunApproval(opCtx, id)
+	} else {
+		job, err = s.observeFreshRunApprovalAt(opCtx, id, hashReadPacingClock(hooks.pacing, opCtx, s.now().UTC()))
+	}
 	if job.ID != "" {
 		result = HashFreshRunResult{JobID: job.ID, JobKey: job.Record.JobKey, RequestID: job.Record.Request.RequestID, ChoiceID: job.Record.Request.ChoiceID, ApprovalID: id, FreshBudget: job.FreshBudget}
+	}
+	if hooks.pacing != nil && job.ReadConsent != nil {
+		defer func() {
+			if reserved || !hooks.pacing.maxWall.After(job.ReadConsent.ClockHighWater) || s.poisoned {
+				return
+			}
+			deadline, _ := opCtx.Deadline()
+			latchDeadline := minTime(deadline, time.Now().Add(2*time.Second))
+			var e error
+			if time.Now().Before(latchDeadline) {
+				latchCtx, latchCancel := context.WithDeadline(context.WithoutCancel(opCtx), latchDeadline)
+				_, e = s.observeFreshRunApprovalAt(latchCtx, id, hooks.pacing.maxWall)
+				latchCancel()
+			} else {
+				e = ErrHashRecoveryRequired
+			}
+			if e != nil && !errors.Is(e, ErrHashReadExpired) && !errors.Is(e, ErrHashReadClockRollback) && !errors.Is(e, ErrHashReadRevoked) {
+				s.poisoned = true
+				result.Progress.SHA256 = ""
+				result.Status, result.Code, retErr = "recovery_required", "publication_uncertain", ErrHashRecoveryRequired
+			}
+		}()
 	}
 	if err != nil {
 		result.Status, result.Code = "refused", hashReadErrorCode(err)
@@ -100,7 +147,7 @@ func (s *HashStore) runFreshConsented(ctx context.Context, id string, scanner *S
 			return result, ErrHashRecoveryRequired
 		}
 	}
-	now := s.now().UTC()
+	now := hashReadPacingClock(hooks.pacing, opCtx, s.now().UTC())
 	if !validHashReadClock(now) || now.Before(job.ReadConsent.ClockHighWater) {
 		result.Status, result.Code = "refused", "clock_rollback"
 		return result, ErrHashReadClockRollback
@@ -126,6 +173,9 @@ func (s *HashStore) runFreshConsented(ctx context.Context, id string, scanner *S
 	defer readCancel()
 	readCtx, cancelCause := context.WithCancelCause(readCtx)
 	defer cancelCause(context.Canceled)
+	if hooks.pacing != nil {
+		hooks.pacing.bind(job.ReadConsent.Approval.ExpiresAt, job.ReadConsent.ClockHighWater, "", cancelCause)
+	}
 	// Explicit wall-clock changes can cause expiry during live work. Persist
 	// that observation using only time left in this operation's deadline.
 	defer func() {
@@ -164,7 +214,7 @@ func (s *HashStore) runFreshConsented(ctx context.Context, id string, scanner *S
 		result.Status = "idle"
 		return result, opCtx.Err()
 	}
-	now = s.now().UTC()
+	now = hashReadPacingClock(hooks.pacing, readCtx, s.now().UTC())
 	b := *job.FreshBudget
 	if now.Format(time.DateOnly) > b.Day {
 		b.ReservedBytes, b.RequestedBytes, b.ReadBytes, b.UnknownReservedBytes = 0, 0, 0, 0
@@ -198,6 +248,12 @@ func (s *HashStore) runFreshConsented(ctx context.Context, id string, scanner *S
 	target := item.Target
 	result.Ordinal, result.HistoricalWorkID, result.Role = chosen.id, item.Observation.WorkID, item.Role
 	result.DurableOffset, result.Progress = chosen.offset, hashHistoricalProgress(target, chosen.checkpoint)
+	if hooks.pacing != nil {
+		if err = hooks.pacing.preflight(readCtx, target.File.Size-chosen.offset); err != nil {
+			result.Status, result.Code = "refused", hashReadPacingCode(err)
+			return result, err
+		}
+	}
 	guard, err := s.freshSourceGuard(job)
 	if err != nil {
 		return result, err
@@ -230,7 +286,7 @@ func (s *HashStore) runFreshConsented(ctx context.Context, id string, scanner *S
 	}
 	attempt, err := s.reserveFreshHashAttempt(readCtx, job, chosen, hooks)
 	if err != nil {
-		result.Status, result.Code = "refused", hashReadErrorCode(err)
+		result.Status, result.Code = "refused", hashReadPacingCode(err)
 		if errors.Is(err, ErrHashDeferred) {
 			result.Status, result.Code = "deferred", attempt.guardCode
 		}
@@ -240,11 +296,16 @@ func (s *HashStore) runFreshConsented(ctx context.Context, id string, scanner *S
 		}
 		return result, err
 	}
+	reserved = true
 	result.ReservedBytes = attempt.ReservedBytes
+	if hooks.pacing != nil {
+		hooks.pacing.bind(job.ReadConsent.Approval.ExpiresAt, attempt.clockHighWater, attempt.ReservationDay, cancelCause)
+		hooks.file.pacing = hooks.pacing
+	}
 	if hooks.afterReserve != nil {
 		hooks.afterReserve()
 	}
-	if now = s.now().UTC(); !now.Before(job.ReadConsent.Approval.ExpiresAt) {
+	if now = hashReadPacingClock(hooks.pacing, readCtx, s.now().UTC()); !now.Before(job.ReadConsent.Approval.ExpiresAt) {
 		cancelCause(ErrHashReadExpired)
 	} else if !validHashReadClock(now) || now.Before(attempt.clockHighWater) {
 		cancelCause(ErrHashReadClockRollback)
@@ -287,7 +348,7 @@ func (s *HashStore) runFreshConsented(ctx context.Context, id string, scanner *S
 	if s.life.Err() != nil {
 		opCancel()
 	}
-	if now = s.now().UTC(); !now.Before(job.ReadConsent.Approval.ExpiresAt) {
+	if now = hashReadPacingClock(hooks.pacing, readCtx, s.now().UTC()); !now.Before(job.ReadConsent.Approval.ExpiresAt) {
 		cancelCause(ErrHashReadExpired)
 	} else if !validHashReadClock(now) || now.Before(attempt.clockHighWater) {
 		cancelCause(ErrHashReadClockRollback)
@@ -318,6 +379,9 @@ func (s *HashStore) runFreshConsented(ctx context.Context, id string, scanner *S
 	if closeErr := source.Close(); err == nil && closeErr != nil {
 		err = closeErr
 		next, status, code = chosen.checkpoint, "invalidated", "inventory_unavailable"
+	}
+	if hooks.pacing != nil {
+		_, _, _ = hooks.pacing.observe(readCtx)
 	}
 	if readCtx.Err() != nil {
 		next, status, code = chosen.checkpoint, "pending", ""
@@ -353,6 +417,9 @@ func (s *HashStore) runFreshConsented(ctx context.Context, id string, scanner *S
 		result.Progress = hashHistoricalProgress(target, chosen.checkpoint)
 	}
 	result.Status, result.Code = status, code
+	if err == nil && hooks.pacing != nil && hooks.pacing.yielded && usage.RequestedBytes == 0 && attempt.ReservedBytes > 0 {
+		result.Code = "pacing_window_exhausted"
+	}
 	if status == "complete" {
 		result.Status = "hash_observed"
 	}
@@ -370,8 +437,8 @@ func (s *HashStore) runFreshConsented(ctx context.Context, id string, scanner *S
 		if cause == nil {
 			cause = opCtx.Err()
 		}
-		if errors.Is(cause, ErrHashReadExpired) || errors.Is(cause, ErrHashReadClockRollback) || errors.Is(cause, ErrHashReadRevoked) {
-			result.Status, result.Code = "refused", hashReadErrorCode(cause)
+		if errors.Is(cause, ErrHashReadExpired) || errors.Is(cause, ErrHashReadClockRollback) || errors.Is(cause, ErrHashReadRevoked) || errors.Is(cause, ErrHashReadReservationDay) {
+			result.Status, result.Code = "refused", hashReadPacingCode(cause)
 			result.Progress.Status, result.Progress.Code = result.Status, result.Code
 		}
 		return result, cause
@@ -465,6 +532,11 @@ func (s *HashStore) reserveFreshHashAttempt(ctx context.Context, job SavedFreshJ
 	if hooks.beforeReserveCommit != nil {
 		hooks.beforeReserveCommit()
 	}
+	if hooks.pacing != nil {
+		if e := hooks.pacing.preflight(ctx, job.Record.Request.Targets[w.id-1].Target.File.Size-w.offset); e != nil {
+			return a, e
+		}
+	}
 	current, err := s.readFreshJob(ctx, tx, job.ID)
 	if err != nil {
 		return a, err
@@ -472,7 +544,7 @@ func (s *HashStore) reserveFreshHashAttempt(ctx context.Context, job SavedFreshJ
 	if current.ReadConsent == nil || current.ReadConsent.ID != job.ReadConsent.ID || !equalHashFreshJobRequests(current.Record.Request, s.freshJobRequest.report) {
 		return a, ErrHashFreshRunBinding
 	}
-	now := s.now().UTC()
+	now := hashReadPacingClock(hooks.pacing, ctx, s.now().UTC())
 	guardErr := s.observeHashFreshReadConsent(ctx, tx, current.ReadConsent, now)
 	if guardErr != nil {
 		if errors.Is(guardErr, ErrHashReadExpired) || errors.Is(guardErr, ErrHashReadRevoked) || errors.Is(guardErr, ErrHashReadClockRollback) {
@@ -540,7 +612,11 @@ func (s *HashStore) reserveFreshHashAttempt(ctx context.Context, job SavedFreshJ
 	if _, err = s.readFreshJob(ctx, tx, job.ID); err != nil {
 		return a, err
 	}
-	if err = s.commitFreshProgress(ctx, tx, job, nil, nil, hooks.reserveCommit, "reservation"); err != nil {
+	var admission func() error
+	if hooks.pacing != nil {
+		admission = func() error { return hooks.pacing.preflight(ctx, left) }
+	}
+	if err = s.commitFreshProgress(ctx, tx, job, nil, nil, hooks.reserveCommit, "reservation", admission); err != nil {
 		return a, err
 	}
 	return a, nil
@@ -560,7 +636,7 @@ func (s *HashStore) settleFreshHashAttempt(ctx, readCtx context.Context, cancelC
 	if hooks.beforeSettleCommit != nil {
 		hooks.beforeSettleCommit()
 	}
-	now := s.now().UTC()
+	now := hashReadPacingSettlementTime(hooks.pacing, readCtx, s.now().UTC())
 	if errors.Is(context.Cause(readCtx), ErrHashReadExpired) {
 		now = hashReadMaxTime(now, current.ReadConsent.Approval.ExpiresAt)
 	}

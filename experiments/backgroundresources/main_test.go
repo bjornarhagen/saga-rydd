@@ -253,6 +253,37 @@ func TestBackgroundResourceCompletedCancellationRetainsDirectChildOwnership(t *t
 	}
 }
 
+func TestBackgroundResourceKernelIOBindingPrecedesSoleWait(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	called := false
+	source := &fixtureIOSource{readFn: func(context.Context, <-chan struct{}) (kernelIOCounters, string) { return kernelIOCounters{}, "" }}
+	c, err := startChildWithBinding(ctx, os.Args[0], []string{"-test.run=^TestBackgroundResourceChildHelper$"}, append(os.Environ(), "RYDD_BACKGROUND_CHILD_MODE=success"), t.TempDir(), 128, func(ctx context.Context, c *child) *kernelIOTracker {
+		called = true
+		if c.cmd.Process == nil || c.cmd.ProcessState != nil || childReaped(c.done) {
+			t.Error("Wait/reap preceded binding")
+		}
+		return newKernelIOTracker(source, c.done, c.started, time.Now, "unavailable", "not_sampled")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(c.terminate)
+	if !called || c.kernelIO == nil {
+		t.Fatal("worker binding missing")
+	}
+	if got := c.wait(ctx); got.err != nil {
+		t.Fatal(got.err)
+	}
+	if got := c.kernelIO.sample(ctx); got.Reason != "worker_reaped" || source.reads != 0 {
+		t.Fatal("completed child was opened after binding", got)
+	}
+	c.terminate()
+	if source.closes != 1 {
+		t.Fatal("bound descriptor not closed", source.closes)
+	}
+}
+
 func waitFixtureMarker(t *testing.T, c *child, ready func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
@@ -320,7 +351,7 @@ func TestBackgroundResourceJSONOmitsFixtureAndPrivateEvidence(t *testing.T) {
 	s := stablePausedView()
 	s.Worker.Live.Instance, s.Worker.Live.WaitReason = private, private
 	s.CPUFeedback.Window = &state.CPUWindowRecord{Token: private, Instance: private, JobToken: private}
-	if err := r.sample(s); err != nil {
+	if err := r.sample(context.Background(), s); err != nil {
 		t.Fatal(err)
 	}
 	encoded, err := json.Marshal(r.result)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 )
 
@@ -94,7 +95,7 @@ func scheduleInventoryRevisit(ctx context.Context, tx *sql.Tx, r inventoryRevisi
 	if r.lastListing.Valid && r.lastListing.Int64 > 0 {
 		due = max(due, r.lastListing.Int64+int64(interval))
 	}
-	result, err := tx.ExecContext(ctx, `INSERT INTO jobs(root_id,kind,path,due_at_ns) VALUES(?,?,X'2e',?)
+	result, err := tx.ExecContext(ctx, `INSERT INTO jobs(root_id,kind,path,due_at_ns,inventory_claimed) VALUES(?,?,X'2e',?,0)
  ON CONFLICT(root_id,kind,path) DO NOTHING`, r.id, ScanKind, due)
 	if err != nil {
 		return false, err
@@ -112,7 +113,7 @@ func (s *Store) ScheduleInventoryRevisit(ctx context.Context, rootID int64, now 
 	return s.scheduleInventoryRevisit(ctx, rootID, now, interval, inventoryRevisitHooks{})
 }
 
-func (s *Store) scheduleInventoryRevisit(ctx context.Context, rootID int64, now time.Time, interval time.Duration, hooks inventoryRevisitHooks) (bool, error) {
+func (s *Store) scheduleInventoryRevisit(ctx context.Context, rootID int64, now time.Time, interval time.Duration, hooks inventoryRevisitHooks, background ...BackgroundInventoryScope) (bool, error) {
 	n, err := validateInventoryRevisit(ctx, now, interval)
 	if err != nil {
 		return false, err
@@ -128,11 +129,21 @@ func (s *Store) scheduleInventoryRevisit(ctx context.Context, rootID int64, now 
 		return false, err
 	}
 	defer tx.Rollback()
-	if err = inventoryRevisitMode(ctx, tx); err != nil {
+	if len(background) == 0 {
+		err = inventoryRevisitMode(ctx, tx)
+	} else {
+		err = s.checkBackgroundInventoryScope(ctx, tx, &background[0], rootID)
+	}
+	if err != nil {
 		return false, err
 	}
 	r := inventoryRevisitRoot{id: rootID}
-	if err = tx.QueryRowContext(ctx, "SELECT enabled,last_scan_ns FROM roots WHERE id=?", rootID).Scan(&r.enabled, &r.lastListing); err != nil {
+	if len(background) > 0 {
+		r, err = backgroundRootListing(ctx, tx, rootID)
+	} else {
+		err = tx.QueryRowContext(ctx, "SELECT enabled,last_scan_ns FROM roots WHERE id=?", rootID).Scan(&r.enabled, &r.lastListing)
+	}
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, fmt.Errorf("%w: root is unavailable", ErrInventoryRevisitInput)
 		}
@@ -165,7 +176,7 @@ func (s *Store) SeedInventoryRevisitPage(ctx context.Context, afterRootID int64,
 	return s.seedInventoryRevisitPage(ctx, afterRootID, now, interval, inventoryRevisitHooks{})
 }
 
-func (s *Store) seedInventoryRevisitPage(ctx context.Context, afterRootID int64, now time.Time, interval time.Duration, hooks inventoryRevisitHooks) (InventoryRevisitPage, error) {
+func (s *Store) seedInventoryRevisitPage(ctx context.Context, afterRootID int64, now time.Time, interval time.Duration, hooks inventoryRevisitHooks, background ...BackgroundInventoryScope) (InventoryRevisitPage, error) {
 	n, err := validateInventoryRevisit(ctx, now, interval)
 	if err != nil {
 		return InventoryRevisitPage{}, err
@@ -181,10 +192,32 @@ func (s *Store) seedInventoryRevisitPage(ctx context.Context, afterRootID int64,
 		return InventoryRevisitPage{}, err
 	}
 	defer tx.Rollback()
-	if err = inventoryRevisitMode(ctx, tx); err != nil {
+	if len(background) == 0 {
+		err = inventoryRevisitMode(ctx, tx)
+	} else {
+		err = s.checkBackgroundInventoryScope(ctx, tx, &background[0], 0)
+	}
+	if err != nil {
 		return InventoryRevisitPage{}, err
 	}
-	rows, err := tx.QueryContext(ctx, "SELECT id,enabled,last_scan_ns FROM roots WHERE id>? ORDER BY id LIMIT ?", afterRootID, InventoryRevisitPageSize+1)
+	columns := "id,enabled,last_scan_ns"
+	if len(background) > 0 {
+		columns = "CASE WHEN typeof(id)='integer' THEN id ELSE NULL END,CASE WHEN typeof(enabled)='integer' THEN enabled ELSE NULL END,CASE WHEN typeof(last_scan_ns) IN('null','integer') THEN last_scan_ns ELSE NULL END"
+	}
+	query := "SELECT " + columns + " FROM roots WHERE id>?"
+	args := []any{afterRootID}
+	if len(background) > 0 {
+		ids := background[0].RootIDs()
+		marks := make([]string, len(ids))
+		for i, id := range ids {
+			marks[i] = "?"
+			args = append(args, id)
+		}
+		query += " AND id IN(" + strings.Join(marks, ",") + ")"
+	}
+	query += " ORDER BY id LIMIT ?"
+	args = append(args, InventoryRevisitPageSize+1)
+	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return InventoryRevisitPage{}, err
 	}
@@ -208,6 +241,12 @@ func (s *Store) seedInventoryRevisitPage(ctx context.Context, afterRootID int64,
 		page.Cursor = roots[len(roots)-1].id
 	}
 	for _, r := range roots {
+		if len(background) > 0 {
+			r, err = backgroundRootListing(ctx, tx, r.id)
+			if err != nil {
+				return InventoryRevisitPage{}, err
+			}
+		}
 		if err = ctx.Err(); err != nil {
 			return InventoryRevisitPage{}, err
 		}
@@ -239,6 +278,10 @@ func (s *Store) seedInventoryRevisitPage(ctx context.Context, afterRootID int64,
 // indexed due time; an unexamined/unknown candidate keeps the generic wait
 // classification. It reads saved state only and evaluates no source freshness.
 func (s *Store) InventoryRevisitPending(ctx context.Context, due time.Time, interval time.Duration) (bool, error) {
+	return s.inventoryRevisitPending(ctx, due, interval, nil)
+}
+
+func (s *Store) inventoryRevisitPending(ctx context.Context, due time.Time, interval time.Duration, background *BackgroundInventoryScope) (bool, error) {
 	n, err := validateInventoryRevisit(ctx, due, interval)
 	if err != nil {
 		return false, err
@@ -248,22 +291,37 @@ func (s *Store) InventoryRevisitPending(ctx context.Context, due time.Time, inte
 		return false, err
 	}
 	defer tx.Rollback()
+	if err = s.checkBackgroundInventoryScope(ctx, tx, background, 0); err != nil {
+		return false, err
+	}
 	type candidate struct {
 		root, attempts int64
 		kind           string
 		path, cursor   []byte
-		lastError      string
+		lastError      []byte
+		claimed        int64
+		types          bool
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT root_id,kind,path,cursor,last_error,attempts FROM jobs
- WHERE status='pending' AND due_at_ns=? ORDER BY id LIMIT ?`, n, InventoryRevisitPageSize+1)
+	columns := "root_id,kind,path,cursor,last_error,attempts"
+	if background != nil {
+		columns = "CASE WHEN typeof(root_id)='integer' THEN root_id ELSE NULL END,substr(CAST(kind AS BLOB),1,33),substr(CAST(path AS BLOB),1,4097),substr(cursor,1,1),substr(CAST(last_error AS BLOB),1,2049),CASE WHEN typeof(attempts)='integer' THEN attempts ELSE NULL END,CASE WHEN typeof(inventory_claimed)='integer' THEN inventory_claimed ELSE NULL END,typeof(root_id)='integer' AND typeof(kind)='text' AND typeof(path)='blob' AND typeof(cursor) IN('null','blob') AND typeof(last_error)='text' AND typeof(attempts)='integer'"
+	}
+	rows, err := tx.QueryContext(ctx, "SELECT "+columns+" FROM jobs WHERE status='pending' AND due_at_ns=? ORDER BY id LIMIT ?", n, InventoryRevisitPageSize+1)
 	if err != nil {
 		return false, err
 	}
 	var candidates []candidate
 	for rows.Next() {
 		var c candidate
-		if err = rows.Scan(&c.root, &c.kind, &c.path, &c.cursor, &c.lastError, &c.attempts); err != nil {
+		fields := []any{&c.root, &c.kind, &c.path, &c.cursor, &c.lastError, &c.attempts}
+		if background != nil {
+			fields = append(fields, &c.claimed, &c.types)
+		}
+		if err = rows.Scan(fields...); err != nil {
 			rows.Close()
+			if background != nil && ctx.Err() == nil {
+				return false, errors.Join(ErrBackgroundInventoryCorrupt, err)
+			}
 			return false, err
 		}
 		candidates = append(candidates, c)
@@ -278,18 +336,39 @@ func (s *Store) InventoryRevisitPending(ctx context.Context, due time.Time, inte
 	}
 	matched := false
 	for _, c := range candidates {
+		if background != nil {
+			if !c.types || len(c.path) > 4096 || len(c.lastError) > 2048 || len(c.kind) > 32 || c.root <= 0 || c.attempts < 0 || c.claimed < 0 || c.claimed > 1 {
+				return false, ErrBackgroundInventoryCorrupt
+			}
+			admitted := false
+			for _, root := range background.roots.roots {
+				if root.id == c.root {
+					admitted = true
+					break
+				}
+			}
+			if !admitted {
+				continue
+			}
+		}
 		if c.kind != ScanKind {
 			continue
 		}
 		var enabled int64
 		var listing sql.NullInt64
-		if err = tx.QueryRowContext(ctx, "SELECT enabled,last_scan_ns FROM roots WHERE id=?", c.root).Scan(&enabled, &listing); err != nil {
+		if background != nil {
+			r, e := backgroundRootListing(ctx, tx, c.root)
+			if e != nil {
+				return false, e
+			}
+			enabled, listing = r.enabled, r.lastListing
+		} else if err = tx.QueryRowContext(ctx, "SELECT enabled,last_scan_ns FROM roots WHERE id=?", c.root).Scan(&enabled, &listing); err != nil {
 			return false, err
 		}
 		if enabled == 0 {
 			continue
 		}
-		matched = enabled == 1 && string(c.path) == "." && len(c.cursor) == 0 && c.lastError == "" && c.attempts == 0 && listing.Valid && listing.Int64 > 0 && listing.Int64 <= math.MaxInt64-int64(interval) && listing.Int64+int64(interval) == n
+		matched = (background == nil || c.claimed == 0) && enabled == 1 && string(c.path) == "." && len(c.cursor) == 0 && len(c.lastError) == 0 && c.attempts == 0 && listing.Valid && listing.Int64 > 0 && listing.Int64 <= math.MaxInt64-int64(interval) && listing.Int64+int64(interval) == n
 		break
 	}
 	if err = ctx.Err(); err != nil {

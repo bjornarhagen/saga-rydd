@@ -85,6 +85,7 @@ Commands:
                                                      Record fixed full-file read consent; no content read
   hash --run APPROVAL_ID [--json]                    One guarded hash step (at most 1 MiB; no cleanup)
   hash --revoke APPROVAL_ID [--json]                 Revoke read consent; no source or inventory needed
+  Explicit hash runs use scan.read_bytes_per_second for this step only.
   report --candidates [--include-dismissed] [--min-age-days N] [--cursor TOKEN] [--json]  Node modules review candidates
   report --build-output -d ROOT [--min-age-days N] [--cursor TOKEN] [--json]
                                                      Saved Cargo target layouts; review required
@@ -330,6 +331,9 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 		var missingDocker dockerMetadataError
 		if errors.As(err, &missing) || errors.As(err, &missingHash) || errors.As(err, &missingIgnore) || errors.As(err, &missingExclude) || errors.As(err, &missingDocker) {
 			fmt.Fprintln(errOut, err)
+		} else if errors.Is(err, state.ErrBackgroundInventoryModePending) {
+			fmt.Fprintln(errOut, err)
+			fmt.Fprintln(errOut, "Restore the previous compact_inventory setting and, if needed, the previous roots. Resume that worker configuration until its current pass and saved-data work finish. Then stop the worker before changing the setting again. Saved jobs and history must be preserved.")
 		} else if errors.Is(err, os.ErrNotExist) {
 			fmt.Fprintf(errOut, "Not initialized or unavailable: %v\nUse rydd init --root /path for new configuration, or rydd state init with existing configuration.\n", err)
 		} else {
@@ -468,6 +472,7 @@ func status(ctx context.Context, args []string, paths config.Paths, home string,
 		printWorkerInventoryState(out, connection.Live.InventoryState)
 		printWorkerAdaptiveRevisits(out, connection.Live.AdaptiveRevisits)
 		printWorkerAPIPacing(out, connection.Live.APIPacing)
+		printWorkerInventoryMode(out, connection.Live.InventoryMode)
 		if m := connection.Live.InventoryMetrics; m != nil {
 			fmt.Fprintf(out, "Entry inspections: %d; limit: %d/s; throttling: %t; accumulated throttle wait: %s\n", m.EntryInspections, m.EntryRatePerSecond, m.Throttled, time.Duration(m.ThrottleWaitNS))
 			fmt.Fprintf(out, "Scanner API calls this worker: stat=%d; directory open=%d; directory read=%d; filesystem stat=%d; mount identity=%d; path resolution=%d\n", m.StatCalls, m.DirectoryOpenCalls, m.DirectoryReadCalls, m.FilesystemStatCalls, m.MountIdentityCalls, m.PathResolutionCalls)

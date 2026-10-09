@@ -86,6 +86,7 @@ type fileHashHooks struct {
 	afterRead        func(int)
 	beforeFinalCheck func()
 	readPhaseLimit   time.Duration
+	pacing           *hashReadPacer
 }
 
 // NewFullHashSession freezes one exact saved selection without opening source
@@ -211,6 +212,11 @@ func (s *FullHashSession) step(ctx context.Context, allowance int64, hooks fileH
 			window = min(window, hooks.readPhaseLimit)
 		}
 		readUntil := time.Now().Add(window)
+		if hooks.pacing != nil {
+			if err := hooks.pacing.beginPhase(ctx, window); err != nil {
+				return err
+			}
+		}
 		var buffer [32 * 1024]byte
 		for candidate.offset < opened.Size && usage.RequestedBytes < allowance {
 			if err := ctx.Err(); err != nil {
@@ -220,9 +226,28 @@ func (s *FullHashSession) step(ctx context.Context, allowance int64, hooks fileH
 				return blocked("scanner_closed", "The scanner closed before full-file hashing completed.")
 			}
 			if !time.Now().Before(readUntil) {
+				if hooks.pacing != nil {
+					hooks.pacing.yielded = true
+				}
 				break
 			}
 			want := min(int64(len(buffer)), opened.Size-candidate.offset, allowance-usage.RequestedBytes)
+			if hooks.pacing != nil {
+				var err error
+				want, err = hooks.pacing.request(ctx, want, opened.Size-candidate.offset)
+				if err != nil {
+					return err
+				}
+				if want == 0 {
+					break
+				}
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				if core.scanner.closed.Load() {
+					return blocked("scanner_closed", "The scanner closed during the read pacing wait; no further bytes were requested.")
+				}
+			}
 			usage.RequestedBytes += want
 			n, readErr := unix.Pread(fd, buffer[:int(want)], candidate.offset)
 			if n > 0 {
@@ -239,6 +264,12 @@ func (s *FullHashSession) step(ctx context.Context, allowance int64, hooks fileH
 		}
 		return ctx.Err()
 	}, hooks.beforeFinalCheck)
+	if hooks.pacing != nil {
+		_, _, paceErr := hooks.pacing.observe(ctx)
+		if paceErr != nil {
+			return core.progress(false), usage, paceErr
+		}
+	}
 	if ctx.Err() != nil {
 		return core.progress(false), usage, ctx.Err()
 	}

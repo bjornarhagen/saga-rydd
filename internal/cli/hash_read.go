@@ -59,12 +59,16 @@ func hashReadCommand(ctx context.Context, mode, id string, dayCap, totalCap int6
 	}
 	var proposal inventory.HashProposal
 	var consent inventory.HashReadConsent
+	var snapshot inventory.HashSnapshot
 	if mode == "approve" {
 		proposal, err = reader.Proposal(ctx, id)
 	} else {
 		consent, err = reader.Approval(ctx, id)
 		if err == nil && mode == "run" {
 			proposal, err = reader.Proposal(ctx, consent.Approval.SelectionID)
+			if err == nil {
+				snapshot, err = reader.Snapshot(ctx)
+			}
 		}
 	}
 	closeErr := reader.Close()
@@ -81,7 +85,7 @@ func hashReadCommand(ctx context.Context, mode, id string, dayCap, totalCap int6
 		return nil, err
 	}
 	if mode == "run" {
-		return runConsentedHash(ctx, id, paths, proposal)
+		return runConsentedHash(ctx, id, paths, proposal, originalHashReadMinimum(snapshot.Work))
 	}
 	if mode == "approve" && proposal.SourceLocator == nil {
 		return nil, inventory.ErrHashReadBinding
@@ -117,7 +121,7 @@ func hashReadCommand(ctx context.Context, mode, id string, dayCap, totalCap int6
 	return HashConsentResult{Mode: mode, ReadConsent: consent}, nil
 }
 
-func runConsentedHash(ctx context.Context, id string, paths config.Paths, proposal inventory.HashProposal) (HashStepReport, error) {
+func runConsentedHash(ctx context.Context, id string, paths config.Paths, proposal inventory.HashProposal, minimum int64) (HashStepReport, error) {
 	locator := proposal.SourceLocator
 	if locator == nil || locator.Kind != "manual_inventory_v1" {
 		return HashStepReport{}, inventory.ErrHashReadBinding
@@ -128,6 +132,9 @@ func runConsentedHash(ctx context.Context, id string, paths config.Paths, propos
 	// preflight before its pathname is opened. Both refuse known selected aliases.
 	cfg, err := loadHashRunConfig(ctx, paths, proposal)
 	if err != nil {
+		return HashStepReport{}, err
+	}
+	if err = checkCLIHashReadPacing(ctx, cfg.Scan.ReadBytesPerSecond, minimum); err != nil {
 		return HashStepReport{}, err
 	}
 	if err = checkHashSourceStorage(ctx, derived, proposal); err != nil {
@@ -161,7 +168,7 @@ func runConsentedHash(ctx context.Context, id string, paths config.Paths, propos
 		}
 		return HashStepReport{}, err
 	}
-	result, err := writer.RunConsented(ctx, id, source, scanner)
+	result, err := writer.RunConsentedPaced(ctx, id, source, scanner, cfg.Scan.ReadBytesPerSecond)
 	var consent inventory.HashReadConsent
 	if err == nil {
 		consent, err = writer.Approval(ctx, id)

@@ -52,7 +52,7 @@ func (s *Store) EnqueueJob(ctx context.Context, rootID int64, kind string, path 
 	if rootID <= 0 || !validKind(kind) || len(p) > 4096 || strings.ContainsRune(p, 0) || filepath.IsAbs(p) || p == ".." || strings.HasPrefix(p, ".."+string(filepath.Separator)) {
 		return errors.New("invalid job root, kind or relative path")
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO jobs(root_id,kind,path,due_at_ns) VALUES(?,?,?,?)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO jobs(root_id,kind,path,due_at_ns,inventory_claimed) VALUES(?,?,?,?,0)
  ON CONFLICT(root_id,kind,path) DO NOTHING`, rootID, kind, []byte(p), due.UnixNano())
 	return err
 }
@@ -130,6 +130,11 @@ func (s *Store) ClaimJob(ctx context.Context, kinds []string, now time.Time, lea
 		return nil, err
 	}
 	j.LeaseUntil = time.Unix(0, until)
+	if s.schema >= 14 {
+		if err = inventoryClaim(ctx, tx, j); err != nil {
+			return nil, err
+		}
+	}
 	if s.schema >= 13 {
 		if err = adaptiveClaim(ctx, tx, j); err != nil {
 			return nil, err

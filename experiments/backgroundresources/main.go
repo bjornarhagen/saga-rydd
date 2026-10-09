@@ -86,6 +86,7 @@ type sample struct {
 	Dispatch            state.DispatchBudget `json:"dispatch_budget"`
 	Metadata            state.MetadataBudget `json:"scanner_metadata_budget"`
 	CPU                 cpuEvidence          `json:"saved_cpu_feedback"`
+	KernelIO            *kernelIOSample      `json:"worker_kernel_io,omitempty"`
 }
 
 type result struct {
@@ -123,6 +124,7 @@ type result struct {
 	HourlyTargetAccepted          bool                `json:"hourly_target_accepted"`
 	PhysicalPowerAccepted         bool                `json:"physical_power_accepted"`
 	SampledPeaksAreLowerBounds    bool                `json:"sampled_peaks_are_lower_bounds"`
+	KernelIO                      *kernelIOSummary    `json:"worker_kernel_io,omitempty"`
 }
 
 type statusView struct {
@@ -183,14 +185,23 @@ type childResult struct {
 	err            error
 }
 type child struct {
-	cmd     *exec.Cmd
-	cancel  context.CancelFunc
-	done    chan struct{}
-	started time.Time
-	result  childResult // immutable after done is closed
+	cmd      *exec.Cmd
+	cancel   context.CancelFunc
+	done     chan struct{}
+	started  time.Time
+	result   childResult // immutable after done is closed
+	kernelIO *kernelIOTracker
 }
 
 func startChild(parent context.Context, binary string, args, env []string, directory string, limit int) (*child, error) {
+	return startChildWithBinding(parent, binary, args, env, directory, limit, nil)
+}
+
+func startWorker(parent context.Context, binary string, args, env []string, directory string, limit int) (*child, error) {
+	return startChildWithBinding(parent, binary, args, env, directory, limit, bindKernelIO)
+}
+
+func startChildWithBinding(parent context.Context, binary string, args, env []string, directory string, limit int, bind func(context.Context, *child) *kernelIOTracker) (*child, error) {
 	if parent == nil || parent.Err() != nil {
 		return nil, errChild
 	}
@@ -208,6 +219,11 @@ func startChild(parent context.Context, binary string, args, env []string, direc
 	if err := c.cmd.Start(); err != nil {
 		cancel()
 		return nil, errChild
+	}
+	// Numeric PID lookup happens only while this child is still unreaped.
+	// The retained proc directory prevents later reads from following PID reuse.
+	if bind != nil {
+		c.kernelIO = bind(ctx, c)
 	}
 	go func() {
 		err := c.cmd.Wait()              // exactly one reap
@@ -257,7 +273,13 @@ func (c *child) wait(ctx context.Context) childResult {
 	return c.result
 }
 
-func (c *child) terminate() { c.cancel(); <-c.done }
+func (c *child) terminate() {
+	c.cancel()
+	<-c.done
+	if c.kernelIO != nil {
+		c.kernelIO.close()
+	}
+}
 
 type runner struct {
 	base, stateDir, binary string
@@ -359,7 +381,7 @@ func run(ctx context.Context, o options) (measured result, runErr error) {
 	}
 	workerCtx, workerCancel := context.WithTimeout(ctx, time.Duration(o.seconds+45)*time.Second)
 	defer workerCancel()
-	r.worker, err = startChild(workerCtx, binary, []string{"--data-dir", r.stateDir, "daemon", "--experimental-scan"}, r.env, base, workerOutputLimit)
+	r.worker, err = startWorker(workerCtx, binary, []string{"--data-dir", r.stateDir, "daemon", "--experimental-scan"}, r.env, base, workerOutputLimit)
 	if err != nil {
 		return result{}, err
 	}
@@ -393,7 +415,7 @@ func run(ctx context.Context, o options) (measured result, runErr error) {
 			if err != nil {
 				return result{}, err
 			}
-			if err := r.sample(s); err != nil {
+			if err := r.sample(ctx, s); err != nil {
 				return result{}, err
 			}
 			nextSample = time.Now().Add(sampleInterval)
@@ -424,7 +446,7 @@ func run(ctx context.Context, o options) (measured result, runErr error) {
 	if err != nil || final.Worker.State != "not-running" || final.Worker.Live != nil || final.State.RunningJobs != 0 || final.Metadata.TotalCharges == nil || final.Metadata.TotalCharges.OutstandingReserved != 0 || final.CPUFeedback.Status == "pending" {
 		return result{}, errors.New("stopped worker has unresolved progress/accounting")
 	}
-	if err := r.sample(final); err != nil {
+	if err := r.sample(ctx, final); err != nil {
 		return result{}, err
 	}
 	r.result.Final = final.State
@@ -615,7 +637,7 @@ func (r *runner) pauseCheck(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := r.sample(before); err != nil {
+	if err := r.sample(ctx, before); err != nil {
 		return err
 	}
 	reportData, err := r.command(ctx, "report", "report", "--limit", "10")
@@ -649,7 +671,7 @@ func (r *runner) pauseCheck(ctx context.Context) error {
 	if !pausedStable(before, after) {
 		return errors.New("paused worker changed source progress or charged dispatch")
 	}
-	if err := r.sample(after); err != nil {
+	if err := r.sample(ctx, after); err != nil {
 		return err
 	}
 	r.result.PauseVerified = true
@@ -679,11 +701,15 @@ func pausedStable(a, b statusView) bool {
 	return *a.Worker.Live.InventoryMetrics == *b.Worker.Live.InventoryMetrics
 }
 
-func (r *runner) sample(s statusView) error {
+func (r *runner) sample(ctx context.Context, s statusView) error {
 	if len(r.result.Samples) >= maxSamples {
 		return errors.New("generated fixture sample limit reached")
 	}
 	m := sample{ElapsedNS: time.Since(r.worker.started).Nanoseconds(), Entries: s.State.Entries, PendingJobs: s.State.PendingJobs, RunningJobs: s.State.RunningJobs, CompleteDirectories: s.State.CompleteDirectories, Dispatch: s.Dispatch, Metadata: s.Metadata, CPU: cpuEvidence{Status: s.CPUFeedback.Status, CompletedUnknown: s.CPUFeedback.CompletedUnknownWindows, RecoveredUnknown: s.CPUFeedback.RecoveredUnknownWindows}}
+	if r.worker.kernelIO != nil {
+		m.KernelIO = r.worker.kernelIO.sample(ctx)
+		r.result.KernelIO = r.worker.kernelIO.summary()
+	}
 	if window := s.CPUFeedback.Window; window != nil {
 		m.CPU.CPUTimeNS, m.CPU.ElapsedNS, m.CPU.BackoffNS = window.CPUTimeNS, window.ElapsedNS, window.BackoffNS
 	}

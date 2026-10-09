@@ -37,6 +37,9 @@ func (s *Store) retireSubtrees(ctx context.Context, rootID int64, hooks inventor
 		return InventoryRetirementStep{}, err
 	}
 	defer tx.Rollback()
+	if err = s.checkBackgroundInventoryScope(ctx, tx, hooks.background, rootID); err != nil {
+		return InventoryRetirementStep{}, err
+	}
 	step := InventoryRetirementStep{Eligible: true}
 	if rootID > 0 {
 		var enabled int64

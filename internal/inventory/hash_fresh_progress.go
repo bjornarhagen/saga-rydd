@@ -37,21 +37,22 @@ type SavedFreshHashWork struct {
 }
 
 type HashFreshRunResult struct {
-	JobID            string           `json:"job_id"`
-	JobKey           string           `json:"job_key"`
-	RequestID        string           `json:"request_id"`
-	ChoiceID         string           `json:"choice_id"`
-	ApprovalID       string           `json:"approval_id"`
-	Status           string           `json:"status"`
-	Code             string           `json:"code,omitempty"`
-	Ordinal          int              `json:"ordinal,omitempty"`
-	HistoricalWorkID string           `json:"historical_work_id,omitempty"`
-	Role             string           `json:"role,omitempty"`
-	Progress         FullHashProgress `json:"progress"`
-	DurableOffset    int64            `json:"durable_offset"`
-	ReservedBytes    int64            `json:"reserved_bytes"`
-	Usage            FileReadUsage    `json:"usage"`
-	FreshBudget      *HashBudget      `json:"fresh_budget,omitempty"`
+	ReadPacing       *HashReadPacingObservation `json:"read_pacing,omitempty"`
+	JobID            string                     `json:"job_id"`
+	JobKey           string                     `json:"job_key"`
+	RequestID        string                     `json:"request_id"`
+	ChoiceID         string                     `json:"choice_id"`
+	ApprovalID       string                     `json:"approval_id"`
+	Status           string                     `json:"status"`
+	Code             string                     `json:"code,omitempty"`
+	Ordinal          int                        `json:"ordinal,omitempty"`
+	HistoricalWorkID string                     `json:"historical_work_id,omitempty"`
+	Role             string                     `json:"role,omitempty"`
+	Progress         FullHashProgress           `json:"progress"`
+	DurableOffset    int64                      `json:"durable_offset"`
+	ReservedBytes    int64                      `json:"reserved_bytes"`
+	Usage            FileReadUsage              `json:"usage"`
+	FreshBudget      *HashBudget                `json:"fresh_budget,omitempty"`
 }
 
 type hashFreshRunOpenHooks struct {
@@ -63,6 +64,7 @@ type hashFreshRunOpenHooks struct {
 }
 
 type hashFreshRunHooks struct {
+	pacing                    *hashReadPacer
 	beforeReserveCommit       func()
 	afterReserve              func()
 	beforeSettleCommit        func()
@@ -467,12 +469,17 @@ func (s *HashStore) recoverFreshProgress(ctx context.Context, jobID string, hook
 	return s.commitFreshProgress(ctx, tx, job, hooks.beforeRecoveryCommit, hooks.afterRecoveryCommit, hooks.commit, "recovery")
 }
 
-func (s *HashStore) commitFreshProgress(ctx context.Context, tx *sql.Tx, job SavedFreshJob, before, after func(), commit func(*sql.Tx) error, operation string) error {
+func (s *HashStore) commitFreshProgress(ctx context.Context, tx *sql.Tx, job SavedFreshJob, before, after func(), commit func(*sql.Tx) error, operation string, admission ...func() error) error {
 	if before != nil {
 		before()
 	}
 	if err := s.freshReadStorage(ctx); err != nil {
 		return err
+	}
+	if len(admission) != 0 && admission[0] != nil {
+		if err := admission[0](); err != nil {
+			return err
+		}
 	}
 	var err error
 	if commit != nil {

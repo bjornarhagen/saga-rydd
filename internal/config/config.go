@@ -79,6 +79,7 @@ type Scan struct {
 	MaxScanChunksPerDay    int   `toml:"max_scan_chunks_per_day"`
 	MaxStateBytes          int64 `toml:"max_state_bytes"`
 	AdaptiveRevisits       bool  `toml:"adaptive_revisits"`
+	CompactInventory       bool  `toml:"compact_inventory"`
 }
 
 func Default() Config {
@@ -136,6 +137,9 @@ func (c *Config) Validate(home string) error {
 		}
 	}
 	s := c.Scan
+	if s.CompactInventory && s.AdaptiveRevisits {
+		return errors.New("compact_inventory cannot be combined with adaptive_revisits; compact background inventory uses fixed 24-hour revisits")
+	}
 	if s.MaxStateBytes < MinStateBytes || s.MaxStateBytes > MaxStateBytes {
 		return errors.New("max_state_bytes must be 1048576–1099511627776 (1 MiB–1 TiB)")
 	}
