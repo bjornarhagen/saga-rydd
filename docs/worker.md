@@ -85,6 +85,14 @@ When `scan.pause_on_battery` is true, an otherwise admissible due source turn ca
 
 Post-reservation freshness checks cannot start a probe. A charged abort keeps its reservation and elapsed cadence. Completion wakes the owning loop once to recheck every gate; cached status cannot consume that wake or renew evidence. Setting `pause_on_battery = false` bypasses the observer and its delay. macOS currently uses unsupported/unknown fallback without a provider probe. Power calls are outside scanner API allowances, and this policy does not establish hardware behavior or physical sleep. See [power bounds and status](power.md).
 
+## Configured inventory state admission (P1-08e1/e2)
+
+`scan.max_state_bytes` defaults to 1 GiB, with a supported range of 1 MiB–1 TiB. The experimental worker measures the logical lengths of its configured inventory database and WAL before admitting otherwise eligible source work. It repeats the measurement after committing the dispatch reservation. At or above the threshold, unavailable evidence, cancellation or an expired observation defers source work for five minutes. A refusal after reservation retains the charge and elapsed cadence. Pending cursors and owner history remain intact; eligible saved-only maintenance can continue under the other resource gates.
+
+Each observation uses at most four fixed-name no-follow metadata calls, comparing private regular-file stamps before and after. It reads no file bodies, SQL rows or other stores, and cannot authenticate the open SQLite connection or namespace. Source API allowances exclude these state-file calls. The retry waits on independent wall and elapsed clocks and resets with the process; status shows cached evidence without sampling or renewing it.
+
+The two-second worker deadline is cooperative. A metadata call already entered can delay controls beyond it. This is a source admission threshold, not a hard disk-space ceiling: startup, migration, recovery, already admitted writes, other stores and physical allocation are outside its scope. Maintenance can free reusable SQLite pages without shrinking DB/WAL lengths. A root with unfinished scan jobs cannot necessarily perform maintenance or resume without owner action. No history purge, VACUUM or automatic file removal is included.
+
 ## Next integrations
 
 - **P1-05 implemented:** `--experimental-scan` registers metadata inventory, seeds root jobs and commits bounded batches atomically. Schema v3 adds directory watermarks and skip reasons. See [inventory design](inventory.md). Keep experimental activation explicit until budget enforcement is verified.

@@ -22,37 +22,38 @@ func TestWorkerPeriodicRevisitFindsNewEntryWithoutRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	var passes atomic.Int64
-	var firstGeneration, secondGeneration atomic.Int64
+	var latestGeneration atomic.Int64
 	options := Options{ExperimentalScan: true, Interval: 5 * time.Millisecond, WorkDuration: time.Second, revisitInterval: 350 * time.Millisecond}
 	options.scannerNext = func(ctx context.Context, s *inventory.Scanner, j state.Job, p inventory.APIPermit) (state.ScanBatch, error) {
 		b, err := s.NextPermitted(ctx, j, p)
 		if err == nil && b.Complete {
-			switch passes.Add(1) {
-			case 1:
-				firstGeneration.Store(b.Generation)
-			case 2:
-				secondGeneration.Store(b.Generation)
-			}
+			latestGeneration.Store(b.Generation)
+			passes.Add(1)
 		}
 		return b, err
 	}
 	_, done := start(t, dir, c, options)
-	waitUntil(t, func() bool { return passes.Load() == 1 && control(t, dir, "status").WaitReason == "inventory_revisit" })
+	waitUntil(t, func() bool { return passes.Load() >= 1 && control(t, dir, "status").WaitReason == "inventory_revisit" })
+	// Freeze dispatch before inspecting saved due evidence. A busy race runner
+	// can pass the short revisit deadline after the live status observation.
+	control(t, dir, "pause")
+	waitUntil(t, func() bool { return control(t, dir, "status").ActiveJob == 0 })
+	pausedPasses := passes.Load()
+	pausedGeneration := latestGeneration.Load()
 	r, err := state.OpenReader(context.Background(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer r.Close()
 	due, err := r.NextJobDue(context.Background(), []string{state.ScanKind})
-	if err != nil || !due.After(time.Now()) {
+	if err != nil || due.IsZero() {
 		t.Fatal(due, err)
 	}
-	control(t, dir, "pause")
 	if err := os.WriteFile(filepath.Join(root, "new"), nil, 0600); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(max(time.Until(due), 0) + 20*time.Millisecond)
-	if passes.Load() != 1 || control(t, dir, "status").ActiveJob != 0 {
+	if passes.Load() != pausedPasses || control(t, dir, "status").ActiveJob != 0 {
 		t.Fatal("paused revisit dispatched", passes.Load())
 	}
 	control(t, dir, "resume")
@@ -61,9 +62,9 @@ func TestWorkerPeriodicRevisitFindsNewEntryWithoutRestart(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return passes.Load() >= 2 && summary.Entries == 3 && summary.CompleteDirectories == 1 && summary.PendingJobs == 1 && summary.RunningJobs == 0 && control(t, dir, "status").WaitReason == "inventory_revisit"
+		return passes.Load() > pausedPasses && summary.Entries == 3 && summary.CompleteDirectories == 1 && summary.PendingJobs == 1 && summary.RunningJobs == 0 && control(t, dir, "status").WaitReason == "inventory_revisit"
 	})
-	if firstGeneration.Load() == 0 || firstGeneration.Load() == secondGeneration.Load() {
+	if pausedGeneration == 0 || pausedGeneration == latestGeneration.Load() {
 		t.Fatal("revisit reused listing generation")
 	}
 	control(t, dir, "stop")

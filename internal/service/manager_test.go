@@ -155,6 +155,12 @@ func TestServiceManagerProcessFixture(t *testing.T) {
 	case "sleep":
 		time.Sleep(time.Minute)
 		os.Exit(0)
+	case "ready-wait":
+		if err := os.WriteFile(os.Getenv("RYDD_SERVICE_PROCESS_READY"), []byte("ready"), 0600); err != nil {
+			os.Exit(4)
+		}
+		time.Sleep(5 * time.Second)
+		os.Exit(0)
 	default:
 		os.Exit(3)
 	}

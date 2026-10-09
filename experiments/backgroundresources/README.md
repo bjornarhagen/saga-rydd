@@ -20,7 +20,7 @@ For another supported native target, change both executable suffixes and the bui
 
 `-seconds` accepts 30–3,600, `-roots` accepts 1–32 and `-files-per-root` accepts 1–4,096. The total is at most 32,768 deterministic 512-byte files. Five-second sampling is bounded to 750 records, including transition checks. Each invocation is independent; it cannot resume an earlier fixture.
 
-The harness pauses near the midpoint, waits for active work and accounting to settle, checks a saved report, verifies unchanged paused progress, then resumes. It requests graceful stop and reaps its direct worker child once. Timeout, parent cancellation or output overflow can signal only a live owned process group. An already reaped leader is never signaled by numeric group ID; this is not a guarantee of cleanup for an arbitrary forking executable.
+The harness pauses near the midpoint, waits for active work and accounting to settle, checks a saved report, verifies unchanged paused progress, then resumes. It requests graceful stop and reaps its direct worker child once. Timeout, parent cancellation or output overflow uses Go's guarded direct-child cancellation. Bounded output-pipe waits do not terminate descendants. The supplied Rydd worker creates no helper children; arbitrary forking executables and descendant cleanup are outside this fixture's scope.
 
 Successful JSON contains aggregate observations without fixture paths, source tokens or worker instances. Private command output and generated scopes remain in the temporary directory named on stderr. Any assertion, command, private-log or output failure returns an error rather than a successful partial measurement. Do not add the retained fixture to version control.
 

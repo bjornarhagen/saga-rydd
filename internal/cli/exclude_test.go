@@ -43,7 +43,7 @@ func newExcludeCLIFixture(t *testing.T, withState bool, name string) excludeCLIF
 	f.initial = config.Default()
 	f.initial.Roots = []string{filepath.Join(temp, "offline-one"), filepath.Join(temp, "offline-two")}
 	f.initial.Excludes = []string{filepath.Join(f.initial.Roots[0], "private"), filepath.Join(f.initial.Roots[0], "private-other"), filepath.Join(f.initial.Roots[0], "private"), filepath.Join(f.initial.Roots[1], "old-cache")}
-	f.initial.Scan = config.Scan{WorkSeconds: 3, IntervalSeconds: 7, MetadataPerSecond: 123, MetadataAttemptsPerDay: 20_000_000, ReadBytesPerSecond: 2048, ReadBytesPerDay: 8192, PauseOnBattery: false, MaxScanChunksPerDay: 17}
+	f.initial.Scan = config.Scan{WorkSeconds: 3, IntervalSeconds: 7, MetadataPerSecond: 123, MetadataAttemptsPerDay: 20_000_000, ReadBytesPerSecond: 2048, ReadBytesPerDay: 8192, PauseOnBattery: false, MaxScanChunksPerDay: 17, MaxStateBytes: config.DefaultMaxStateBytes + 8192}
 	if err := config.Create(f.paths.ConfigFile, f.home, f.initial); err != nil {
 		t.Fatal(err)
 	}

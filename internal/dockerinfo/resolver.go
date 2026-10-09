@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -76,23 +75,9 @@ func resolveCommand(parent context.Context, name, binary string, env []string) (
 	cmd := exec.CommandContext(ctx, binary, resolverArgs(name)...)
 	cmd.Env = append([]string(nil), env...)
 	cmd.Stdin = nil
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	// Kill the owned child group as well as the direct child. Wait always reaps
-	// the direct child; WaitDelay bounds inherited output pipes after its exit.
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return os.ErrProcessDone
-		}
-		groupErr := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		childErr := cmd.Process.Kill()
-		if errors.Is(groupErr, syscall.ESRCH) {
-			groupErr = nil
-		}
-		if errors.Is(childErr, os.ErrProcessDone) {
-			childErr = nil
-		}
-		return errors.Join(groupErr, childErr)
-	}
+	// CommandContext uses Process.Kill, which fences cancellation against reap.
+	// Numeric group IDs can be reused before the cancellation watcher joins.
+	// Descendants are outside this direct-child cancellation scope.
 	cmd.WaitDelay = 250 * time.Millisecond
 	stdout := &cappedOutput{limit: MaxResolverStdoutBytes, cancel: cancel}
 	stderr := &cappedOutput{limit: MaxResolverStderrBytes, cancel: cancel}

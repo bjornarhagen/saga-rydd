@@ -46,6 +46,19 @@ func startCancelable(t *testing.T, dir string, c config.Config, options Options,
 	if options.powerCoordinator == nil {
 		options.powerCoordinator = fixturePowerCoordinator(options.wallNow, options.elapsedNow)
 	}
+	if options.inventoryStateObserve == nil && options.wallNow != nil {
+		// Legacy synthetic-clock fixtures still sample the real generated file
+		// lengths. Put their observation timestamps in that fixture's domain.
+		clock := options.wallNow
+		options.inventoryStateObserve = func(ctx context.Context, w *state.Store, limit int64) (state.InventoryStateBudget, error) {
+			started := clock().Round(0).UTC()
+			report, err := w.InventoryStateBudget(ctx, limit)
+			if err == nil {
+				report.SampleStartedAt, report.SampleFinishedAt = started, clock().Round(0).UTC()
+			}
+			return report, err
+		}
+	}
 	if options.cpuObserve == nil {
 		options.cpuObserve = func() (time.Duration, error) { return 0, nil }
 	}

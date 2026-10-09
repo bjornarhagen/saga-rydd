@@ -198,16 +198,9 @@ func startChild(parent context.Context, binary string, args, env []string, direc
 	c := &child{cancel: cancel, done: make(chan struct{})}
 	c.cmd = exec.CommandContext(ctx, binary, args...)
 	c.cmd.Env, c.cmd.Dir = env, directory
-	c.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	c.cmd.Cancel = func() error {
-		// Only exec's live-child cancellation path signals this owned group.
-		// No numeric signal is issued after Wait has reaped its leader.
-		err := syscall.Kill(-c.cmd.Process.Pid, syscall.SIGKILL)
-		if errors.Is(err, syscall.ESRCH) {
-			return os.ErrProcessDone
-		}
-		return err
-	}
+	// Keep CommandContext's Process.Kill cancellation. Cmd.Wait can reap its
+	// child before joining the cancellation watcher, so a raw numeric group
+	// signal here would bypass Process's protections against PID reuse.
 	c.cmd.WaitDelay = time.Second
 	out := &cappedOutput{limit: limit, cancel: cancel}
 	c.cmd.Stdout, c.cmd.Stderr = outputWriter{out, false}, outputWriter{out, true}
@@ -360,7 +353,7 @@ func run(ctx context.Context, o options) (measured result, runErr error) {
 	}
 	r.result = result{Contract: "generated_background_resources_v1", Platform: runtime.GOOS + "/" + runtime.GOARCH, Profile: o.profile, ConfiguredScan: scanSettings(cfg.Scan), ProductionDefaultsExceptPower: o.profile == "defaults_no_power", PowerProbesDisabled: true, RequestedSeconds: o.seconds, Roots: o.roots, Files: o.roots * o.files, SampleIntervalNS: int64(sampleInterval), Latencies: map[string]*latency{}, PhysicalReadMeasurement: "unknown", SystemWakeupMeasurement: "unknown", ObserverOverhead: "parent fixture generation, hashing and status sampling excluded from worker CPU/RSS; CLI process CPU reported separately; probes can perturb worker timing", SampledPeaksAreLowerBounds: true}
 	r.result.WorkerUsageScope = "full child lifetime CPU/RSS includes startup, admitted work, controls and idle; elapsed includes launch and output drain; this is not the saved dispatch-window CPU scope"
-	r.result.CleanupScope = "direct child reaped; cancellation signals its live owned group; detached descendants after leader exit are not authenticated or claimed"
+	r.result.CleanupScope = "direct child killed if needed and reaped; descendants are outside the cleanup scope"
 	if _, err := r.command(ctx, "state-init", "state", "init"); err != nil {
 		return result{}, err
 	}
@@ -730,5 +723,5 @@ func minTime(a, b time.Time) time.Time {
 }
 
 func scanSettings(s config.Scan) map[string]any {
-	return map[string]any{"work_seconds": s.WorkSeconds, "interval_seconds": s.IntervalSeconds, "metadata_per_second": s.MetadataPerSecond, "metadata_attempts_per_day": s.MetadataAttemptsPerDay, "read_bytes_per_second": s.ReadBytesPerSecond, "read_bytes_per_day": s.ReadBytesPerDay, "pause_on_battery": s.PauseOnBattery, "max_scan_chunks_per_day": s.MaxScanChunksPerDay}
+	return map[string]any{"work_seconds": s.WorkSeconds, "interval_seconds": s.IntervalSeconds, "metadata_per_second": s.MetadataPerSecond, "metadata_attempts_per_day": s.MetadataAttemptsPerDay, "read_bytes_per_second": s.ReadBytesPerSecond, "read_bytes_per_day": s.ReadBytesPerDay, "pause_on_battery": s.PauseOnBattery, "max_scan_chunks_per_day": s.MaxScanChunksPerDay, "max_state_bytes": s.MaxStateBytes}
 }

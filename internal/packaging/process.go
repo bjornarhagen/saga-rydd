@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -59,17 +58,9 @@ func runBuild(parent context.Context, executable, directory string, env, args []
 	}
 	cmd := exec.CommandContext(ctx, executable, args...)
 	cmd.Dir, cmd.Env = directory, env
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return nil
-		}
-		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		if errors.Is(err, syscall.ESRCH) {
-			return os.ErrProcessDone
-		}
-		return err
-	}
+	// CommandContext uses Process.Kill, which fences cancellation against reap.
+	// Numeric group IDs can be reused before the cancellation watcher joins.
+	// Descendants are outside this direct-child cancellation scope.
 	cmd.WaitDelay = time.Second
 	stdout := &boundedOutput{limit: outputLimit, cancel: cancel}
 	stderr := &boundedOutput{limit: outputLimit, cancel: cancel}
@@ -77,8 +68,8 @@ func runBuild(parent context.Context, executable, directory string, env, args []
 	err := cmd.Run() // Run waits and reaps after cancellation, including output overflow.
 	// Never signal a numeric group after Run has reaped its leader. WaitDelay
 	// bounds output-pipe waits; a tool leaving those pipes open is refused.
-	// Cancellation handles the trusted live compiler group, not arbitrary
-	// detached descendants or authenticated process-group provenance.
+	// Standard cancellation guards the direct compiler child; compiler
+	// descendants are not terminated or authenticated by this helper.
 	if errors.Is(err, exec.ErrWaitDelay) {
 		return fmt.Errorf("%w: compiler output did not finish", ErrBuild)
 	}

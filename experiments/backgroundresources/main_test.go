@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -111,36 +110,6 @@ func TestBackgroundResourceChildHelper(t *testing.T) {
 			os.Exit(11)
 		}
 		fmt.Print("{\"owned_child_reaped\":true}")
-	case "group-leader":
-		c := exec.Command(os.Args[0], "-test.run=^TestBackgroundResourceChildHelper$")
-		c.Env = append(os.Environ(), "RYDD_BACKGROUND_CHILD_MODE=heartbeat")
-		c.Stdout, c.Stderr = os.Stdout, os.Stderr
-		if err := c.Run(); err != nil {
-			os.Exit(12)
-		}
-	case "heartbeat":
-		group, err := syscall.Getpgid(0)
-		if err != nil {
-			os.Exit(13)
-		}
-		marker, _ := json.Marshal(map[string]int{"pid": os.Getpid(), "parent_pid": os.Getppid(), "group": group})
-		if err := os.WriteFile(os.Getenv("RYDD_BACKGROUND_READY_PATH"), marker, 0600); err != nil {
-			os.Exit(14)
-		}
-		// This descendant is finite even if an assertion fails. Its generated
-		// heartbeat gives evidence of actual work before group cancellation.
-		for n := 0; n < 100; n++ {
-			f, err := os.OpenFile(os.Getenv("RYDD_BACKGROUND_HEARTBEAT_PATH"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
-			if err != nil {
-				os.Exit(15)
-			}
-			_, writeErr := f.Write([]byte("x"))
-			closeErr := f.Close()
-			if writeErr != nil || closeErr != nil {
-				os.Exit(16)
-			}
-			time.Sleep(20 * time.Millisecond)
-		}
 	default:
 		os.Exit(8)
 	}
@@ -186,8 +155,8 @@ func TestBackgroundResourceRealChildRusageAndOutputFailures(t *testing.T) {
 					t.Fatal("overflow did not fail", got.err)
 				}
 			}
-			// Cleanup after reap only cancels the completed context; it must not
-			// issue another numeric process-group signal or call Wait again.
+			// Cleanup after reap only cancels the completed context. The saved
+			// result must remain available without calling Wait again.
 			c.terminate()
 			if second := c.wait(ctx); second.err != got.err {
 				t.Fatal("reaped result changed")
@@ -249,37 +218,38 @@ func TestBackgroundResourceSignalContextReapsItsOwnedChild(t *testing.T) {
 	}
 }
 
-func TestBackgroundResourceCancellationStopsLiveOwnedGroup(t *testing.T) {
+func TestBackgroundResourceCompletedCancellationRetainsDirectChildOwnership(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	dir := t.TempDir()
-	ready, heartbeat := filepath.Join(dir, "ready"), filepath.Join(dir, "heartbeat")
-	c := helper(t, "group-leader", ctx, 256, "RYDD_BACKGROUND_READY_PATH="+ready, "RYDD_BACKGROUND_HEARTBEAT_PATH="+heartbeat)
-	waitFixtureMarker(t, c, func() bool {
+	completed := helper(t, "success", ctx, 128)
+	first := completed.wait(ctx)
+	if first.err != nil || !completed.cmd.ProcessState.Success() {
+		t.Fatal("completed direct child was not reaped", first.err)
+	}
+	reaped := completed.cmd.ProcessState
+	ready := filepath.Join(t.TempDir(), "ready")
+	running := helper(t, "wait", ctx, 128, "RYDD_BACKGROUND_READY_PATH="+ready)
+	waitFixtureMarker(t, running, func() bool {
 		body, err := os.ReadFile(ready)
-		var marker struct {
-			PID    int `json:"pid"`
-			Parent int `json:"parent_pid"`
-			Group  int `json:"group"`
-		}
-		if err != nil || json.Unmarshal(body, &marker) != nil || marker.PID == c.cmd.Process.Pid || marker.Parent != c.cmd.Process.Pid || marker.Group != c.cmd.Process.Pid {
-			return false
-		}
-		work, err := os.ReadFile(heartbeat)
-		return err == nil && len(work) > 0
+		return err == nil && string(body) == "ready"
 	})
-	cancel()
-	if got := c.wait(ctx); got.err == nil || c.cmd.ProcessState.Success() {
-		t.Fatal("canceled live group leader was not reaped", got.err)
+	// Process.Kill checks the completed Process object's state. Do not send a
+	// numeric PID or group signal after reap, even to test that it is absent.
+	if err := completed.cmd.Cancel(); !errors.Is(err, os.ErrProcessDone) {
+		t.Fatal("completed child cancellation bypassed Process state", err)
 	}
-	before, err := os.ReadFile(heartbeat)
-	if err != nil || len(before) == 0 {
-		t.Fatal("generated descendant work missing", err)
+	completed.terminate()
+	if second := completed.wait(ctx); second.err != first.err || second.usage != first.usage || !bytes.Equal(second.stdout, first.stdout) || !bytes.Equal(second.stderr, first.stderr) || completed.cmd.ProcessState != reaped {
+		t.Fatal("completed ownership/result changed after cancellation")
 	}
-	time.Sleep(100 * time.Millisecond)
-	after, err := os.ReadFile(heartbeat)
-	if err != nil || !bytes.Equal(before, after) {
-		t.Fatal("same-group generated descendant continued after cancellation", err)
+	select {
+	case <-running.done:
+		t.Fatal("cancelling the completed child ended another owned child")
+	default:
+	}
+	running.terminate()
+	if got := running.wait(ctx); got.err == nil || running.cmd.ProcessState == nil {
+		t.Fatal("running direct child was not canceled and reaped", got.err)
 	}
 }
 

@@ -4,13 +4,22 @@ package service
 
 import (
 	"context"
-	"errors"
-	"os"
 	"os/exec"
 	"time"
-
-	"golang.org/x/sys/unix"
 )
+
+// Keep CommandContext's Process.Kill cancellation. Cmd.Wait can reap its child
+// before joining the cancellation watcher; raw PID/group signals would bypass
+// Process's protection against PID reuse. Cancellation covers the direct client
+// only. WaitDelay bounds inherited output-pipe waits, not descendant lifetimes.
+func serviceClientCommand(ctx context.Context, program string, args, env []string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, program, args...)
+	if env != nil {
+		cmd.Env = env
+	}
+	cmd.WaitDelay = 100 * time.Millisecond
+	return cmd
+}
 
 // Keep process-start evidence on failures. Killing this client cannot recall a
 // manager request it may already have sent. Neither stdout nor stderr from a
@@ -25,22 +34,7 @@ func runRuntimeProcessWithEnv(ctx context.Context, program string, args, env []s
 	}
 	childCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	cmd := exec.CommandContext(childCtx, program, args...)
-	if env != nil {
-		cmd.Env = env
-	}
-	cmd.SysProcAttr = &unix.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return os.ErrProcessDone
-		}
-		err := unix.Kill(-cmd.Process.Pid, unix.SIGKILL)
-		if errors.Is(err, unix.ESRCH) {
-			return os.ErrProcessDone
-		}
-		return err
-	}
-	cmd.WaitDelay = 100 * time.Millisecond
+	cmd := serviceClientCommand(childCtx, program, args, env)
 	stdout := &managerOutput{limit: 64 << 10, cancel: cancel}
 	stderr := &managerOutput{limit: 16 << 10, cancel: cancel}
 	cmd.Stdout = stdout

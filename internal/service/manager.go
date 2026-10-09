@@ -124,22 +124,7 @@ func runManagerGetterProcess(ctx context.Context, executable string, args, env [
 	}
 	childCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	cmd := exec.CommandContext(childCtx, executable, args...)
-	if env != nil {
-		cmd.Env = env
-	}
-	cmd.SysProcAttr = &unix.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return os.ErrProcessDone
-		}
-		err := unix.Kill(-cmd.Process.Pid, unix.SIGKILL)
-		if errors.Is(err, unix.ESRCH) {
-			return os.ErrProcessDone
-		}
-		return err
-	}
-	cmd.WaitDelay = 100 * time.Millisecond
+	cmd := serviceClientCommand(childCtx, executable, args, env)
 	stdout := &managerOutput{limit: 64 << 10, cancel: cancel}
 	stderr := &managerOutput{limit: 16 << 10, cancel: cancel}
 	cmd.Stdout = stdout

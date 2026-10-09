@@ -36,6 +36,8 @@ Commands:
                                                      Publish or inspect the exact idle descriptor
   service start/stop --executable ABSOLUTE_PATH [--directory ABSOLUTE_PATH] [--json]
                                                      Request idle-service start or stop; runtime unknown
+  service runtime-status --executable ABSOLUTE_PATH [--directory ABSOLUTE_PATH] [--json]
+                                                     Observe loaded Linux manager state; readiness unknown
   service uninstall --executable ABSOLUTE_PATH [--directory ABSOLUTE_PATH] [--json]
                                                      Remove the exact descriptor; does not stop a service
   service enable-login/disable-login --executable ABSOLUTE_PATH [--directory ABSOLUTE_PATH] [--json]
@@ -463,6 +465,7 @@ func status(ctx context.Context, args []string, paths config.Paths, home string,
 		printWorkerCPU(out, connection.Live.CPU)
 		printWorkerPriority(out, connection.Live.Priority)
 		printWorkerPower(out, connection.Live.Power)
+		printWorkerInventoryState(out, connection.Live.InventoryState)
 		if m := connection.Live.InventoryMetrics; m != nil {
 			fmt.Fprintf(out, "Entry inspections: %d; limit: %d/s; throttling: %t; accumulated throttle wait: %s\n", m.EntryInspections, m.EntryRatePerSecond, m.Throttled, time.Duration(m.ThrottleWaitNS))
 			fmt.Fprintf(out, "Scanner API calls this worker: stat=%d; directory open=%d; directory read=%d; filesystem stat=%d; mount identity=%d; path resolution=%d\n", m.StatCalls, m.DirectoryOpenCalls, m.DirectoryReadCalls, m.FilesystemStatCalls, m.MountIdentityCalls, m.PathResolutionCalls)

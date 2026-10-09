@@ -9,7 +9,6 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -86,13 +85,13 @@ func TestDockerResolverStrictOutputAndUnavailable(t *testing.T) {
 	}
 }
 
-func TestDockerResolverOverflowCancellationKillsAndReapsChild(t *testing.T) {
+func TestDockerResolverOverflowCancellationWaitsForDirectChild(t *testing.T) {
 	for _, kind := range []string{"stdout", "stderr", "cancel"} {
 		t.Run(kind, func(t *testing.T) {
 			pidFile := filepath.Join(t.TempDir(), "pid")
 			body := `printf '%s' "$$" > "$GENERATED_PID"` + "\n"
 			if kind == "cancel" {
-				body += "/bin/sleep 30\n"
+				body += "exec /bin/sleep 30\n"
 			} else {
 				// A real endless child exercises overflow cancellation and reaping.
 				body += "while :; do printf '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'"
@@ -111,6 +110,8 @@ func TestDockerResolverOverflowCancellationKillsAndReapsChild(t *testing.T) {
 				result, err = resolveCommand(ctx, "generated", path, []string{"GENERATED_PID=" + pidFile})
 				close(done)
 			}()
+			// Join the exact operation on every assertion path.
+			defer func() { cancel(); <-done }()
 			var pid int
 			until := time.Now().Add(time.Second)
 			for time.Now().Before(until) {
@@ -142,9 +143,6 @@ func TestDockerResolverOverflowCancellationKillsAndReapsChild(t *testing.T) {
 			}
 			if !errors.Is(err, want) || result != (ResolvedContext{}) {
 				t.Fatalf("r=%#v err=%v want=%v", result, err, want)
-			}
-			if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
-				t.Fatalf("direct child was not reaped: pid=%d err=%v", pid, err)
 			}
 		})
 	}

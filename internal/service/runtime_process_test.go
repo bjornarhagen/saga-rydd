@@ -3,14 +3,124 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
+
+func TestServiceClientCompletedCancellationRetainsProcessOwnership(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	completedCtx, completedCancel := context.WithCancel(ctx)
+	defer completedCancel()
+	args := []string{"-test.run=^TestServiceManagerProcessFixture$"}
+	completed := serviceClientCommand(completedCtx, os.Args[0], args, append(os.Environ(), "RYDD_SERVICE_PROCESS_FIXTURE=reply"))
+	var output bytes.Buffer
+	completed.Stdout = &output
+	if err := completed.Run(); err != nil || completed.ProcessState == nil || !completed.ProcessState.Success() || output.Len() == 0 {
+		t.Fatal("generated direct client was not reaped", err)
+	}
+	reaped := completed.ProcessState
+	ready := filepath.Join(t.TempDir(), "ready")
+	runningCtx, runningCancel := context.WithCancel(ctx)
+	running := serviceClientCommand(runningCtx, os.Args[0], args, append(os.Environ(), "RYDD_SERVICE_PROCESS_FIXTURE=ready-wait", "RYDD_SERVICE_PROCESS_READY="+ready))
+	if err := running.Start(); err != nil {
+		runningCancel()
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	var waitErr error
+	go func() { waitErr = running.Wait(); close(done) }()
+	t.Cleanup(func() {
+		runningCancel()
+		<-done
+	})
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		body, err := os.ReadFile(ready)
+		if err == nil && string(body) == "ready" {
+			break
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatal("generated direct client did not reach its running marker")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	// This uses the Process object's terminal state, never a raw numeric PID
+	// or group signal after reap. The other owned client must remain live.
+	if err := completed.Cancel(); !errors.Is(err, os.ErrProcessDone) {
+		t.Fatal("terminal client cancellation bypassed Process state", err)
+	}
+	completedCancel()
+	if completed.ProcessState != reaped || !reaped.Success() {
+		t.Fatal("completed ProcessState changed")
+	}
+	select {
+	case <-done:
+		t.Fatal("completed client cancellation ended another owned client", waitErr)
+	default:
+	}
+	runningCancel()
+	<-done
+	status, ok := running.ProcessState.Sys().(syscall.WaitStatus)
+	if waitErr == nil || !ok || !status.Signaled() || status.Signal() != syscall.SIGKILL {
+		t.Fatal("running direct client was not killed and reaped", waitErr, status)
+	}
+}
+
+func TestServiceGetterAndRuntimeCancellationAfterRunningMarker(t *testing.T) {
+	for _, kind := range []string{"getter", "runtime"} {
+		t.Run(kind, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			ready := filepath.Join(t.TempDir(), "ready")
+			env := append(os.Environ(), "RYDD_SERVICE_PROCESS_FIXTURE=ready-wait", "RYDD_SERVICE_PROCESS_READY="+ready)
+			type outcome struct {
+				reply runtimeReply
+				err   error
+			}
+			done := make(chan struct{})
+			var got outcome
+			go func() {
+				if kind == "runtime" {
+					reply, err := runRuntimeProcessWithEnv(ctx, os.Args[0], []string{"-test.run=^TestServiceManagerProcessFixture$"}, env)
+					got = outcome{reply, err}
+				} else {
+					data, err := runManagerGetterProcess(ctx, os.Args[0], []string{"-test.run=^TestServiceManagerProcessFixture$"}, env)
+					got = outcome{runtimeReply{data: data}, err}
+				}
+				close(done)
+			}()
+			t.Cleanup(func() {
+				cancel()
+				<-done
+			})
+			deadline := time.Now().Add(3 * time.Second)
+			for {
+				body, err := os.ReadFile(ready)
+				if err == nil && string(body) == "ready" {
+					break
+				}
+				if !time.Now().Before(deadline) {
+					t.Fatal("generated selected client did not reach its running marker")
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			canceledAt := time.Now()
+			cancel()
+			<-done
+			if !errors.Is(got.err, context.Canceled) || len(got.reply.data) != 0 || kind == "runtime" && !got.reply.started || time.Since(canceledAt) > time.Second {
+				t.Fatal("canceled direct client lost scope, start evidence or bounded output", got.err, got.reply.started)
+			}
+		})
+	}
+}
 
 func TestServiceRuntimeBoundedProcessStartEvidence(t *testing.T) {
 	for _, mode := range []string{"reply", "overflow", "stderr overflow", "sleep", "invalid-mode"} {

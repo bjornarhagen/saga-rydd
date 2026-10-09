@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -136,17 +135,7 @@ func cargoProducerRun(parent context.Context, tool, cwd string, env []string, ar
 	defer cancel()
 	cmd := exec.CommandContext(ctx, tool, args...)
 	cmd.Dir, cmd.Env = cwd, env
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return os.ErrProcessDone
-		}
-		err := unix.Kill(-cmd.Process.Pid, unix.SIGKILL)
-		if errors.Is(err, unix.ESRCH) {
-			return os.ErrProcessDone
-		}
-		return err
-	}
+	// Use guarded direct-child cancellation; compiler descendants are outside scope.
 	cmd.WaitDelay = 2 * time.Second
 	output := &cargoProducerOutput{limit: 64 << 10, cancel: cancel}
 	cmd.Stdout, cmd.Stderr = output, output

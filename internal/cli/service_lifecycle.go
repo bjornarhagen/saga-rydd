@@ -54,8 +54,8 @@ func serviceInstallSpec(paths config.Paths, executable, directory string, host s
 }
 
 func serviceLifecycleArguments(args []string) (action, executable, directory string, err error) {
-	if len(args) == 0 || (args[0] != "install" && args[0] != "status" && args[0] != "start" && args[0] != "stop" && args[0] != "uninstall" && args[0] != "enable-login" && args[0] != "disable-login") {
-		return "", "", "", usageError{errors.New("use service preview, install, status, start, stop, uninstall, enable-login or disable-login with --executable ABSOLUTE_PATH")}
+	if len(args) == 0 || (args[0] != "install" && args[0] != "status" && args[0] != "runtime-status" && args[0] != "start" && args[0] != "stop" && args[0] != "uninstall" && args[0] != "enable-login" && args[0] != "disable-login") {
+		return "", "", "", usageError{errors.New("use service preview, install, status, runtime-status, start, stop, uninstall, enable-login or disable-login with --executable ABSOLUTE_PATH")}
 	}
 	action = args[0]
 	flags := flag.NewFlagSet("service "+action, flag.ContinueOnError)
@@ -96,6 +96,9 @@ func dispatchService(ctx context.Context, args []string, paths config.Paths) (an
 	}
 	host := serviceHost{GOOS: runtime.GOOS, HomeDir: homeDir, XDGConfigHome: os.Getenv("XDG_CONFIG_HOME"), XDGRuntimeDir: os.Getenv("XDG_RUNTIME_DIR"), UID: os.Geteuid()}
 	spec := serviceInstallSpec(paths, executable, directory, host)
+	if action == "runtime-status" {
+		return runServiceRuntimeObservation(ctx, spec)
+	}
 	if action == "start" || action == "stop" {
 		return runServiceRuntime(ctx, action, spec)
 	}
@@ -128,6 +131,9 @@ func printServiceResult(out io.Writer, result any) error {
 	}
 	if request, ok := result.(service.RuntimeResult); ok {
 		return printServiceRuntime(out, request)
+	}
+	if observation, ok := result.(service.RuntimeObservation); ok {
+		return printServiceRuntimeObservation(out, observation)
 	}
 	if removal, ok := result.(service.RemovalResult); ok {
 		return printServiceRemoval(out, removal)
@@ -163,6 +169,9 @@ func printServiceResult(out io.Writer, result any) error {
 }
 
 func serviceReplyMessage(result any) string {
+	if observation, ok := result.(service.RuntimeObservation); ok {
+		return serviceRuntimeObservationReplyMessage(observation)
+	}
 	if r, ok := result.(service.LoginLinkResult); ok {
 		if r.DescriptorPath == "" {
 			return "Selected login link command did not attempt a link change"
@@ -197,6 +206,8 @@ func serviceErrorCode(err error) string {
 	switch {
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return "canceled"
+	case errors.Is(err, service.ErrRuntimeObservationClock):
+		return "service_observation_clock"
 	case errors.Is(err, service.ErrRuntimeOutcome):
 		return "service_outcome_unknown"
 	case errors.Is(err, service.ErrArtifactRemoval):
@@ -246,11 +257,20 @@ func serviceMachineFailure(out, errOut io.Writer, result any, err error) int {
 	if code == "canceled" {
 		message = "Service operation was canceled; inspect the recorded result before retrying"
 	}
+	if _, ok := result.(service.RuntimeObservation); ok {
+		message = "Service runtime observation failed; running, stopped and readiness remain unknown"
+		if code == "canceled" {
+			message = "Service runtime observation was canceled; running, stopped and readiness remain unknown"
+		}
+	}
 	envelope := map[string]any{"api_version": APIVersion, "ok": false, "command": "service", "error": map[string]string{"code": code, "message": message}}
 	if r, ok := result.(service.LifecycleResult); ok && r.DescriptorPath != "" {
 		envelope["service"] = r
 	}
 	if r, ok := result.(service.RuntimeResult); ok && r.DescriptorPath != "" {
+		envelope["service"] = r
+	}
+	if r, ok := result.(service.RuntimeObservation); ok && r.Contract != "" {
 		envelope["service"] = r
 	}
 	if r, ok := result.(service.RemovalResult); ok && r.DescriptorPath != "" {

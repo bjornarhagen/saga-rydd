@@ -76,13 +76,14 @@ type Scan struct {
 	ReadBytesPerDay        int64 `toml:"read_bytes_per_day"`
 	PauseOnBattery         bool  `toml:"pause_on_battery"`
 	MaxScanChunksPerDay    int   `toml:"max_scan_chunks_per_day"`
+	MaxStateBytes          int64 `toml:"max_state_bytes"`
 }
 
 func Default() Config {
 	return Config{Version: Version, Roots: []string{}, Excludes: []string{}, Scan: Scan{
 		WorkSeconds: 30, IntervalSeconds: 300, MetadataPerSecond: 100,
 		MetadataAttemptsPerDay: 20_000_000, ReadBytesPerSecond: 5 << 20,
-		ReadBytesPerDay: 5 << 30, PauseOnBattery: true, MaxScanChunksPerDay: 288,
+		ReadBytesPerDay: 5 << 30, PauseOnBattery: true, MaxScanChunksPerDay: 288, MaxStateBytes: DefaultMaxStateBytes,
 	}}
 }
 
@@ -133,6 +134,9 @@ func (c *Config) Validate(home string) error {
 		}
 	}
 	s := c.Scan
+	if s.MaxStateBytes < MinStateBytes || s.MaxStateBytes > MaxStateBytes {
+		return errors.New("max_state_bytes must be 1048576–1099511627776 (1 MiB–1 TiB)")
+	}
 	if s.MaxScanChunksPerDay < 1 || s.MaxScanChunksPerDay > 100000 {
 		return errors.New("max_scan_chunks_per_day must be 1–100000")
 	}

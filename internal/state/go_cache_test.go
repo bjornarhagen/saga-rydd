@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -563,17 +562,7 @@ func TestGoBuildCacheToolProduced(t *testing.T) {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, tool, "build", "-o", filepath.Join(base, "generated-output"), ".")
 	cmd.Dir = project
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return os.ErrProcessDone
-		}
-		err := unix.Kill(-cmd.Process.Pid, unix.SIGKILL)
-		if errors.Is(err, unix.ESRCH) {
-			return os.ErrProcessDone
-		}
-		return err
-	}
+	// Use guarded direct-child cancellation; compiler descendants are outside scope.
 	cmd.WaitDelay = 2 * time.Second
 	// Explicit tool/cache/module settings exclude persisted GOENV, a cache
 	// helper and network/toolchain downloads. HOME is not repurposed.

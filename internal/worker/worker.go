@@ -21,22 +21,23 @@ import (
 )
 
 type Snapshot struct {
-	PID              int                        `json:"pid"`
-	Instance         string                     `json:"instance"`
-	StartedAt        time.Time                  `json:"started_at"`
-	Paused           bool                       `json:"paused"`
-	Stopping         bool                       `json:"stopping"`
-	ActiveJob        int64                      `json:"active_job,omitempty"`
-	RecoveredJobs    int64                      `json:"recovered_jobs"`
-	Handlers         int                        `json:"handlers"`
-	WaitReason       string                     `json:"wait_reason"`
-	InventoryMetrics *inventory.Metrics         `json:"inventory_metrics,omitempty"`
-	Dispatch         *state.DispatchBudget      `json:"dispatch,omitempty"`
-	CPU              *CPUObservation            `json:"cpu,omitempty"`
-	CPUFeedback      *state.CPUFeedbackState    `json:"cpu_feedback,omitempty"`
-	Power            *PowerPolicySnapshot       `json:"power,omitempty"`
-	Metadata         *state.MetadataBudget      `json:"metadata,omitempty"`
-	Priority         *ThreadPriorityObservation `json:"thread_priority,omitempty"`
+	PID              int                           `json:"pid"`
+	Instance         string                        `json:"instance"`
+	StartedAt        time.Time                     `json:"started_at"`
+	Paused           bool                          `json:"paused"`
+	Stopping         bool                          `json:"stopping"`
+	ActiveJob        int64                         `json:"active_job,omitempty"`
+	RecoveredJobs    int64                         `json:"recovered_jobs"`
+	Handlers         int                           `json:"handlers"`
+	WaitReason       string                        `json:"wait_reason"`
+	InventoryMetrics *inventory.Metrics            `json:"inventory_metrics,omitempty"`
+	Dispatch         *state.DispatchBudget         `json:"dispatch,omitempty"`
+	CPU              *CPUObservation               `json:"cpu,omitempty"`
+	CPUFeedback      *state.CPUFeedbackState       `json:"cpu_feedback,omitempty"`
+	Power            *PowerPolicySnapshot          `json:"power,omitempty"`
+	InventoryState   *InventoryStatePolicySnapshot `json:"inventory_state,omitempty"`
+	Metadata         *state.MetadataBudget         `json:"metadata,omitempty"`
+	Priority         *ThreadPriorityObservation    `json:"thread_priority,omitempty"`
 }
 
 type Result struct {
@@ -63,6 +64,8 @@ type Options struct {
 	cpuObserve func() (time.Duration, error)
 	// Private fixture coordinator; production retains one process-wide slot.
 	powerCoordinator *powerCoordinator
+	// Metadata-only admission fixture seam; production samples the fixed DB/WAL.
+	inventoryStateObserve func(context.Context, *state.Store, int64) (state.InventoryStateBudget, error)
 	// Clock and accounting hooks are private. Production uses the native clocks
 	// and exact writer APIs; fixtures cannot change the recovery-delay policy.
 	wallNow, elapsedNow func() time.Time
@@ -105,6 +108,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 	powerLifetime := newSourcePowerLifetime(ctx, power)
 	defer powerLifetime.cancelCurrent()
 	powerState := sourcePowerState{enabled: options.ExperimentalScan && cfg.Scan.PauseOnBattery}
+	inventoryState := sourceInventoryState{enabled: options.ExperimentalScan, limit: cfg.Scan.MaxStateBytes}
 	observeCPU := options.cpuObserve
 	if observeCPU == nil {
 		observeCPU = processCPUTime
@@ -129,6 +133,9 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 	}
 	if options.ExperimentalScan && (cfg.Scan.MetadataAttemptsPerDay < 1 || cfg.Scan.MetadataAttemptsPerDay > state.MetadataDailyLimit) {
 		return state.ErrMetadataInvalid
+	}
+	if options.ExperimentalScan && (cfg.Scan.MaxStateBytes < state.MinInventoryStateBytes || cfg.Scan.MaxStateBytes > state.MaxInventoryStateBytes) {
+		return state.ErrInventoryStateBudgetInput
 	}
 	if options.ExperimentalScan {
 		if err := state.ValidateFairInventoryPaths(cfg.Roots); err != nil {
@@ -277,6 +284,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 	refreshMetrics := func() {
 		if options.ExperimentalScan {
 			live.Power = powerState.snapshot()
+			live.InventoryState = inventoryState.snapshot()
 		}
 		live.Priority = priorityObservation.Load()
 		observation := cpu.observation
@@ -320,6 +328,16 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 			live.Metadata = &budget
 		}
 		return err
+	}
+	observeInventoryState := func(sampleCtx context.Context, phase string) bool {
+		allowed := inventoryState.observe(sampleCtx, phase, wallNow, elapsedNow, func(sampleCtx context.Context) (state.InventoryStateBudget, error) {
+			if options.inventoryStateObserve == nil {
+				return w.InventoryStateBudget(sampleCtx, cfg.Scan.MaxStateBytes)
+			}
+			return options.inventoryStateObserve(sampleCtx, w, cfg.Scan.MaxStateBytes)
+		})
+		refreshMetrics()
+		return allowed
 	}
 	if err := refreshMetadata(ctx, wallNow()); err != nil {
 		return err
@@ -443,7 +461,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 							neededStartup = startupAllowance
 						}
 						planCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-						plan, err = nextFairInventoryPlan(planCtx, w, fairRoots, genericKinds, now, *live.Metadata, neededStartup, powerState.remaining(now, elapsed) == 0)
+						plan, err = nextFairInventoryPlan(planCtx, w, fairRoots, genericKinds, now, *live.Metadata, neededStartup, powerState.remaining(now, elapsed) == 0 && inventoryState.remaining(now, elapsed) == 0)
 						cancel()
 						due, live.WaitReason = plan.due, plan.waitReason
 						if err == nil {
@@ -483,6 +501,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						wait.wall(due, now, live.WaitReason)
 						if options.ExperimentalScan && !revisitMore && !plan.generic && plan.schedule.Turn == nil && !plan.schedule.NextSourceDue.IsZero() {
 							wait.add(powerState.remaining(now, elapsed), "power_source_backoff")
+							wait.add(inventoryState.remaining(now, elapsed), "inventory_state_source_backoff")
 						}
 						if options.ExperimentalScan && !revisitMore {
 							budget, err := w.DispatchBudget(ctx, now, cfg.Scan.MaxScanChunksPerDay)
@@ -672,8 +691,18 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 					continue
 				}
 				sourceScreened := plan.allowSource && !plan.schedule.NextSourceDue.IsZero() && !plan.schedule.NextSourceDue.After(now)
-				allowSource := sourceScreened
-				if sourceScreened && cfg.Scan.PauseOnBattery {
+				allowSource := sourceScreened && inventoryState.remaining(wallNow(), elapsedNow()) == 0 && powerState.remaining(wallNow(), elapsedNow()) == 0
+				if allowSource {
+					sampleCtx, sampleCancel := context.WithTimeout(ctx, inventoryStateSampleWindow)
+					allowSource = observeInventoryState(sampleCtx, "before_dispatch")
+					sampleCancel()
+					if ctx.Err() != nil {
+						stop()
+						continue
+					}
+				}
+				stateScreened := allowSource
+				if stateScreened && cfg.Scan.PauseOnBattery {
 					decision := power.sourcePolicy(powerLifetime.ctx)
 					powerState.update(decision, wallNow())
 					if decision.Started {
@@ -737,6 +766,16 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						return fmt.Errorf("reserve inventory root turn: %w", reserveErr)
 					}
 					nextAllowed = reservedElapsed.Add(interval)
+					// The receipt stays charged if the second sample refuses.
+					// No source claim or CPU marker exists at this boundary.
+					if stateScreened && plan.allowSource {
+						plan.allowSource = observeInventoryState(turnCtx, "after_receipt")
+						if ctx.Err() != nil {
+							cancel()
+							stop()
+							continue
+						}
+					}
 					// The receipt remains charged if freshness changed. This
 					// recheck cannot launch another callback after reservation.
 					if sourceScreened && cfg.Scan.PauseOnBattery && plan.allowSource {
@@ -750,7 +789,13 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						}
 						plan.allowSource = !decision.SourceBackoff
 					}
-					turn, claimErr := w.ClaimFairInventoryTurn(turnCtx, fairRoots, wallNow(), work+10*time.Second, plan.allowSource, reservedAt)
+					claimWall, claimElapsed := wallNow(), elapsedNow()
+					if !inventoryStateReceiptCurrent(turnCtx, reservedAt, reservedElapsed, claimWall, claimElapsed) {
+						cancel()
+						reschedule = true
+						continue
+					}
+					turn, claimErr := w.ClaimFairInventoryTurn(turnCtx, fairRoots, claimWall, work+10*time.Second, plan.allowSource, reservedAt)
 					if claimErr != nil {
 						cancel()
 						if ctx.Err() != nil {
