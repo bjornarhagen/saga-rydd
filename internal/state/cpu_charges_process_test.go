@@ -16,6 +16,7 @@ import (
 
 	"github.com/bjornarhagen/saga-rydd/internal/config"
 	"github.com/bjornarhagen/saga-rydd/internal/localfs"
+	"github.com/pelletier/go-toml/v2"
 )
 
 // The child uses scripted SELF values to exercise durable accounting loss. It
@@ -153,6 +154,42 @@ func TestCPUChargesActualSIGKILLAndOnceOnlyRecovery(t *testing.T) {
 	}
 }
 
+// Only these version-one fields are shared by the recorded old CLI and the
+// current decoder. Marshaling current defaults would add optional extension
+// fields and let strict TOML decoding refuse before the schema is inspected.
+func cpuOldCLIConfig(t *testing.T, root string) []byte {
+	t.Helper()
+	baseline := struct {
+		Version int      `toml:"version"`
+		Roots   []string `toml:"roots"`
+	}{Version: config.Version, Roots: []string{root}}
+	data, err := toml.Marshal(baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := config.Decode(data, "")
+	if err != nil || decoded.Version != config.Version || len(decoded.Roots) != 1 || decoded.Roots[0] != root || len(decoded.Excludes) != 0 || decoded.Scan.CPUSessionCharges {
+		t.Fatal("baseline old-CLI configuration does not match the generated root and CPU opt-out", err)
+	}
+	return data
+}
+
+func TestCPUChargesOldCLIConfigUsesOnlyBaselineFields(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "generated-quote\"-slash\\-line\nroot")
+	data := cpuOldCLIConfig(t, root)
+	var fields map[string]any
+	if err := toml.Unmarshal(data, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if len(fields) != 2 || fields["version"] != int64(config.Version) {
+		t.Fatal("baseline configuration must contain only version and roots")
+	}
+	roots, ok := fields["roots"].([]any)
+	if !ok || len(roots) != 1 || roots[0] != root {
+		t.Fatal("typed TOML serialization did not preserve the exact generated root")
+	}
+}
+
 // The supplied executable must be built from the recorded pre-extension source.
 // Ordinary checks need no old executable; an explicit native gate supplies it.
 func TestCPUChargesOldCLIRefusesActivatedStore(t *testing.T) {
@@ -171,9 +208,20 @@ func TestCPUChargesOldCLIRefusesActivatedStore(t *testing.T) {
 	if err = os.Mkdir(root, 0700); err != nil {
 		t.Fatal(err)
 	}
-	cfg := config.Default()
-	cfg.Roots = []string{root}
-	if err = config.Create(filepath.Join(dir, "config.toml"), "", cfg); err != nil {
+	data := cpuOldCLIConfig(t, root)
+	f, err := os.OpenFile(filepath.Join(dir, "config.toml"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, writeErr := f.Write(data); writeErr != nil || n != len(data) {
+		_ = f.Close()
+		t.Fatal("incomplete baseline configuration write", writeErr)
+	}
+	if err = f.Sync(); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	if err = f.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err = s.BeginCPUSession(ctx, chargeStart(0, chargeNow(), 100, "a")); err != nil {

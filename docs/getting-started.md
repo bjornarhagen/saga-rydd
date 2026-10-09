@@ -54,6 +54,8 @@ rydd --data-dir /path/to/private/state status --json
 
 `init` records configuration and state; it does not scan and does not overwrite an existing configuration. Configuration validation does not prove that an offline root is available. After an intentional configuration edit, `state init` validates it and synchronizes registered roots while retaining inventory. Stop any writer first.
 
+Updated writers retain up to 128 root records before refusing new paths. Disabled roots count, and selecting an existing root preserves its history. Existing roots remain available in older stores already above that limit. Keep the existing state when capacity is reached; see [root admission and uncertain outcomes](cli.md#retained-inventory-root-admission).
+
 `daemon` stays idle unless started with `--experimental-scan`. Experimental background scanning is explicit on each start and admits at most 32 configured roots. Its resource controls remain under development; start with disposable test folders. Manual scans retain their separate invocation flow.
 
 Run the worker in one terminal:

@@ -100,6 +100,15 @@ func checkSocket(path string) error {
 	return nil
 }
 
+// A context callback can close the transport before failed I/O reports why.
+// Retain only an actually observed context cause, before the native error.
+func controlIOError(ctx context.Context, err error) error {
+	if cause := ctx.Err(); cause != nil {
+		return errors.Join(cause, err)
+	}
+	return err
+}
+
 func Send(ctx context.Context, dir, command string) (Snapshot, error) {
 	var result Snapshot
 	path, err := Endpoint(dir)
@@ -126,6 +135,9 @@ func Send(ctx context.Context, dir, command string) (Snapshot, error) {
 	dialer := net.Dialer{}
 	conn, err := dialer.DialContext(ctx, "unix", path)
 	if err != nil {
+		if ctx.Err() != nil {
+			return result, controlIOError(ctx, err)
+		}
 		if errors.Is(err, unix.ECONNREFUSED) || errors.Is(err, os.ErrNotExist) {
 			return result, ErrNotRunning
 		}
@@ -134,19 +146,19 @@ func Send(ctx context.Context, dir, command string) (Snapshot, error) {
 	defer conn.Close()
 	deadline, _ := ctx.Deadline()
 	if err := conn.SetDeadline(deadline); err != nil {
-		return result, err
+		return result, controlIOError(ctx, err)
 	}
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
 	if err := sameUser(conn.(*net.UnixConn)); err != nil {
-		return result, err
+		return result, controlIOError(ctx, err)
 	}
 	if err := json.NewEncoder(conn).Encode(Request{protocolVersion, command}); err != nil {
-		return result, err
+		return result, controlIOError(ctx, err)
 	}
 	var response Response
 	if err := json.NewDecoder(io.LimitReader(conn, 8192)).Decode(&response); err != nil {
-		return result, fmt.Errorf("control response unavailable (retrying pause/resume/stop is safe): %w", err)
+		return result, fmt.Errorf("control response unavailable (retrying pause/resume/stop is safe): %w", controlIOError(ctx, err))
 	}
 	if response.Version != protocolVersion {
 		return result, errors.New("unsupported worker control protocol")

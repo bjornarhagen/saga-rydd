@@ -234,32 +234,10 @@ func (s *Store) migrate(ctx context.Context) error {
 
 // SyncRoots disables removed roots but retains their inventory. Re-adding a root
 // preserves its ID; availability/physical identity remain the scanner's concern.
+// Updated writers bound retained new-root admission; this is not an older-writer
+// or physical database-size limit. A refused request leaves membership intact.
 func (s *Store) SyncRoots(ctx context.Context, roots []string) error {
-	if s.readOnly {
-		return errors.New("state is read-only")
-	}
-	if len(roots) == 0 {
-		return errors.New("at least one root is required")
-	}
-	for _, root := range roots {
-		if !filepath.IsAbs(root) {
-			return fmt.Errorf("root %q must be absolute", root)
-		}
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, "UPDATE roots SET enabled=0"); err != nil {
-		return err
-	}
-	for _, root := range roots {
-		if _, err := tx.ExecContext(ctx, "INSERT INTO roots(path,enabled) VALUES(?,1) ON CONFLICT(path) DO UPDATE SET enabled=1", []byte(filepath.Clean(root))); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
+	return s.syncRootsAdmitted(ctx, roots, rootAdmissionHooks{})
 }
 
 type Summary struct {

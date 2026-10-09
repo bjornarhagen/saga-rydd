@@ -176,6 +176,7 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 		fmt.Fprintln(errOut, err)
 		return 1
 	}
+	var rootAdmissionDirectory []byte
 	switch remaining[0] {
 	case "service":
 		var serviceResult any
@@ -232,6 +233,7 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 	case "scan":
 		var r ScanReport
 		r, err = scan(ctx, remaining[1:], paths, out)
+		rootAdmissionDirectory = r.DirectoryBytes
 		if err == nil {
 			printScanReport(out, r)
 		}
@@ -360,6 +362,16 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 		return 2
 	}
 	if err != nil {
+		command := remaining[0]
+		if command == "state" && len(remaining) == 2 {
+			command += " " + remaining[1]
+		}
+		if diagnostic, ok := rootAdmissionDiagnostic(command, paths, rootAdmissionDirectory, err); ok {
+			if printRootAdmissionDiagnostic(errOut, diagnostic) != nil {
+				return 1
+			}
+			return diagnostic.exit
+		}
 		var missing missingScanError
 		var missingHash missingHashError
 		var missingIgnore ignoreUnavailableError

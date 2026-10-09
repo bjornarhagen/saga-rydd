@@ -133,6 +133,29 @@ Live `worker.live.inventory_state` uses `worker_inventory_state_admission_v1`. I
 
 The worker samples only otherwise eligible source work, before power sampling and dispatch, and rechecks after a charged receipt before claim. A refusal retains pending work, charge and cadence. Fixed five-minute retry uses independent clocks; cached status starts no metadata call and grants no admission. Eligible database-only maintenance retains the shared resource gates. Calls already entered cannot be forcibly interrupted. Startup/active-write overshoot, other stores, physical allocation, namespace authentication and a hard state-byte ceiling remain outside this contract. See the [worker admission limits](worker.md#configured-inventory-state-admission-p1-08e1e2).
 
+## Retained inventory root admission
+
+Updated `init`, `state init`, manual inventory setup and worker startup use `inventory_root_admission_v1` when synchronizing the enabled roots. A store can admit new paths up to 128 retained root records, including disabled history. Selecting valid existing paths consumes no slot and preserves their IDs, jobs, cursors, observations and due times. Older stores above 128 records can still select existing roots. This does not raise the separate 32-root experimental scanner limit.
+
+Each synchronization accepts 1–128 distinct absolute canonical paths, each at most 4,096 bytes. It checks saved scalar types, path shape, aliases and capacity before changing the enabled set in one transaction. It resolves no source paths and reads no source contents. The operation has a five-second cooperative deadline, shortened by an earlier caller deadline. Returned rows and path bytes are bounded; SQLite engine work and already entered calls can outlast that deadline.
+
+A definite synchronization refusal leaves that transaction's root membership unchanged. Earlier configuration publication, ordinary migration or manual compact setup is outside this transaction. A failed commit or cancellation after commit leaves publication unknown and closes the current writer handle. Its frozen `root-sync-v1-…` request identity describes the exact ordered selection; it is not a commit receipt. Inspect the existing saved enabled roots before deciding on another explicit invocation. No automatic retry, history deletion or repair occurs.
+
+The bound applies to updated writers. Schema 14/15 stays unchanged, and older binaries or external SQL can bypass admission. This is not a hard database row, physical-size or global resource quota. Existing historical readers remain available; schema-15 compatibility still follows the separate CPU activation contract.
+
+Human diagnostics explain which setup work can have completed and give explicit configuration-check and saved-report commands. JSON uses the existing API-1 failure envelope:
+
+| Error code | Meaning |
+| --- | --- |
+| `invalid_arguments` | The raw root selection is invalid; exit 2. |
+| `root_capacity_reached` | The requested new paths do not fit within the retained-record limit; exit 1. |
+| `root_admission_invalid` | Saved root evidence is malformed or ambiguous; exit 1. |
+| `root_admission_unavailable` | The existing state could not complete synchronization; exit 1. |
+| `root_outcome_unknown` | Publication cannot be determined; exit 1. |
+| `canceled` | An observed cancellation/deadline takes priority; exit 1. |
+
+Unknown publication retains `publication_outcome: unknown` and a validated `request_id` when available, including in a canceled reply. Underlying SQL causes and invalid request IDs are not rendered. A failed output does not retry the operation. Capability discovery exposes the fixed limits and their updated-writer scope; hard cardinality, older-writer enforcement, physical-size and latency guarantees remain false.
+
 ## Child-entry pacing
 
 The worker now uses `scan.metadata_per_second` (default 100) to space child-entry inspections. The first inspection can start immediately; subsequent starts are at least `1/rate` apart within the worker instance. Idle time does not accumulate burst credits. Failed child stat attempts also consume an inspection slot. This is an entry-inspection limit, not a limit on every metadata operation: directory traversal, mount checks, path resolution, directory-read buffering and SQLite work remain outside it. Capability discovery therefore reports `entry_rate_limit: true` and `metadata_rate_limit: false`.

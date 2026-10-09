@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -283,10 +284,40 @@ func TestWorkerPeriodicStartupPagesReachRootAfterDisabledHistory(t *testing.T) {
 	for i := range history {
 		history[i] = fmt.Sprintf("/generated/disabled-root-%03d", i)
 	}
-	if err = w.SyncRoots(context.Background(), history); err != nil {
+	if err = w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Model a generated legacy inventory without bypassing the new writer's
+	// admission API. The selected known root remains after 300 disabled rows,
+	// so startup must still advance its raw pagination cursor to reach it.
+	db, err := sql.Open("sqlite", filepath.Join(dir, state.Filename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	defer db.Close()
+	for _, root := range append(history, c.Roots...) {
+		if _, err = tx.Exec("INSERT INTO roots(path,enabled) VALUES(?,0)", []byte(root)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	w, err = state.OpenWriter(context.Background(), dir)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err = w.SyncRoots(context.Background(), c.Roots); err != nil {
+		w.Close()
 		t.Fatal(err)
 	}
 	if err = w.Close(); err != nil {

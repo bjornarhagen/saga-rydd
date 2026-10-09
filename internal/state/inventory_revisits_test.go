@@ -128,7 +128,22 @@ func TestInventoryRevisitRawPageBoundsDisabledBlockedAndAtomicCancel(t *testing.
 	for i := range roots {
 		roots[i] = fmt.Sprintf("/generated/root-%03d", i)
 	}
-	if err := s.SyncRoots(ctx, roots); err != nil {
+	// Explicit generated legacy history: updated SyncRoots now refuses adding
+	// more than 128 retained records, while old stores remain page-readable.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, "UPDATE roots SET enabled=0"); err != nil {
+		t.Fatal(err)
+	}
+	for _, root := range roots {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO roots(path,enabled) VALUES(?,1)", []byte(root)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
 	// Old roots consume the first two slots; every raw slot remains visible

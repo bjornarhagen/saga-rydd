@@ -131,6 +131,12 @@ Each observation uses at most four fixed-name no-follow metadata calls, comparin
 
 The two-second worker deadline is cooperative. A metadata call already entered can delay controls beyond it. This is a source admission threshold, not a hard disk-space ceiling: startup, migration, recovery, already admitted writes, other stores and physical allocation are outside its scope. Maintenance can free reusable SQLite pages without shrinking DB/WAL lengths. A root with unfinished scan jobs cannot necessarily perform maintenance or resume without owner action. No history purge, VACUUM or automatic file removal is included.
 
+## Retained root admission (P1-08g1)
+
+Startup synchronizes its enabled roots before readiness, source construction, power sampling or dispatch. Updated writers admit new paths only within 128 retained root records, including disabled history. Valid existing selections remain available in legacy stores already above the limit, without changing IDs, jobs, cursors, due times or CPU history. Capacity refusal stops startup and preserves the root synchronization transaction; earlier ordinary opening or migration is separate.
+
+One transaction checks bounded inputs, strict saved shape and capacity before writes. A matching enabled set avoids a rewrite. A five-second cooperative deadline can be shortened by the caller. Uncertain publication closes the writer handle and retains a frozen request identity without claiming rollback or success. Schema 14/15 remains unchanged; older binaries and external SQL can bypass this updated-writer boundary. There is no purge or hard physical-space quota. See [the CLI contract](cli.md#retained-inventory-root-admission).
+
 ## Optional scanner API pacing (P1-06b9)
 
 The zero-disabled `scan.api_attempts_per_second` setting adds a worker-lifetime, non-burst clock at the operation-local API permit boundary. Separate wall and elapsed high-waters span construction, Next and root switches. Non-consuming wait/capacity checks preserve wall observations for settlement without inventing admitted usage. Status reads only four cached process-local scalars; no timer or extra goroutine probes idle sources.
