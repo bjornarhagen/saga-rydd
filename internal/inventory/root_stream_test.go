@@ -217,6 +217,8 @@ type rootStreamNativeEvidence struct {
 	PendingNames     int   `json:"pending_names"`
 	OpenDelta        int   `json:"open_fd_delta"`
 	AfterDelta       int   `json:"closed_fd_delta"`
+	RootDirectoryFDs int   `json:"root_directory_fds"`
+	AfterRootFDs     int   `json:"after_root_directory_fds"`
 	PeakRSSBytes     int64 `json:"child_peak_rss_bytes"`
 	RaceInstrumented bool  `json:"race_instrumented"`
 	RSSLimitApplied  bool  `json:"rss_limit_applied"`
@@ -244,6 +246,55 @@ func fixtureOpenFDCount(t *testing.T) int {
 	return count
 }
 
+func fixtureRootDirectoryFDCounts(t *testing.T, roots map[string]int) (int, map[string]int) {
+	t.Helper()
+	total := 0
+	counts := make(map[string]int, len(roots))
+	for fd := 0; fd < 256; fd++ {
+		var st unix.Stat_t
+		if err := unix.Fstat(fd, &st); err != nil {
+			if err != unix.EBADF {
+				t.Fatal(err)
+			}
+			continue
+		}
+		identity := fmt.Sprint(st.Dev, ":", st.Ino)
+		if _, selected := roots[identity]; selected && st.Mode&unix.S_IFMT == unix.S_IFDIR {
+			counts[identity]++
+			total++
+		}
+	}
+	return total, counts
+}
+
+func TestRootDirectoryFDCountExcludesOtherDirectories(t *testing.T) {
+	root, err := os.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	other, err := os.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	var st unix.Stat_t
+	if err := unix.Fstat(int(root.Fd()), &st); err != nil {
+		t.Fatal(err)
+	}
+	identity := fmt.Sprint(st.Dev, ":", st.Ino)
+	roots := map[string]int{identity: 1}
+	if total, counts := fixtureRootDirectoryFDCounts(t, roots); total != 1 || counts[identity] != 1 {
+		t.Fatal("unrelated directory charged to selected root", total, counts)
+	}
+	if err := root.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if total, _ := fixtureRootDirectoryFDCounts(t, roots); total != 0 {
+		t.Fatal("closed selected directory still counted", total)
+	}
+}
+
 func TestRootStreamsNativeChild(t *testing.T) {
 	if os.Getenv("RYDD_TEST_ROOT_STREAM_CHILD") != "1" {
 		t.Skip("disposable child only")
@@ -260,6 +311,20 @@ func TestRootStreamsNativeChild(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+	}
+	roots := make(map[string]int, len(jobs))
+	for _, job := range jobs {
+		var st unix.Stat_t
+		if err := unix.Stat(string(job.RootPath), &st); err != nil {
+			t.Fatal(err)
+		}
+		roots[fmt.Sprint(st.Dev, ":", st.Ino)] = fixtureRetainedDirectoryFDs() / MaxRootStreams
+	}
+	if len(roots) != len(jobs) {
+		t.Fatal("generated roots have repeated identities")
+	}
+	if total, _ := fixtureRootDirectoryFDCounts(t, roots); total != 0 {
+		t.Fatal("generated root descriptor open before scanning", total)
 	}
 	before := fixtureOpenFDCount(t)
 	var fds []int
@@ -284,6 +349,12 @@ func TestRootStreamsNativeChild(t *testing.T) {
 		fds = append(fds, fd)
 	}
 	openDelta := fixtureOpenFDCount(t) - before
+	rootFDs, rootCounts := fixtureRootDirectoryFDCounts(t, roots)
+	for identity, expected := range roots {
+		if rootCounts[identity] != expected {
+			t.Fatal("retained directory descriptor count", rootCounts[identity], expected)
+		}
+	}
 	var usage unix.Rusage
 	if err := unix.Getrusage(unix.RUSAGE_SELF, &usage); err != nil {
 		t.Fatal(err)
@@ -300,10 +371,14 @@ func TestRootStreamsNativeChild(t *testing.T) {
 		}
 	}
 	afterDelta := fixtureOpenFDCount(t) - before
-	if openDelta != fixtureRetainedDirectoryFDs() || afterDelta != 0 || rss <= 0 || (!rootStreamRaceInstrumented && rss >= 100<<20) {
-		t.Fatal("bounded fixture envelope failed", openDelta, afterDelta, rss)
+	afterRootFDs, _ := fixtureRootDirectoryFDCounts(t, roots)
+	// Raw process deltas include unrelated runtime/race descriptors opened after
+	// the baseline. Exact generated directory identities establish ownership,
+	// including Darwin's fdopendir duplicate; keep raw deltas as diagnostics.
+	if rootFDs != fixtureRetainedDirectoryFDs() || afterRootFDs != 0 || rss <= 0 || (!rootStreamRaceInstrumented && rss >= 100<<20) {
+		t.Fatal("bounded fixture envelope failed", rootFDs, afterRootFDs, openDelta, afterDelta, rss)
 	}
-	evidence := rootStreamNativeEvidence{Roots: len(jobs), PendingNames: pending, OpenDelta: openDelta, AfterDelta: afterDelta, PeakRSSBytes: rss, RaceInstrumented: rootStreamRaceInstrumented, RSSLimitApplied: !rootStreamRaceInstrumented}
+	evidence := rootStreamNativeEvidence{Roots: len(jobs), PendingNames: pending, OpenDelta: openDelta, AfterDelta: afterDelta, RootDirectoryFDs: rootFDs, AfterRootFDs: afterRootFDs, PeakRSSBytes: rss, RaceInstrumented: rootStreamRaceInstrumented, RSSLimitApplied: !rootStreamRaceInstrumented}
 	if err := json.NewEncoder(os.Stdout).Encode(evidence); err != nil {
 		t.Fatal(err)
 	}
@@ -319,7 +394,7 @@ func TestRootStreamsNativeDisposableProcess(t *testing.T) {
 		t.Fatal(err, string(output))
 	}
 	var evidence rootStreamNativeEvidence
-	if err = json.NewDecoder(bytes.NewReader(output)).Decode(&evidence); err != nil || evidence.Roots != 32 || evidence.PendingNames != 4096 || evidence.OpenDelta != fixtureRetainedDirectoryFDs() || evidence.AfterDelta != 0 || evidence.PeakRSSBytes <= 0 || evidence.RaceInstrumented != rootStreamRaceInstrumented || evidence.RSSLimitApplied == rootStreamRaceInstrumented {
+	if err = json.NewDecoder(bytes.NewReader(output)).Decode(&evidence); err != nil || evidence.Roots != 32 || evidence.PendingNames != 4096 || evidence.RootDirectoryFDs != fixtureRetainedDirectoryFDs() || evidence.AfterRootFDs != 0 || evidence.PeakRSSBytes <= 0 || evidence.RaceInstrumented != rootStreamRaceInstrumented || evidence.RSSLimitApplied == rootStreamRaceInstrumented {
 		t.Fatal(evidence, err, string(output))
 	}
 	t.Logf("Generated %s child: %+v; finite fixture evidence only", runtime.GOOS, evidence)
