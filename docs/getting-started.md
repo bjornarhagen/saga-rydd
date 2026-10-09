@@ -75,6 +75,16 @@ Pause persists across restart. An acknowledgment can precede the end of an activ
 
 Use the same short absolute `RYDD_RUNTIME_DIR` for the daemon and controls if overriding the default. Keep state on a local filesystem. See [worker ownership and recovery](worker.md#ownership-and-controls).
 
+Optional `scan.cpu_session_charges = true` adds conservative saved CPU charges to this experimental worker. It defaults to false and has no effect on an ordinary idle daemon. Stop the worker before editing configuration. Activation upgrades the private inventory to schema 15, which binaries supporting at most schema 14 refuse. Turning the setting off retains history and debt while disabling this optional gate. Repeated prefixes can overlap; this is not a unique lifetime, hourly, daily or global CPU quota.
+
+To inspect that history without starting or recovering a worker:
+
+```sh
+rydd --data-dir /path/to/private/state status --cpu-charges --json
+```
+
+The command opens only existing saved state. It loads no configuration, samples no current CPU or admission clock and evaluates no current permission. Unknown or uncertain tracking blocks new work for that Run while controls remain available. Preserve the exact error and inspect saved history before an explicit restart. See [CPU session scope and recovery](cli.md#optional-conservative-cpu-session-charges).
+
 Service descriptors are a separate workflow. `service status` inspects the selected artifact; `service runtime-status` makes qualified Linux observations of an existing loaded unit. Artifact presence, a start reply and a declared manager PID do not prove readiness. macOS runtime observation is currently unsupported. Installing a macOS descriptor can affect future logins. See [service commands](cli.md#user-service-descriptor-preview) before taking a lifecycle action.
 
 ## Resolve common waits and failures
@@ -91,6 +101,8 @@ Start with the same data directory, folder and IDs used by the original command.
 | Root is unavailable or changed | Inspect the recorded diagnostic and the intended folder/volume. Saved inventory is historical. Do not substitute another root to continue an exact saved read. |
 | Daily allowance or cadence delays source work | Inspect saved dispatch and metadata accounting. Reservations stay charged after interruption. Wait for the legitimate allowance/due time; restart does not refund it. |
 | CPU recovery or backoff delays work | Inspect saved CPU feedback. Writer recovery retains uncertain charges and a cooldown. Status does not recover work. |
+| Optional CPU session backoff delays work | Inspect `status --cpu-charges` and the live wait reason. Saved deadlines do not calculate current remaining wait. Restart can add a fresh overlapping prefix and retains prior debt. |
+| CPU session accounting is unknown or uncertain | Keep the exact error and saved history. Request stop and wait for exit before resolving the error or explicitly restarting. The current Run will not silently fall back to untracked work. |
 | WAL backpressure delays work | Finish long-lived readers when appropriate. The worker retries under its existing gates. A large reusable WAL is not evidence that history must be deleted. |
 | State threshold delays work | Inspect cached DB/WAL lengths and availability. Pending work remains saved. Restart is not a remedy for the threshold; freed SQLite pages may not shrink file lengths. |
 | Optional API pacing blocks source work | Inspect the rate, work window and blocked reason. Low rates can fail conservative capacity planning; unsupported canonical paths block the current run. Stop before changing configuration. Pending work and charges remain saved. |

@@ -5,6 +5,7 @@ Human-readable output is the default. Add `--json` to finite noninteractive comm
 ```sh
 rydd capabilities --json
 rydd status --json
+rydd status --cpu-charges --json
 rydd pause --json
 rydd resume --json
 rydd stop --json
@@ -57,6 +58,29 @@ Capabilities expose `process_cpu_accounting`, `cooperative_cpu_backoff`, `durabl
 Saved `status.cpu_feedback` and live `worker.live.cpu_feedback` use `worker_cpu_feedback_v1` for `experimental_inventory_dispatch_windows`. Status is `unavailable`, `untracked`, `pending`, `observed`, `completed_unknown` or `recovered_unknown`. The latest nullable `window` preserves its token, worker instance, exact turn/root/dispatch/source-lease evidence, observation times, nullable CPU/elapsed measurements and calculated added wait. A measured zero remains numeric zero. `next_allowed_at` is a saved CPU not-before time; it does not evaluate current permission or include every dispatch gate. `clock_high_water`, tracking provenance, completed/recovered unknown counts and count saturation are separate fields. Before tracking, earlier CPU use is unknown. Human output shows untracked counts as `NOT RECORDED`.
 
 Pending interruption recovery adds a fixed one-hour cooldown once, without presenting it as measured CPU use. Saved views perform no recovery or clock updates; a pending record does not establish an active process. Schema-12 writers initialize the bounded record; older supported readers report it unavailable without migration. Corrupt saved evidence uses `cpu_feedback_invalid`, and unsupported feedback schemas use `cpu_feedback_unavailable`. See [saved CPU feedback and clock limits](worker.md#saved-experimental-turn-cpu-feedback-p1-06b7).
+
+## Optional conservative CPU session charges
+
+`scan.cpu_session_charges` defaults to false. Set it to true in existing configuration while the worker is stopped, then explicitly start `daemon --experimental-scan`. The setting has no effect on an ordinary idle daemon, manual scans or explicit hash commands. It does not start scanning or reload an active worker.
+
+The experimental worker must establish tracking before dispatching work. It saves an initial cumulative process SELF observation, then samples only at otherwise-admissible work, completed settlement and a known-safe joined shutdown. Status and pause/resume do not sample CPU. Saved interruption recovery retains unknown usage and adds a one-hour delay once; a fresh Run observes a new prefix. A failed or uncertain accounting outcome blocks new work for that Run. Controls remain available. Stop, inspect the exact saved evidence and resolve the failure before an explicit restart; no automatic retry creates a new generation.
+
+The optional wait reasons are `cpu_session_startup`, `cpu_session_backoff`, `cpu_session_clock_wait`, `cpu_session_clock_refused`, `cpu_session_outcome_unknown`, `cpu_session_unknown` and `cpu_session_refused`. These use the existing worker field; the full ledger is not added to its control snapshot. Other cadence, dispatch, scanner, CPU-feedback and WAL gates still apply.
+
+Activation adds schema 15 to this private inventory. A binary supporting at most schema 14 refuses it. Setting the option back to false preserves the schema, charges, history and saved debt while leaving this optional gate inactive. It neither refunds charges nor restores compatibility with the older binary.
+
+### Read saved session accounting
+
+```sh
+rydd --data-dir /path/to/private/state status --cpu-charges
+rydd --data-dir /path/to/private/state status --cpu-charges --json
+```
+
+This exclusive mode takes no other command arguments. One existing-only reader and a cooperative five-second deadline cover the query; missing state is not initialized. It loads no configuration, contacts no worker, samples no current CPU or admission clock, activates no ledger and recovers no session. The reader closes before output. Supported pre-activation state returns qualified unavailable accounting without migration.
+
+JSON keeps the standard API 1 envelope and adds `cpu_charges.saved_state` with contract `worker_self_cpu_charges_v1`, scope `one_private_state_store_run_sessions`. It preserves permanent generation, charges, saved clock/deadline, unknown/recovered counts and the latest session. `current_permission_evaluated`, `hourly_limit_enforced`, `daily_limit_enforced` and `physical_power_measured` remain false. Saved deadlines are historical; they do not establish current permission or remaining wait. Stable accounting error codes are `cpu_charges_invalid` and `cpu_charges_unavailable`; cancellation takes precedence. Failed or canceled output produces no second JSON reply and changes no saved record.
+
+Each Run can charge the cumulative SELF prefix again. Prefixes can overlap; SELF includes process threads and excludes children. Pre-first-publication and final publication/exit tails can remain unobserved, including after a graceful finish. These charges are neither unique lifetime CPU nor a complete upper bound, hourly/daily/global quota or cleanup permission. Capabilities expose `saved_cpu_session_charges` and the `cpu_charges_contract` qualifications. The separate `configured_cpu_session_charges` capability discloses the configuration key, default-off experimental scope, schema activation, opt-out history retention and unknown/uncertain refusal. It preserves false lifetime and hour/day quota claims. See [worker session accounting](worker.md#optional-conservative-cpu-sessions-p1-06b13).
 
 ## Cached experimental power policy
 

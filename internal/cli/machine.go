@@ -126,6 +126,12 @@ func operationFailure(out, errOut io.Writer, command string, err error) int {
 		code = "canceled"
 	case command == "status" && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)):
 		code = "canceled"
+	case command == "status" && errors.Is(err, state.ErrCPUChargesCorrupt):
+		code = "cpu_charges_invalid"
+		err = state.ErrCPUChargesCorrupt
+	case command == "status" && errors.Is(err, state.ErrCPUChargesUnavailable):
+		code = "cpu_charges_unavailable"
+		err = state.ErrCPUChargesUnavailable
 	case (errors.Is(err, inventory.ErrHashReadPacingInput) || errors.Is(err, inventory.ErrHashReadPacingCapacity) || errors.Is(err, inventory.ErrHashReadReservationDay)) && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)):
 		code = "canceled"
 	case (errors.Is(err, inventory.ErrHashReadExecutionLimits) || errors.Is(err, inventory.ErrHashStoreReadBudgetRequired) || errors.Is(err, inventory.ErrHashStoreReadBudgetCorrupt)) && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)):
@@ -307,8 +313,18 @@ func runMachine(ctx context.Context, args []string, out, errOut io.Writer) int {
 	if command == "review" {
 		return machineFailure(out, errOut, command, "unsupported_output", "review prompts in text mode; use report --candidates --json, plan or hashes commands for machine output", 2)
 	}
+	cpuChargesMode := false
 	switch command {
-	case "status", "pause", "resume", "stop":
+	case "status":
+		var modeErr error
+		cpuChargesMode, modeErr = cpuChargesStatusMode(a[1:])
+		if modeErr != nil {
+			return invalid(modeErr.Error())
+		}
+		if !cpuChargesMode && len(a) != 1 {
+			return invalid("unexpected arguments")
+		}
+	case "pause", "resume", "stop":
 		if len(a) != 1 {
 			return invalid("unexpected arguments")
 		}
@@ -320,13 +336,22 @@ func runMachine(ctx context.Context, args []string, out, errOut io.Writer) int {
 	default:
 		return invalid("unknown command; use capabilities --json")
 	}
-	paths, err := config.ResolvePaths(*dataDir)
+	var paths config.Paths
+	var err error
+	if cpuChargesMode {
+		paths, err = cpuChargesStatusPaths(*dataDir)
+	} else {
+		paths, err = config.ResolvePaths(*dataDir)
+	}
 	if err != nil {
 		return operationFailure(out, errOut, command, err)
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return operationFailure(out, errOut, command, err)
+	home := ""
+	if !cpuChargesMode {
+		home, err = os.UserHomeDir()
+		if err != nil {
+			return operationFailure(out, errOut, command, err)
+		}
 	}
 	result := map[string]any{"api_version": APIVersion, "ok": true, "command": command}
 	var ignoreResult any
@@ -378,6 +403,10 @@ func runMachine(ctx context.Context, args []string, out, errOut io.Writer) int {
 		reportResult, err = dispatchSavedReport(ctx, a[1:], paths)
 		result["report"] = reportResult
 	case "status":
+		if cpuChargesMode {
+			result["cpu_charges"], err = savedCPUCharges(ctx, paths)
+			break
+		}
 		var data bytes.Buffer
 		err = status(ctx, []string{"--json"}, paths, home, &data, io.Discard)
 		if err == nil {
@@ -407,6 +436,9 @@ func runMachine(ctx context.Context, args []string, out, errOut io.Writer) int {
 		result["state_dir"] = paths.StateDir
 	}
 	if err != nil {
+		if cpuChargesMode {
+			err = cpuChargesStatusError(err)
+		}
 		if command == "plan" {
 			if candidate, ok := result["plan"].(planPublicationCandidate); ok {
 				return planMachineFailure(out, errOut, candidate, err)
@@ -431,7 +463,11 @@ func runMachine(ctx context.Context, args []string, out, errOut io.Writer) int {
 		}
 	}
 	if command == "status" && exitCode == 0 && ctx.Err() != nil {
-		fmt.Fprintf(errOut, "Status reply was canceled; this saved view did not settle or recover CPU windows: %v\n", ctx.Err())
+		if cpuChargesMode {
+			fmt.Fprintf(errOut, "Saved CPU accounting reply was canceled; no saved records or source files were changed: %v\n", ctx.Err())
+		} else {
+			fmt.Fprintf(errOut, "Status reply was canceled; this saved view did not settle or recover CPU windows: %v\n", ctx.Err())
+		}
 		return 1
 	}
 	if command == "service" {
@@ -544,6 +580,8 @@ func capabilities() map[string]any {
 		"power_policy_contract":              map[string]any{"name": worker.PowerPolicyContract, "scope": "due_experimental_source_admission", "process_wide_observation_slots": 1, "observation_deadline_ns": int64(5 * time.Second), "minimum_sample_interval_ns": int64(5 * time.Minute), "persistent": false, "status_starts_probe": false, "external_power_verified": false, "physical_power_verified": false, "scanner_allowances_include_power_calls": false},
 		"inventory_state_admission_contract": map[string]any{"name": worker.InventoryStatePolicyContract, "observation_contract": state.InventoryStateBudgetContract, "scope": "due_experimental_source_admission", "default_limit_bytes": config.DefaultMaxStateBytes, "minimum_limit_bytes": config.MinStateBytes, "maximum_limit_bytes": config.MaxStateBytes, "retry_interval_ns": int64(5 * time.Minute), "persistent_retry": false, "status_samples_files": false, "hard_limit_enforced": false, "physical_allocation_verified": false, "other_stores_included": false, "scanner_allowances_include_state_samples": false, "entered_metadata_calls_interruptible": false},
 		"thread_priority_contract":           map[string]any{"name": worker.ThreadPriorityContract, "scope": "experimental_source_handler_os_thread", "persistent": false, "whole_process_verified": false, "effective_scheduling_verified": false, "physical_io_verified": false, "physical_power_verified": false},
+		"cpu_charges_contract":               map[string]any{"name": state.CPUChargesContract, "scope": state.CPUChargesScope, "saved_status_supported": true, "saved_status_samples_current_cpu": false, "saved_status_samples_admission_clock": false, "saved_status_loads_config": false, "saved_status_contacts_worker": false, "saved_status_activates_or_recovers": false, "prefix_overlap_possible": true, "unique_process_cpu_verified": false, "full_process_lifetime_verified": false, "hourly_limit_enforced": false, "daily_limit_enforced": false, "work_permission_granted": false},
+		"configured_cpu_session_charges":     map[string]any{"configuration": "scan.cpu_session_charges", "enabled_by_default": config.Default().Scan.CPUSessionCharges, "experimental_scan_required": true, "optional": true, "activated_schema_version": 15, "opt_out_retains_saved_history": true, "opt_out_charge_debt_gate_active": false, "unknown_or_uncertain_refuses_new_work": true, "unique_process_cpu_verified": false, "full_process_lifetime_verified": false, "hourly_limit_enforced": false, "daily_limit_enforced": false},
 		"cpu_feedback_contract":              map[string]any{"name": state.CPUFeedbackContract, "scope": "experimental_inventory_dispatch_windows", "target_percent": 1, "backoff_limit_ns": int64(state.CPUFeedbackBackoffLimit), "interrupted_recovery_delay_ns": int64(state.CPUUnknownRecoveryDelay), "manual_scans_included": false, "global_cpu_quota": false, "hourly_limit_enforced": false, "physical_power_measured": false, "pre_marker_setup_crash_coverage": false, "final_feedback_write_measured": false},
 		"scanner_metadata_contract":          map[string]any{"name": state.MetadataBudgetContract, "scope": "experimental_background_scanner_source_apis", "next_reservation_attempts": inventory.MaxAPIAttemptAllowance, "unused_reservations_refunded": false, "manual_scans_included": false, "physical_io_measured": false},
 		"scanner_api_pacing_contract":        map[string]any{"scope": "experimental_background_scanner_source_apis", "default_rate_per_second": 0, "maximum_rate_per_second": 100000, "minimum_next_attempts": int64(32794), "final_validation_attempts": int64(16393), "child_attempts": int64(6), "maximum_path_bytes": 4096, "preflight_work_fraction": 0.5, "manual_scans_included": false, "hash_reads_included": false, "database_work_included": false, "global_rate_limit": false, "physical_io_measured": false, "unused_reservations_refunded": false, "status_inspects_sources": false},
@@ -571,11 +609,11 @@ func capabilities() map[string]any {
 			{"service start/stop", true, "one_explicit_manager_request", []string{"--executable ABSOLUTE_PATH [--directory ABSOLUTE_PATH] (same exact installed spec)", "existing exact descriptor and coordinator required; no installation, enablement, reload or scanner activation", "Linux pinned manager owner and typed loaded settings before mode-fail request; ordinary dependencies can be affected", "macOS fixed current-user managed label; opaque client reply does not prove loaded origin", "accepted request is historical client/job evidence, not running/stopped state; no automatic uncertain retry"}},
 			{"service uninstall", true, "exact_managed_descriptor_removal", []string{"--executable ABSOLUTE_PATH [--directory ABSOLUTE_PATH] (same exact installed spec)", "existing owned directory and stable coordinator required; absent retry does not initialize", "remove only exact descriptor; preserve data, executable, directories and lock", "no stop, disable, reload or manager request; runtime and future-login state remain unknown", "Rydd stop requires the descriptor: request it before removal when wanted; acknowledgment does not prove shutdown"}},
 			{"service enable-login/disable-login", true, "selected_linux_default_target_dependency", []string{"native Linux only; --executable ABSOLUTE_PATH [--directory ABSOLUTE_PATH] (same exact installed spec)", "existing exact descriptor and coordinator plus pinned typed manager binding; preflight LoadUnit/bookkeeping and local broker socket activation can occur", "create or remove only the fixed default.target.wants link to the exact descriptor; matching manually created link is in scope, creator remains unknown", "separate syscall, last checked link and parent sync evidence; global enablement, runtime and future-login behavior remain unknown", "no manager enable/disable/start/stop/reload request; preserve data, executable, descriptor, existing directories, lock and other links; disable before uninstall"}},
-			{"status", true, "read_only", []string{}}, {"pause", true, "writes_state", []string{}}, {"resume", true, "writes_state", []string{}},
+			{"status", true, "read_only", []string{"--cpu-charges (exclusive saved-only CPU history; no config, live worker or recovery)"}}, {"pause", true, "writes_state", []string{}}, {"resume", true, "writes_state", []string{}},
 			{"stop", true, "stops_worker", []string{}}, {"daemon", false, "runs_worker", []string{"--experimental-scan"}}, {"capabilities", true, "read_only", []string{}},
 		},
 		"exit_codes":  map[string]string{"0": "success", "1": "operation_failed", "2": "invalid_usage_or_output"},
-		"error_codes": []string{"hash_execution_limits_invalid", "hash_store_budget_required", "hash_store_budget_invalid", "configured_daily_byte_limit", "hash_read_pacing_invalid", "hash_read_pacing_capacity", "hash_read_reservation_day", "inventory_mode_pending", "inventory_mode_invalid", "api_pacing_invalid", "api_pacing_unsupported", "adaptive_revisit_invalid", "adaptive_revisit_clock", "cpu_feedback_invalid", "cpu_feedback_unavailable", "invalid_arguments", "unsupported_output", "service_observation_clock", "service_runtime_binding", "service_login_link_conflict", "service_login_link_changed", "service_artifact_conflict", "service_artifact_changed", "service_artifact_busy", "service_manager_unavailable", "service_manager_protocol", "service_manager_path", "service_bounds", "service_outcome_unknown", "docker_context_unavailable", "docker_endpoint_unsupported", "docker_metadata_bounds", "docker_protocol_unsupported", "docker_daemon_changed", "exclusion_bounds", "config_changed", "config_outcome_unknown", "worker_not_running", "writer_busy", "not_found", "already_exists", "permission_denied", "canceled", "command_failed", "plan_capacity", "plan_outcome_unknown", "review_evidence_changed", "review_unavailable", "review_invalid", "dismissal_unavailable", "dismissal_evidence_changed", "dismissal_invalid", "dismissal_capacity", "dismissal_outcome_unknown", "observation_conflict", "observation_invalid", "observation_unavailable", "journal_outcome_unknown", "hash_invalid", "hash_preview_unavailable", "hash_preview_identity_ambiguous", "hash_choice_evidence_changed", "hash_choice_invalid", "hash_choice_capacity", "hash_choice_metadata_unavailable", "hash_choice_request_unavailable", "hash_fresh_job_evidence_changed", "hash_fresh_job_conflict", "hash_fresh_job_capacity", "hash_fresh_job_invalid", "fresh_read_consent_required", "fresh_read_consent_conflict", "fresh_read_consent_invalid", "fresh_hash_progress_invalid", "fresh_read_window_too_short", "read_consent_required", "read_consent_expired", "read_consent_revoked", "clock_rollback", "daily_byte_limit", "lifetime_byte_limit", "durable_quantum", "hash_inventory_changed", "hash_recovery_required"},
-		"features":    map[string]bool{"configured_hash_store_daily_reservations": true, "saved_hash_store_budget": true, "paced_explicit_hash_reads": true, "compact_background_inventory": true, "compact_manual_scan": true, "manual_scan": true, "experimental_inventory": true, "periodic_root_revisits": true, "experimental_root_turns": true, "adaptive_inventory_revisits": true, "portable_directory_continuation": false, "durable_dispatch_limits": true, "wal_backpressure": true, "inventory_state_length_observations": true, "source_state_threshold": true, "hard_state_byte_limit": false, "entry_rate_limit": true, "metadata_api_counters": true, "durable_scanner_api_allowances": true, "metadata_rate_limit": false, "scanner_api_pacing": true, "process_cpu_accounting": true, "cooperative_cpu_backoff": true, "durable_cpu_feedback": true, "interrupted_cpu_window_cooldown": true, "source_thread_priority_requests": true, "cpu_limit": false, "power_controls": false, "bounded_power_observations": true, "source_discharge_backoff": true, "file_reports": true, "directory_size_reports": true, "cargo_build_output_reports": true, "go_build_cache_reports": true, "docker_image_container_metadata": true, "builder_metadata": false, "docker_volume_metadata": false, "docker_cache_metadata": true, "docker_engine_cache_metadata": true, "findings": true, "persistent_path_exclusions": true, "configuration_reload": false, "finding_dismissals": true, "finding_dismissal_undo": true, "plan_previews": true, "saved_plans": true, "saved_plan_admission": true, "guided_review": true, "guided_hash_review": true, "saved_hash_choices": true, "saved_hash_choice_metadata_checks": true, "fresh_hash_choice_requests": true, "saved_fresh_hash_jobs": true, "fresh_hash_read_consent": true, "guarded_fresh_hash_steps": true, "fresh_hash_choice_comparisons": true, "saved_plan_checks": true, "plan_live_checks": true, "plan_input_inspection": true, "plan_tree_inspection": true, "plan_observation_capture": true, "plan_observation_comparison": true, "plan_approval": true, "journal_records": true, "journal_location_observations": true, "same_size_candidates": true, "saved_hash_reports": true, "saved_hash_groups": true, "hash_keeper_previews": true, "saved_hash_proposals": true, "hash_read_consent": true, "guarded_hash_steps": true, "full_hashing": true, "duplicates": false, "cleanup": false, "service_descriptor_previews": true, "service_artifact_installation": true, "service_artifact_status": true, "service_descriptor_removal": true, "service_activation_requests": true, "service_stop_requests": true, "service_linux_login_link_controls": true, "service_enablement_verification": false, "service_runtime_observations": true, "service_runtime_state_verification": false, "service_activation": false, "service_runtime_controls": false, "service_installation": false},
+		"error_codes": []string{"cpu_charges_invalid", "cpu_charges_unavailable", "hash_execution_limits_invalid", "hash_store_budget_required", "hash_store_budget_invalid", "configured_daily_byte_limit", "hash_read_pacing_invalid", "hash_read_pacing_capacity", "hash_read_reservation_day", "inventory_mode_pending", "inventory_mode_invalid", "api_pacing_invalid", "api_pacing_unsupported", "adaptive_revisit_invalid", "adaptive_revisit_clock", "cpu_feedback_invalid", "cpu_feedback_unavailable", "invalid_arguments", "unsupported_output", "service_observation_clock", "service_runtime_binding", "service_login_link_conflict", "service_login_link_changed", "service_artifact_conflict", "service_artifact_changed", "service_artifact_busy", "service_manager_unavailable", "service_manager_protocol", "service_manager_path", "service_bounds", "service_outcome_unknown", "docker_context_unavailable", "docker_endpoint_unsupported", "docker_metadata_bounds", "docker_protocol_unsupported", "docker_daemon_changed", "exclusion_bounds", "config_changed", "config_outcome_unknown", "worker_not_running", "writer_busy", "not_found", "already_exists", "permission_denied", "canceled", "command_failed", "plan_capacity", "plan_outcome_unknown", "review_evidence_changed", "review_unavailable", "review_invalid", "dismissal_unavailable", "dismissal_evidence_changed", "dismissal_invalid", "dismissal_capacity", "dismissal_outcome_unknown", "observation_conflict", "observation_invalid", "observation_unavailable", "journal_outcome_unknown", "hash_invalid", "hash_preview_unavailable", "hash_preview_identity_ambiguous", "hash_choice_evidence_changed", "hash_choice_invalid", "hash_choice_capacity", "hash_choice_metadata_unavailable", "hash_choice_request_unavailable", "hash_fresh_job_evidence_changed", "hash_fresh_job_conflict", "hash_fresh_job_capacity", "hash_fresh_job_invalid", "fresh_read_consent_required", "fresh_read_consent_conflict", "fresh_read_consent_invalid", "fresh_hash_progress_invalid", "fresh_read_window_too_short", "read_consent_required", "read_consent_expired", "read_consent_revoked", "clock_rollback", "daily_byte_limit", "lifetime_byte_limit", "durable_quantum", "hash_inventory_changed", "hash_recovery_required"},
+		"features":    map[string]bool{"configured_cpu_session_charges": true, "saved_cpu_session_charges": true, "configured_hash_store_daily_reservations": true, "saved_hash_store_budget": true, "paced_explicit_hash_reads": true, "compact_background_inventory": true, "compact_manual_scan": true, "manual_scan": true, "experimental_inventory": true, "periodic_root_revisits": true, "experimental_root_turns": true, "adaptive_inventory_revisits": true, "portable_directory_continuation": false, "durable_dispatch_limits": true, "wal_backpressure": true, "inventory_state_length_observations": true, "source_state_threshold": true, "hard_state_byte_limit": false, "entry_rate_limit": true, "metadata_api_counters": true, "durable_scanner_api_allowances": true, "metadata_rate_limit": false, "scanner_api_pacing": true, "process_cpu_accounting": true, "cooperative_cpu_backoff": true, "durable_cpu_feedback": true, "interrupted_cpu_window_cooldown": true, "source_thread_priority_requests": true, "cpu_limit": false, "power_controls": false, "bounded_power_observations": true, "source_discharge_backoff": true, "file_reports": true, "directory_size_reports": true, "cargo_build_output_reports": true, "go_build_cache_reports": true, "docker_image_container_metadata": true, "builder_metadata": false, "docker_volume_metadata": false, "docker_cache_metadata": true, "docker_engine_cache_metadata": true, "findings": true, "persistent_path_exclusions": true, "configuration_reload": false, "finding_dismissals": true, "finding_dismissal_undo": true, "plan_previews": true, "saved_plans": true, "saved_plan_admission": true, "guided_review": true, "guided_hash_review": true, "saved_hash_choices": true, "saved_hash_choice_metadata_checks": true, "fresh_hash_choice_requests": true, "saved_fresh_hash_jobs": true, "fresh_hash_read_consent": true, "guarded_fresh_hash_steps": true, "fresh_hash_choice_comparisons": true, "saved_plan_checks": true, "plan_live_checks": true, "plan_input_inspection": true, "plan_tree_inspection": true, "plan_observation_capture": true, "plan_observation_comparison": true, "plan_approval": true, "journal_records": true, "journal_location_observations": true, "same_size_candidates": true, "saved_hash_reports": true, "saved_hash_groups": true, "hash_keeper_previews": true, "saved_hash_proposals": true, "hash_read_consent": true, "guarded_hash_steps": true, "full_hashing": true, "duplicates": false, "cleanup": false, "service_descriptor_previews": true, "service_artifact_installation": true, "service_artifact_status": true, "service_descriptor_removal": true, "service_activation_requests": true, "service_stop_requests": true, "service_linux_login_link_controls": true, "service_enablement_verification": false, "service_runtime_observations": true, "service_runtime_state_verification": false, "service_activation": false, "service_runtime_controls": false, "service_installation": false},
 	}
 }

@@ -80,6 +80,7 @@ type Scan struct {
 	MaxStateBytes          int64 `toml:"max_state_bytes"`
 	AdaptiveRevisits       bool  `toml:"adaptive_revisits"`
 	CompactInventory       bool  `toml:"compact_inventory"`
+	CPUSessionCharges      bool  `toml:"cpu_session_charges"`
 }
 
 func Default() Config {

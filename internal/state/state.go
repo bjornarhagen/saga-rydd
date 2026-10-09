@@ -65,7 +65,11 @@ func OpenWriter(ctx context.Context, dir string) (*Store, error) {
 		s.Close()
 		return nil, err
 	}
-	s.schema = schemaVersion
+	s.schema, err = s.identity(ctx, false)
+	if err != nil {
+		s.Close()
+		return nil, err
+	}
 	s.lock = lock
 	keepLock = true
 	return s, nil
@@ -89,7 +93,7 @@ func OpenReader(ctx context.Context, dir string) (*Store, error) {
 		s.Close()
 		return nil, err
 	}
-	if version != schemaVersion && version != 4 && version != 5 && version != 6 && version != 7 && version != 8 && version != 9 && version != 10 && version != 11 && version != 12 && version != 13 {
+	if version != cpuChargesSchemaVersion && version != schemaVersion && version != 4 && version != 5 && version != 6 && version != 7 && version != 8 && version != 9 && version != 10 && version != 11 && version != 12 && version != 13 {
 		s.Close()
 		return nil, fmt.Errorf("state schema %d requires migration; run rydd state init", version)
 	}
@@ -165,8 +169,8 @@ func (s *Store) identity(ctx context.Context, allowEmpty bool) (int, error) {
 	if app != applicationID {
 		return 0, errors.New("refusing to use a database that is not identified as Rydd state")
 	}
-	if version < 1 || version > schemaVersion {
-		return 0, fmt.Errorf("unsupported state schema %d (supported: %d); database left intact", version, schemaVersion)
+	if version < 1 || version > maxStateSchemaVersion {
+		return 0, fmt.Errorf("unsupported state schema %d (supported: %d); database left intact", version, maxStateSchemaVersion)
 	}
 	return version, nil
 }
@@ -174,10 +178,14 @@ func (s *Store) identity(ctx context.Context, allowEmpty bool) (int, error) {
 func (s *Store) checkLedger(ctx context.Context, version int) error {
 	for i := 0; i < version; i++ {
 		var name string
-		if err := s.db.QueryRowContext(ctx, "SELECT name FROM schema_migrations WHERE version=?", i+1).Scan(&name); err != nil {
+		var typedLength bool
+		expected := migrations[i].name
+		// Reject malformed types/lengths without first copying a whole ledger name
+		// into Go. SQLite page examination and engine allocations are not metered.
+		if err := s.db.QueryRowContext(ctx, "SELECT CASE WHEN typeof(name)='text' THEN CAST(substr(CAST(name AS BLOB),1,?) AS TEXT) ELSE '' END,typeof(name)='text' AND length(CAST(name AS BLOB))=? FROM schema_migrations WHERE version=?", len(expected)+1, len(expected), i+1).Scan(&name, &typedLength); err != nil {
 			return fmt.Errorf("invalid migration ledger: %w", err)
 		}
-		if name != migrations[i].name {
+		if !typedLength || name != expected {
 			return errors.New("unexpected migration ledger; database left intact")
 		}
 	}
@@ -202,7 +210,7 @@ func (s *Store) migrate(ctx context.Context) error {
 	if journal != "wal" {
 		return fmt.Errorf("WAL mode unavailable (%s); local filesystem required", journal)
 	}
-	if version == schemaVersion {
+	if version >= schemaVersion {
 		return nil
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -270,14 +278,14 @@ type Summary struct {
 }
 
 func (s *Store) Summary(ctx context.Context) (Summary, error) {
-	result := Summary{Schema: s.schema}
+	result := Summary{}
 	// One statement supplies a consistent snapshot without retaining a reader lock.
-	err := s.db.QueryRowContext(ctx, `SELECT sqlite_version(),
+	err := s.db.QueryRowContext(ctx, `SELECT (SELECT user_version FROM pragma_user_version),sqlite_version(),
  (SELECT count(*) FROM roots WHERE enabled=1), (SELECT count(*) FROM entries),
  (SELECT count(*) FROM jobs WHERE status='pending'), (SELECT count(*) FROM jobs WHERE status='running'),
  (SELECT count(*) FROM directories WHERE complete=1 AND last_error=''),
  (SELECT count(*) FROM directories WHERE last_error!=''),
- (SELECT count(*) FROM entries WHERE skip_reason!='')`).Scan(&result.SQLiteVersion, &result.EnabledRoots, &result.Entries, &result.PendingJobs, &result.RunningJobs, &result.CompleteDirectories, &result.DirectoryErrors, &result.SkippedEntries)
+ (SELECT count(*) FROM entries WHERE skip_reason!='')`).Scan(&result.Schema, &result.SQLiteVersion, &result.EnabledRoots, &result.Entries, &result.PendingJobs, &result.RunningJobs, &result.CompleteDirectories, &result.DirectoryErrors, &result.SkippedEntries)
 	if err != nil {
 		return result, err
 	}

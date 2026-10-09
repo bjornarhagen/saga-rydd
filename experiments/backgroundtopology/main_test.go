@@ -120,7 +120,7 @@ func TestTopologyPilotBoundsBeforeCreation(t *testing.T) {
 	base := t.TempDir()
 	out := filepath.Join(base, "uncreated")
 	o := options{Binary: "/trusted/rydd", Output: out, Shape: "wide", Files: 4096, Seconds: 600}
-	for _, mutate := range []func(*options){func(o *options) { o.Files = 1000000 }, func(o *options) { o.Shape = "other" }, func(o *options) { o.Seconds = 3600 }, func(o *options) { o.Binary = "relative" }, func(o *options) { o.Files = 65 }} {
+	for _, mutate := range []func(*options){func(o *options) { o.Files = 1000001 }, func(o *options) { o.Shape = "other" }, func(o *options) { o.Seconds = 3601 }, func(o *options) { o.Binary = "relative" }, func(o *options) { o.Files = 65 }} {
 		c := o
 		mutate(&c)
 		if _, err := run(context.Background(), c); !errors.Is(err, errProfile) {

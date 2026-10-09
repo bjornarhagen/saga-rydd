@@ -93,7 +93,7 @@ func (t topology) directoryCount() int {
 }
 
 func generate(ctx context.Context, root string, t topology) error {
-	if (t.shape != "wide" && t.shape != "deep" && t.shape != "healthy") || t.files < t.levels() || t.files > 4096 || t.files%t.levels() != 0 {
+	if (t.shape != "wide" && t.shape != "deep" && t.shape != "healthy") || t.files < t.levels() || t.files > 1000000 || t.files%t.levels() != 0 {
 		return errOracle
 	}
 	if t.shape == "healthy" && t.files != 512 {

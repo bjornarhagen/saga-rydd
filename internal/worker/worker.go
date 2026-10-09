@@ -65,6 +65,9 @@ type Options struct {
 	Interval, WorkDuration time.Duration
 	// cpuObserve is private so production always uses native process accounting.
 	cpuObserve func() (time.Duration, error)
+	// Optional session observations/hooks are private; production uses SELF.
+	cpuSessionObserve func() (time.Duration, error)
+	cpuSessionHooks   *cpuSessionHooks
 	// Private fixture coordinator; production retains one process-wide slot.
 	powerCoordinator *powerCoordinator
 	// Metadata-only admission fixture seam; production samples the fixed DB/WAL.
@@ -264,6 +267,15 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 		return err
 	}
 	live := Snapshot{PID: os.Getpid(), Instance: hex.EncodeToString(id[:]), StartedAt: wallNow().UTC(), Paused: paused, RecoveredJobs: recovered, Handlers: len(handlers)}
+	var session *cpuSessionPolicy
+	if options.ExperimentalScan && cfg.Scan.CPUSessionCharges {
+		sessionObserve := options.cpuSessionObserve
+		if sessionObserve == nil {
+			sessionObserve = observeCPU
+		}
+		session = &cpuSessionPolicy{store: w, instance: live.Instance, observe: sessionObserve, wall: wallNow, elapsed: elapsedNow, hooks: options.cpuSessionHooks}
+		live.WaitReason = "cpu_session_startup"
+	}
 	cpu := newCPUBudget()
 	var savedCPU cpuFeedbackGate
 	setCPUFeedbackAt := func(feedback state.CPUFeedbackState, wall, elapsed time.Time) {
@@ -433,6 +445,9 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 	}
 	for {
 		if live.Stopping && active == nil {
+			if session != nil {
+				return errors.Join(ctx.Err(), session.finish())
+			}
 			return nil
 		}
 		if reschedule {
@@ -441,10 +456,19 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 			}
 			tick = nil
 			reschedule = false
+			if session != nil && active == nil && !live.Stopping && (session.stage < 3 || session.refused != nil) {
+				wait := dispatchWait{}
+				session.wait(&wait)
+				live.WaitReason = wait.reason
+				if session.refused == nil {
+					timer = time.NewTimer(wait.duration)
+					tick = timer.C
+				}
+			}
 			if live.Paused {
 				live.WaitReason = "paused"
 			}
-			if !live.Paused && !live.Stopping && active == nil {
+			if !live.Paused && !live.Stopping && active == nil && (session == nil || session.stage == 3 && session.refused == nil) {
 				if err := refreshCPUFeedback(ctx); err != nil {
 					if ctx.Err() != nil {
 						stop()
@@ -559,6 +583,10 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 							savedCPU.add(&wait, *live.CPUFeedback, now, elapsed)
 						}
 						wait.elapsed(walNextAllowed, elapsed, "wal_backpressure")
+						if !session.wait(&wait) && session != nil && session.refused != nil {
+							live.WaitReason = wait.reason
+							continue
+						}
 						live.WaitReason = wait.reason
 						timer = time.NewTimer(wait.duration)
 						tick = timer.C
@@ -630,6 +658,11 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 			call.reply <- response
 		case <-tick:
 			tick = nil
+			if session != nil && session.stage < 3 {
+				session.startup(ctx)
+				reschedule = true
+				continue
+			}
 			if live.CPUFeedback != nil && live.CPUFeedback.Status == "pending" {
 				// A rollback timer may reach the saved high-water without any
 				// control request. Recover before reserving another root turn.
@@ -645,6 +678,10 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 				savedCPU.add(&wait, *live.CPUFeedback, wallNow(), elapsedNow())
 			}
 			wait.elapsed(walNextAllowed, elapsedNow(), "wal_backpressure")
+			if !session.wait(&wait) && session != nil && session.refused != nil {
+				reschedule = true
+				continue
+			}
 			if wait.duration > 0 {
 				reschedule = true
 				continue
@@ -785,6 +822,34 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 					reschedule = true
 					continue
 				}
+				// Only a genuinely due, otherwise-admissible selection samples
+				// native session CPU. New debt or uncertainty precedes receipts.
+				if session != nil {
+					if !session.sampleAtBoundary(ctx, false) {
+						reschedule = true
+						continue
+					}
+					admission := dispatchWait{}
+					session.wait(&admission)
+					admission.elapsed(nextAllowed, elapsedNow(), "cadence")
+					admission.elapsed(cpu.nextAllowed, elapsedNow(), "cpu_backoff")
+					if live.CPUFeedback != nil {
+						savedCPU.add(&admission, *live.CPUFeedback, wallNow(), elapsedNow())
+					}
+					if session.refused != nil || admission.duration > 0 {
+						reschedule = true
+						continue
+					}
+					blocked, checkErr := w.WALBlocked(ctx, state.WALBackpressureBytes)
+					if checkErr != nil {
+						return checkErr
+					}
+					if blocked {
+						walNextAllowed = elapsedNow().Add(time.Minute)
+						reschedule = true
+						continue
+					}
+				}
 				if plan.generic {
 					budget, budgetErr := w.DispatchBudget(ctx, wallNow(), cfg.Scan.MaxScanChunksPerDay)
 					if budgetErr != nil {
@@ -850,6 +915,12 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						reschedule = true
 						continue
 					}
+					admission := dispatchWait{}
+					if !session.wait(&admission) {
+						cancel()
+						reschedule = true
+						continue // The committed receipt is never refunded.
+					}
 					turn, claimErr := w.ClaimFairInventoryTurn(turnCtx, fairRoots, claimWall, work+10*time.Second, plan.allowSource, reservedAt)
 					if claimErr != nil {
 						cancel()
@@ -906,6 +977,15 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						return err // Pending provenance remains; no work has run.
 					}
 					if turn.Kind == state.FairInventoryMaintenance {
+						admission := dispatchWait{}
+						if !session.wait(&admission) {
+							cancel()
+							if cpuErr := finishCPU(window, marker); cpuErr != nil {
+								return errors.Join(cpuErr, session.error())
+							}
+							reschedule = true
+							continue // Charged receipt retained; no retirement/finalization.
+						}
 						step, retireErr := w.RetireBackgroundInventoryForRoot(turnCtx, adaptive.background, turn.RootID)
 						if retireErr == nil && step.Eligible && !step.Remaining {
 							retireErr = adaptive.finalize(turnCtx, w, turn.RootID, wallNow(), revisitInterval)
@@ -928,6 +1008,9 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						if cpuErr != nil {
 							return cpuErr
 						}
+						if session != nil {
+							session.sampleAtBoundary(context.Background(), false)
+						}
 						reschedule = true
 						continue
 					}
@@ -945,6 +1028,20 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 				return err
 			}
 			if job == nil {
+				reschedule = true
+				continue
+			}
+			admission := dispatchWait{}
+			if !session.wait(&admission) {
+				// A late clock/debt refusal cannot leave an unstarted exact
+				// lease running or send an unscreened handler to the source.
+				releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 2*time.Second)
+				releaseErr := w.FinishJob(releaseCtx, *job, false, job.Cursor, time.Unix(0, 1), "")
+				releaseCancel()
+				cpuErr := finishCPU(window, marker)
+				if releaseErr != nil || cpuErr != nil {
+					return errors.Join(releaseErr, cpuErr, session.error())
+				}
 				reschedule = true
 				continue
 			}
@@ -1037,6 +1134,22 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 					return Result{Scan: &batch}, nil
 				}
 			}
+			admission = dispatchWait{}
+			if !session.wait(&admission) {
+				releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 2*time.Second)
+				settleErr := settleMetadata(releaseCtx, w, activeMetadata, false, wallNow())
+				if settleErr == nil {
+					settleErr = w.FinishJob(releaseCtx, *job, false, job.Cursor, time.Unix(0, 1), "")
+				}
+				releaseCancel()
+				activeMetadata = nil
+				cpuErr := finishCPU(window, marker)
+				if settleErr != nil || cpuErr != nil {
+					return errors.Join(settleErr, cpuErr, session.error())
+				}
+				reschedule = true
+				continue
+			}
 			active = job
 			activeCPUWindow = window
 			activeCPUMarker = marker
@@ -1109,6 +1222,9 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 			// Errors/cancellation still consumed process CPU in this window.
 			if err := finishCPU(activeCPUWindow, activeCPUMarker); err != nil {
 				return err
+			}
+			if session != nil {
+				session.sampleAtBoundary(context.Background(), false)
 			}
 			activeCPUMarker = nil
 			active = nil

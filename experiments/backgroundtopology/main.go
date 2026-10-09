@@ -1,4 +1,4 @@
-// backgroundtopology runs only new generated native wide/deep pilot fixtures.
+// backgroundtopology runs only new generated native wide/deep profiles.
 // Generation, independent oracles and observer children are outside worker SELF.
 package main
 
@@ -39,10 +39,10 @@ type options struct {
 }
 
 func (o options) validate() error {
-	if !filepath.IsAbs(o.Binary) || filepath.Clean(o.Binary) != o.Binary || !filepath.IsAbs(o.Output) || filepath.Clean(o.Output) != o.Output || strings.ContainsRune(o.Binary+o.Output, 0) || len(o.Binary) > 4096 || len(o.Output) > 1024 {
+	if !filepath.IsAbs(o.Binary) || filepath.Clean(o.Binary) != o.Binary || !filepath.IsAbs(o.Output) || filepath.Clean(o.Output) != o.Output || strings.ContainsRune(o.Binary+o.Output, 0) || len(o.Binary) > 4096 || len(o.Output) > 512 {
 		return errProfile
 	}
-	if (o.Shape != "wide" && o.Shape != "deep") || o.Files < 256 || o.Files > 4096 || o.Files%64 != 0 || o.Seconds < 30 || o.Seconds > 600 {
+	if (o.Shape != "wide" && o.Shape != "deep") || o.Files < 256 || o.Files > 1000000 || o.Files%64 != 0 || o.Seconds < 30 || o.Seconds > 3600 {
 		return errProfile
 	}
 	return nil
@@ -100,19 +100,26 @@ func readSaved(ctx context.Context, dir, primary, healthy string) (savedView, er
  (SELECT count(*) FROM directories WHERE last_error!='')+(SELECT count(*) FROM roots WHERE last_error!=''),
  (SELECT count(*) FROM entries WHERE skip_reason!=''),
  (SELECT count(*) FROM jobs WHERE status='running'),
- coalesce((SELECT chunks FROM scan_dispatch WHERE id=1),0)`, root, root, other).Scan(&v.Files, &v.CompleteDirs, &v.HealthyCompleteDirs, &v.ReadyCaches, &v.Caches, &v.Scratch, &v.Errors, &v.Skips, &v.Running, &v.Dispatch)
+ coalesce((SELECT CASE WHEN typeof(chunks)='integer' AND chunks>=0 THEN chunks ELSE -1 END FROM scan_dispatch WHERE id=1),0)`, root, root, other).Scan(&v.Files, &v.CompleteDirs, &v.HealthyCompleteDirs, &v.ReadyCaches, &v.Caches, &v.Scratch, &v.Errors, &v.Skips, &v.Running, &v.Dispatch)
 	if err != nil {
 		return v, err
 	}
-	rows, err := tx.QueryContext(ctx, "SELECT id,root_id,kind,path,status,due_at_ns,cursor,attempts,last_error,lease_token,lease_until_ns,inventory_claimed FROM jobs ORDER BY id LIMIT 130")
+	if v.Dispatch < 0 {
+		return v, errProfile
+	}
+	rows, err := tx.QueryContext(ctx, boundedSavedJobsSQL)
 	if err != nil {
 		return v, err
 	}
 	for rows.Next() {
 		var j savedJob
-		if err = rows.Scan(&j.ID, &j.Root, &j.Kind, &j.Path, &j.Status, &j.Due, &j.Cursor, &j.Attempts, &j.Error, &j.Lease, &j.LeaseUntil, &j.Claimed); err != nil {
+		var admitted bool
+		if err = rows.Scan(&j.ID, &j.Root, &j.Kind, &j.Path, &j.Status, &j.Due, &j.Cursor, &j.Attempts, &j.Error, &j.Lease, &j.LeaseUntil, &j.Claimed, &admitted); err != nil || !admitted || (j.Root != root && j.Root != other) {
 			rows.Close()
-			return v, err
+			if ctx.Err() != nil {
+				return v, ctx.Err()
+			}
+			return v, errProfile
 		}
 		v.Jobs = append(v.Jobs, j)
 	}
@@ -129,26 +136,46 @@ func readSaved(ctx context.Context, dir, primary, healthy string) (savedView, er
 func (v savedView) drained(t topology) bool {
 	return v.Files == int64(t.files) && v.CompleteDirs == int64(t.levels()) && v.HealthyCompleteDirs == 33 && v.Caches == 2 && v.ReadyCaches == 2 && v.Scratch == 0 && v.Errors == 0 && v.Skips == 0 && v.Running == 0
 }
-func futureJobs(ctx context.Context, dir string) error {
+func futureJobs(ctx context.Context, dir, primary, healthy string) error {
+	if primary == healthy {
+		return errProfile
+	}
 	db, err := sql.Open("sqlite", readonlyDSN(filepath.Join(dir, state.Filename)))
 	if err != nil {
 		return err
 	}
 	defer db.Close()
-	var n, valid int
-	err = db.QueryRowContext(ctx, `SELECT count(*),coalesce(sum(j.kind='inventory' AND j.status='pending' AND j.path=X'2e' AND j.cursor IS NULL AND j.last_error='' AND j.lease_token='' AND j.lease_until_ns=0 AND j.due_at_ns=d.checked_at_ns+?),0) FROM jobs j JOIN directories d ON d.root_id=j.root_id AND d.path=X'2e'`, int64(24*time.Hour)).Scan(&n, &valid)
+	// Count every job, including rows with no matching root or directory. Only
+	// bounded aggregate scalars enter Go; saved path/error/cursor payloads do not.
+	var n, valid, distinctRoots int64
+	err = db.QueryRowContext(ctx, `SELECT count(*),coalesce(sum(CASE WHEN
+ typeof(j.root_id)='integer' AND j.root_id>0
+ AND typeof(j.kind)='text' AND j.kind='inventory'
+ AND typeof(j.status)='text' AND j.status='pending'
+ AND typeof(j.path)='blob' AND j.path=X'2e' AND j.cursor IS NULL
+ AND typeof(j.last_error)='text' AND j.last_error=''
+ AND typeof(j.lease_token)='text' AND j.lease_token=''
+ AND typeof(j.lease_until_ns)='integer' AND j.lease_until_ns=0
+ AND typeof(j.attempts)='integer' AND j.attempts=0
+ AND typeof(j.inventory_claimed)='integer' AND j.inventory_claimed=0
+ AND typeof(j.due_at_ns)='integer' AND j.due_at_ns>=0
+ AND typeof(d.checked_at_ns)='integer' AND d.checked_at_ns BETWEEN 0 AND ?
+ AND j.due_at_ns=d.checked_at_ns+?
+ AND typeof(r.path)='blob' AND r.path IN (?,?)
+ THEN 1 ELSE 0 END),0),count(DISTINCT j.root_id)
+ FROM jobs j LEFT JOIN directories d ON d.root_id=j.root_id AND d.path=X'2e'
+ LEFT JOIN roots r ON r.id=j.root_id`, int64(math.MaxInt64)-int64(24*time.Hour), int64(24*time.Hour), []byte(primary), []byte(healthy)).Scan(&n, &valid, &distinctRoots)
 	if err != nil {
 		return err
 	}
-	if n != 2 || valid != 2 {
+	if n != 2 || valid != 2 || distinctRoots != 2 {
 		return errProfile
 	}
 	return nil
 }
 
 type sample struct {
-	ElapsedNS                                                                                    int64     `json:"elapsed_ns"`
-	Saved                                                                                        savedView `json:"-"`
+	ElapsedNS                                                                                    int64 `json:"elapsed_ns"`
 	PrimaryFiles, PrimaryCompleteDirs, HealthyCompleteDirs, ReadyCaches, ScratchScopes, Dispatch int64
 	DBBytes, WALBytes                                                                            int64
 	Wait                                                                                         string
@@ -165,6 +192,7 @@ type result struct {
 	MaximumSeconds                                                                                                                                                  int         `json:"sampling_window_limit_seconds"`
 	StopGraceSeconds                                                                                                                                                int         `json:"graceful_stop_window_seconds"`
 	Profile                                                                                                                                                         config.Scan `json:"finite_profile"`
+	InitialAvailableOutputBytes                                                                                                                                     *int64      `json:"initial_available_output_filesystem_bytes"`
 	GenerationNS, OracleBeforeNS, OracleAfterNS                                                                                                                     int64
 	Before                                                                                                                                                          oracle
 	Samples                                                                                                                                                         []sample
@@ -395,10 +423,15 @@ func (r *runner) exactReport(ctx context.Context, oracle oracle) error {
 	}
 	return nil
 }
-func run(ctx context.Context, o options) (report result, err error) {
+func run(ctx context.Context, o options) (result, error) {
+	return runWithCapacity(ctx, o, checkInitialOutputCapacity)
+}
+
+func runWithCapacity(ctx context.Context, o options, capacity func(context.Context, string) (*int64, error)) (report result, err error) {
 	if err = o.validate(); err != nil {
 		return report, err
 	}
+	report = result{Contract: "generated_background_topology_profile_v1", Shape: o.Shape, Files: o.Files, Levels: (topology{o.Shape, o.Files}).levels(), MaximumSeconds: o.Seconds, StopGraceSeconds: 15, Outcome: "partial", Stage: "generation", SourceRevisionStatus: "unknown", ArtifactSHA256: map[string]string{}, Qualifiers: []string{"Finite generated zero-byte topology with bounded sentinel bodies; not representative content or defaults acceptance.", "Worker SELF CPU excludes generator, independent oracle and observer children; those costs are separate.", "Scanner/API accounting is not physical-I/O accounting. Entered native operations can outlast cancellation.", "Only new owned source roots are used; saved cursors, quotas and daily due times are not reset.", "Healthy source progress precedes primary EOF; healthy EOF precedes full primary cache/scratch drain.", "Concurrent development can affect elapsed time and host scheduling.", "Sampling ends at its declared window; source work can continue until the stop request is received. Full worker resources cover launch through Wait return, including separate stop/cleanup grace.", "Generator/oracle RSS is the parent process lifetime high-water through each phase. Observer RSS is the maximum individual CLI child, not combined simultaneous memory.", "Oracle comparisons request at most 4 MiB total named-database page cache, disable mmap, and use file-backed temporary sorting; temporary disk and helper overhead are separate from worker costs.", "Child cancellation addresses the guarded direct child only. No descendant/process-group cleanup is claimed."}}
 	binary, err := os.Lstat(o.Binary)
 	if err != nil || !binary.Mode().IsRegular() || binary.Mode().Perm()&0111 == 0 {
 		return report, errProfile
@@ -408,6 +441,19 @@ func run(ctx context.Context, o options) (report result, err error) {
 	}
 	base, err := filepath.EvalSymlinks(o.Output)
 	if err != nil {
+		return report, err
+	}
+	if len(base) > 512 {
+		return report, errProfile
+	}
+	report.InitialAvailableOutputBytes, err = capacity(ctx, base)
+	if err != nil {
+		report.Stage = "capacity_preflight"
+		report.Outcome = "capacity_unavailable_no_generation"
+		if errors.Is(err, errCapacity) {
+			report.Outcome = "capacity_refused_no_generation"
+		}
+		err = errors.Join(err, saveJSON(filepath.Join(base, "aggregate.json"), report))
 		return report, err
 	}
 	r := &runner{o: o, observers: usage{Available: true, RSSScope: "maximum_individual_observer_child"}, base: base, state: filepath.Join(base, "state"), primary: filepath.Join(base, "node_modules"), healthy: filepath.Join(base, "healthy")}
@@ -434,7 +480,8 @@ func run(ctx context.Context, o options) (report result, err error) {
 		}
 	}
 	r.env = append(r.env, "RYDD_RUNTIME_DIR="+r.runtime)
-	report = result{Contract: "generated_background_topology_pilot_v1", Shape: o.Shape, Files: o.Files, Levels: (topology{o.Shape, o.Files}).levels(), MaximumSeconds: o.Seconds, StopGraceSeconds: 15, Outcome: "partial", Stage: "generation", SourceRevisionStatus: "unknown", ArtifactSHA256: map[string]string{}, Qualifiers: []string{"Finite generated zero-byte topology with bounded sentinel bodies; not representative content or defaults acceptance.", "Worker SELF CPU excludes generator, independent oracle and observer children; those costs are separate.", "Scanner/API accounting is not physical-I/O accounting. Entered native operations can outlast cancellation.", "Only new owned source roots are used; saved cursors, quotas and daily due times are not reset.", "Healthy source progress precedes primary EOF; healthy EOF precedes full primary cache/scratch drain.", "Concurrent development can affect elapsed time and host scheduling.", "Sampling ends at its declared window; source work can continue until the stop request is received. Full worker resources cover launch through Wait return, including separate stop/cleanup grace.", "Generator/oracle RSS is the parent process lifetime high-water through each phase. Observer RSS is the maximum individual CLI child, not combined simultaneous memory.", "Oracle comparisons request at most 4 MiB total named-database page cache, disable mmap, and use file-backed temporary sorting; temporary disk and helper overhead are separate from worker costs.", "Child cancellation addresses the guarded direct child only. No descendant/process-group cleanup is claimed."}}
+
+	stateInitAttempted := false
 	defer func() {
 		for i, c := range r.children {
 			select {
@@ -456,25 +503,31 @@ func run(ctx context.Context, o options) (report result, err error) {
 			diagnostic, _ := c.diagnostic.value()
 			err = errors.Join(err, writeReceipt(filepath.Join(base, fmt.Sprintf("worker-%d.stdout", i)), out), writeReceipt(filepath.Join(base, fmt.Sprintf("worker-%d.stderr", i)), diagnostic))
 		}
-		probe, cancelProbe := context.WithTimeout(context.Background(), 5*time.Second)
-		if v, e := readSaved(probe, r.state, r.primary, r.healthy); e == nil {
-			saveErr := saveJSON(filepath.Join(base, "saved-terminal.json"), v)
-			err = errors.Join(err, saveErr)
-			report.TerminalEvidenceSaved = saveErr == nil
-		} else {
-			err = errors.Join(err, e)
+		if stateInitAttempted {
+			probe, cancelProbe := context.WithTimeout(context.Background(), 5*time.Second)
+			if v, e := readSaved(probe, r.state, r.primary, r.healthy); e == nil {
+				saveErr := saveJSON(filepath.Join(base, "saved-terminal.json"), v)
+				err = errors.Join(err, saveErr)
+				report.TerminalEvidenceSaved = saveErr == nil
+			} else {
+				err = errors.Join(err, e)
+			}
+			cancelProbe()
 		}
-		cancelProbe()
 		report.Observer = r.observers
 		report.ControlLatencyNS = r.latencies
 		if err != nil {
 			report.Outcome = "profile_failed_partial"
+			if errors.Is(err, errCapacity) {
+				report.Outcome = "capacity_refused_no_generation"
+			}
 		}
 		if receiptErr := saveJSON(filepath.Join(base, "aggregate.json"), report); receiptErr != nil {
 			err = errors.Join(err, receiptErr)
 			report.Outcome = "receipt_failed_partial"
 		}
 	}()
+	report.Qualifiers = append(report.Qualifiers, "The initial output-filesystem capacity check is an observation, not a disk reservation. Allocation failures remain partial evidence. Generation and each oracle phase have a separate 1800-second deadline. A finite sample does not establish full million-entry drain, defaults or soak acceptance.")
 	ownExe, exeErr := os.Executable()
 	if exeErr != nil {
 		return report, exeErr
@@ -502,25 +555,32 @@ func run(ctx context.Context, o options) (report result, err error) {
 	healthy := topology{"healthy", 512}
 	started := time.Now()
 	phaseCPU := selfUsage()
-	if err = generate(ctx, r.primary, t); err != nil {
+	generationCtx, cancelGeneration := context.WithTimeout(ctx, 1800*time.Second)
+	if err = generate(generationCtx, r.primary, t); err != nil {
+		cancelGeneration()
 		return report, err
 	}
-	if err = generate(ctx, r.healthy, healthy); err != nil {
+	if err = generate(generationCtx, r.healthy, healthy); err != nil {
+		cancelGeneration()
 		return report, err
 	}
+	cancelGeneration()
 	report.GenerationNS = time.Since(started).Nanoseconds()
 	report.Generation = phaseUsage(phaseCPU, report.GenerationNS)
 	started = time.Now()
 	phaseCPU = selfUsage()
 	before := filepath.Join(base, "primary-before.sqlite")
-	report.Before, err = inspect(ctx, r.primary, before, t)
+	oracleBeforeCtx, cancelOracleBefore := context.WithTimeout(ctx, 1800*time.Second)
+	defer cancelOracleBefore()
+	report.Before, err = inspect(oracleBeforeCtx, r.primary, before, t)
 	if err != nil {
 		return report, err
 	}
 	healthyBefore := filepath.Join(base, "healthy-before.sqlite")
-	if _, err = inspect(ctx, r.healthy, healthyBefore, healthy); err != nil {
+	if _, err = inspect(oracleBeforeCtx, r.healthy, healthyBefore, healthy); err != nil {
 		return report, err
 	}
+	cancelOracleBefore()
 	report.OracleBeforeNS = time.Since(started).Nanoseconds()
 	report.OracleBefore = phaseUsage(phaseCPU, report.OracleBeforeNS)
 	report.Stage = "setup"
@@ -535,6 +595,7 @@ func run(ctx context.Context, o options) (report result, err error) {
 	cfg.Scan.MetadataAttemptsPerDay = 1 << 40
 	cfg.Scan.MaxScanChunksPerDay = 100000
 	cfg.Scan.APIAttemptsPerSecond = 0
+	cfg.Scan.MaxStateBytes = 1 << 30
 	report.Profile = cfg.Scan
 	if err = config.Create(filepath.Join(r.state, "config.toml"), base, cfg); err != nil {
 		return report, err
@@ -543,6 +604,7 @@ func run(ctx context.Context, o options) (report result, err error) {
 	if err != nil {
 		return report, err
 	}
+	stateInitAttempted = true
 	if _, err = r.command(ctx, "state", "init"); err != nil {
 		return report, err
 	}
@@ -562,7 +624,7 @@ func run(ctx context.Context, o options) (report result, err error) {
 	}
 	report.Stage = "sampling"
 	restart := false
-	for len(report.Samples) < 160 && profile.Err() == nil {
+	for len(report.Samples) < maximumTopologySamples && profile.Err() == nil {
 		s, e := r.status(profile)
 		if e != nil {
 			if samplingEnded(profile, e) {
@@ -580,7 +642,10 @@ func run(ctx context.Context, o options) (report result, err error) {
 			}
 			return report, e
 		}
-		report.Samples = append(report.Samples, sample{ElapsedNS: time.Since(launched).Nanoseconds(), Saved: v, PrimaryFiles: v.Files, PrimaryCompleteDirs: v.CompleteDirs, HealthyCompleteDirs: v.HealthyCompleteDirs, ReadyCaches: v.ReadyCaches, ScratchScopes: v.Scratch, Dispatch: v.Dispatch, DBBytes: s.State.DatabaseBytes, WALBytes: s.State.WALBytes, Wait: s.Worker.Live.WaitReason, Charges: s.Metadata.TotalCharges, CPUStatus: s.CPU.Status, APICounters: s.Worker.Live.InventoryMetrics, DispatchDay: s.Dispatch.Day})
+		if err = spoolSavedEvidence(base, len(report.Samples), v); err != nil {
+			return report, err
+		}
+		report.Samples = append(report.Samples, sample{ElapsedNS: time.Since(launched).Nanoseconds(), PrimaryFiles: v.Files, PrimaryCompleteDirs: v.CompleteDirs, HealthyCompleteDirs: v.HealthyCompleteDirs, ReadyCaches: v.ReadyCaches, ScratchScopes: v.Scratch, Dispatch: v.Dispatch, DBBytes: s.State.DatabaseBytes, WALBytes: s.State.WALBytes, Wait: s.Worker.Live.WaitReason, Charges: s.Metadata.TotalCharges, CPUStatus: s.CPU.Status, APICounters: s.Worker.Live.InventoryMetrics, DispatchDay: s.Dispatch.Day})
 		if v.HealthyCompleteDirs > 1 && v.CompleteDirs < int64(t.levels()) {
 			report.FairProgress = true
 		}
@@ -627,19 +692,22 @@ func run(ctx context.Context, o options) (report result, err error) {
 	started = time.Now()
 	phaseCPU = selfUsage()
 	after := filepath.Join(base, "primary-after.sqlite")
-	if _, err = inspect(ctx, r.primary, after, t); err != nil {
+	oracleAfterCtx, cancelOracleAfter := context.WithTimeout(ctx, 1800*time.Second)
+	defer cancelOracleAfter()
+	if _, err = inspect(oracleAfterCtx, r.primary, after, t); err != nil {
 		return report, err
 	}
 	healthyAfter := filepath.Join(base, "healthy-after.sqlite")
-	if _, err = inspect(ctx, r.healthy, healthyAfter, healthy); err != nil {
+	if _, err = inspect(oracleAfterCtx, r.healthy, healthyAfter, healthy); err != nil {
 		return report, err
 	}
-	if err = sameOracle(ctx, before, after); err != nil {
+	if err = sameOracle(oracleAfterCtx, before, after); err != nil {
 		return report, err
 	}
-	if err = sameOracle(ctx, healthyBefore, healthyAfter); err != nil {
+	if err = sameOracle(oracleAfterCtx, healthyBefore, healthyAfter); err != nil {
 		return report, err
 	}
+	cancelOracleAfter()
 	report.OracleAfterNS = time.Since(started).Nanoseconds()
 	report.OracleAfter = phaseUsage(phaseCPU, report.OracleAfterNS)
 	report.BodyIdentityOracleUnchanged = true
@@ -653,7 +721,7 @@ func run(ctx context.Context, o options) (report result, err error) {
 		}
 		report.ExactCachedTotals = true
 		report.Stage = "daily_jobs"
-		if err = futureJobs(ctx, r.state); err != nil {
+		if err = futureJobs(ctx, r.state, r.primary, r.healthy); err != nil {
 			return report, err
 		}
 		report.ExactFutureDailyJobs = true
@@ -677,14 +745,14 @@ func main() {
 	flag.StringVar(&o.Binary, "binary", "", "exact native production binary")
 	flag.StringVar(&o.Output, "output", "", "new exclusive private fixture directory")
 	flag.StringVar(&o.Shape, "shape", "wide", "wide or deep")
-	flag.IntVar(&o.Files, "files", 4096, "pilot file count, at most 4096")
-	flag.IntVar(&o.Seconds, "seconds", 600, "finite worker window, at most 600 seconds")
+	flag.IntVar(&o.Files, "files", 4096, "generated file count, at most 1000000")
+	flag.IntVar(&o.Seconds, "seconds", 600, "finite worker sampling window, at most 3600 seconds")
 	flag.Parse()
 	if flag.NArg() != 0 {
 		fmt.Fprintln(os.Stderr, errProfile)
 		os.Exit(2)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(o.Seconds+120)*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 9600*time.Second)
 	defer cancel()
 	r, err := run(ctx, o)
 	if err != nil {

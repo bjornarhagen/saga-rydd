@@ -30,6 +30,7 @@ Commands:
                                                      Edit existing exclusions for later invocations
   state init                                           Initialize/migrate state from existing config
   status [--json]                                       Read saved state summary
+  status --cpu-charges [--json]                       Read saved conservative CPU charge history
   daemon [--experimental-scan]                         Run the worker (scanning opt-in for fixtures)
   service preview --executable ABSOLUTE_PATH [--json]  Preview an idle-only service descriptor
   service install/status --executable ABSOLUTE_PATH [--directory ABSOLUTE_PATH] [--json]
@@ -138,6 +139,32 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 	if remaining[0] == "capabilities" && len(remaining) == 1 {
 		fmt.Fprintln(out, "Rydd commands: init, config check, exclude, state init, status, scan, measure, report, docker, service, review, plan, ignore, journal, hashes, hash, pause, resume, stop, capabilities.\nAdd --json for versioned machine output on finite commands. review prompts in text mode; daemon uses foreground text output.\nOther commands are noninteractive. Exit codes: 0 success, 1 operation failed, 2 invalid usage.\nScanning is experimental. Deletion, duplicate detection, and full resource controls are unavailable.")
 		return 0
+	}
+	if remaining[0] == "status" {
+		mode, modeErr := cpuChargesStatusMode(remaining[1:])
+		if modeErr != nil {
+			fmt.Fprintln(errOut, modeErr)
+			return 2
+		}
+		if mode {
+			paths, err := cpuChargesStatusPaths(*dataDir)
+			var report CPUChargesReport
+			if err == nil {
+				report, err = savedCPUCharges(ctx, paths)
+			}
+			if err == nil {
+				err = printCPUChargesReport(out, report)
+			}
+			if err == nil && ctx.Err() != nil {
+				fmt.Fprintln(errOut, "Saved CPU accounting reply was canceled; no saved records or source files were changed.")
+				err = ctx.Err()
+			}
+			if err != nil {
+				fmt.Fprintln(errOut, cpuChargesStatusError(err))
+				return 1
+			}
+			return 0
+		}
 	}
 	paths, err := config.ResolvePaths(*dataDir)
 	if err != nil {
