@@ -4,7 +4,7 @@ A quiet storage cleanup companion for macOS and Linux. Part of Saga.
 
 Rydd will gradually discover developer clutter and duplicate files, explain what can be removed, and help reclaim space through reviewed actions or explicitly enabled automatic policies.
 
-**Status: experimental read-only inventory and explicit hashing.** The worker can scan explicitly selected fixture directories in bounded, resumable batches and save metadata, skip reasons and directory reconciliation markers in SQLite. Use `scan -d PATH` for a foreground scan, or `daemon --experimental-scan` for configured roots; ordinary `daemon` stays idle. Durable dispatch cadence, a daily batch cap, child-entry pacing and WAL backpressure are enforced; saved largest-file and selected-directory size reports and review-required `node_modules` candidates are available. Explicit full-file hashing requires separate exact consent and one bounded invocation at a time. Process CPU observations and cooperative dispatch backoff are live; full CPU/I/O/power quotas, cleanup and service installation are not implemented. Nothing runs in the background when you clone, build or initialize this repository.
+**Status: experimental read-only inventory and explicit hashing.** The worker can scan explicitly selected fixture directories in bounded, resumable batches and save metadata, skip reasons and directory reconciliation markers in SQLite. Use `scan -d PATH` for a foreground scan, or `daemon --experimental-scan` for configured roots; ordinary `daemon` stays idle. Durable dispatch cadence, a daily batch cap, child-entry pacing and WAL backpressure are enforced; saved largest-file and selected-directory size reports and review-required `node_modules` candidates are available. Explicit full-file hashing requires separate exact consent and one bounded invocation at a time. Process CPU observations and cooperative dispatch backoff are live; exact idle-only service descriptors can be installed and inspected. Full CPU/I/O/power quotas, supervisor runtime controls and cleanup remain pending. Nothing runs in the background when you clone, build or initialize this repository.
 
 For humans and AI: readable output by default, versioned JSON with `--json`, and `rydd capabilities --json` for discovery. Live status also reports scanner metadata API counters to help inspect background work. See the [CLI contract](docs/cli.md).
 
@@ -437,7 +437,18 @@ rydd --data-dir /path/to/private/state service preview --executable /absolute/pa
 
 This proposes an idle-only launchd or systemd user descriptor. It binds the exact executable, configuration, state and control-runtime paths. It renders plain `daemon`, with no scanner. It opens no configuration, state or executable contents, writes no descriptor and invokes no service manager. The output declares a supported profile; installed support and future executable identity are unverified.
 
-Installing a descriptor in a login service directory can affect future logins. Installation, start, status, stop and uninstall adapters remain separate work. The worker would update normal root/recovery bookkeeping when started. Scheduling hints supplement resource pacing; they do not prove effective CPU/I/O priority or hourly limits. See the [service preview contract](docs/cli.md#user-service-descriptor-preview).
+Installing a descriptor in a login service directory can affect future logins. Exact artifact installation/status is available below; start, stop and uninstall adapters remain separate work. The worker would update normal root/recovery bookkeeping when started. Scheduling hints supplement resource pacing; they do not prove effective CPU/I/O priority or hourly limits. See the [service preview contract](docs/cli.md#user-service-descriptor-preview).
+
+## Install or inspect an idle service descriptor
+
+```sh
+rydd service install --executable /absolute/path/to/rydd
+rydd service status --executable /absolute/path/to/rydd
+```
+
+Use the same executable and global data directory on every invocation. These commands publish or inspect one exact descriptor. They preserve user configuration, inventory/history and the selected executable. Exact retries are unchanged; foreign/different artifacts and unsafe paths refuse. A failed reply can follow publication: inspect status before retrying.
+
+macOS publication can start the idle worker at a future login. Linux install checks current manager directory visibility but does not enable/start the unit. No scanning command is issued. Artifact presence and manager visibility do not prove runtime readiness. Connecting to Linux’s selected local broker socket can activate the broker; destination activation is suppressed. Native installed-manager/login/logout acceptance and explicit runtime controls remain open. See [installation/status scope](docs/cli.md#exact-user-service-artifact-installation-and-status).
 
 ## Try the experimental scanner
 

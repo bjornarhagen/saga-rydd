@@ -13,7 +13,6 @@ import (
 
 	"github.com/bjornarhagen/saga-rydd/internal/config"
 	"github.com/bjornarhagen/saga-rydd/internal/inventory"
-	"github.com/bjornarhagen/saga-rydd/internal/service"
 	"github.com/bjornarhagen/saga-rydd/internal/state"
 	"github.com/bjornarhagen/saga-rydd/internal/worker"
 )
@@ -33,6 +32,8 @@ Commands:
   status [--json]                                       Read saved state summary
   daemon [--experimental-scan]                         Run the worker (scanning opt-in for fixtures)
   service preview --executable ABSOLUTE_PATH [--json]  Preview an idle-only service descriptor
+  service install/status --executable ABSOLUTE_PATH [--directory ABSOLUTE_PATH] [--json]
+                                                     Publish or inspect the exact idle descriptor
   pause / resume                                       Persistently pause or resume work
   stop                                                 Request graceful worker shutdown
   ignore --preview -d ROOT [--min-age-days N] FINDING_ID [--json]
@@ -141,13 +142,16 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 	}
 	switch remaining[0] {
 	case "service":
-		var descriptor service.Descriptor
-		descriptor, err = servicePreview(ctx, remaining[1:], paths)
+		var serviceResult any
+		serviceResult, err = dispatchService(ctx, remaining[1:], paths)
 		if err == nil {
-			err = printServicePreview(out, descriptor)
+			err = printServiceResult(out, serviceResult)
 		}
 		if err == nil && ctx.Err() != nil {
-			err = fmt.Errorf("service preview reply was canceled; no service or state was changed: %w", ctx.Err())
+			err = ctx.Err()
+		}
+		if err != nil && serviceResult != nil {
+			fmt.Fprintln(errOut, serviceReplyMessage(serviceResult))
 		}
 	case "docker":
 		var r any
