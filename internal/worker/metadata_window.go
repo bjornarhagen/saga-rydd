@@ -53,6 +53,10 @@ func minTime(a, b time.Time) time.Time {
 }
 
 func (w *metadataWindow) permit(ctx context.Context, kind inventory.APICallKind) error {
+	return w.permitAt(ctx, kind, w.wallNow().UTC(), w.elapsedNow())
+}
+
+func (w *metadataWindow) permitAt(ctx context.Context, kind inventory.APICallKind, wall, elapsed time.Time) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if ctx == nil {
@@ -67,22 +71,47 @@ func (w *metadataWindow) permit(ctx context.Context, kind inventory.APICallKind)
 	default:
 		return state.ErrMetadataInvalid
 	}
-	if w.reservation.Allowance < 1 || w.reservation.Allowance > state.MetadataAllowanceLimit {
-		return state.ErrMetadataInvalid
-	}
-	wall := w.wallNow().UTC()
-	if wall.Before(w.highWater) {
-		return errMetadataRollback
-	}
-	w.highWater = wall
-	if !wall.Before(w.wallDeadline) || !wall.Before(w.reservation.ExpiresAt) || !w.elapsedNow().Before(w.deadline) {
-		return errMetadataExpired
+	if _, err := w.fenceLocked(ctx, wall, elapsed); err != nil {
+		return err
 	}
 	if w.observed >= w.reservation.Allowance {
 		return errMetadataExhausted
 	}
 	w.observed++ // Count admission immediately before the scanner API attempt.
 	return nil
+}
+
+// A pacing wait or capacity check observes clocks without admitting an API.
+// Retain its highest wall observation for settlement, including refused waits.
+func (w *metadataWindow) fenceAt(ctx context.Context, wall, elapsed time.Time) (time.Duration, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.fenceLocked(ctx, wall, elapsed)
+}
+
+func (w *metadataWindow) fenceLocked(ctx context.Context, wall, elapsed time.Time) (time.Duration, error) {
+	if ctx == nil || w.reservation.Allowance < 1 || w.reservation.Allowance > state.MetadataAllowanceLimit {
+		return 0, state.ErrMetadataInvalid
+	}
+	wall = wall.Round(0).UTC()
+	rollback := wall.Before(w.highWater)
+	if wall.After(w.highWater) {
+		w.highWater = wall
+	}
+	if err := context.Cause(ctx); err != nil {
+		return 0, errors.Join(ctx.Err(), err)
+	}
+	if rollback {
+		return 0, errMetadataRollback
+	}
+	remaining := min(w.wallDeadline.Sub(wall), w.reservation.ExpiresAt.Sub(wall), w.deadline.Sub(elapsed))
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining = min(remaining, time.Until(deadline))
+	}
+	if remaining <= 0 {
+		return 0, errMetadataExpired
+	}
+	return remaining, nil
 }
 
 func (w *metadataWindow) usage() (int64, time.Time) {

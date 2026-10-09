@@ -103,6 +103,14 @@ Each observation uses at most four fixed-name no-follow metadata calls, comparin
 
 The two-second worker deadline is cooperative. A metadata call already entered can delay controls beyond it. This is a source admission threshold, not a hard disk-space ceiling: startup, migration, recovery, already admitted writes, other stores and physical allocation are outside its scope. Maintenance can free reusable SQLite pages without shrinking DB/WAL lengths. A root with unfinished scan jobs cannot necessarily perform maintenance or resume without owner action. No history purge, VACUUM or automatic file removal is included.
 
+## Optional scanner API pacing (P1-06b9)
+
+The zero-disabled `scan.api_attempts_per_second` setting adds a worker-lifetime, non-burst clock at the operation-local API permit boundary. Separate wall and elapsed high-waters span construction, Next and root switches. Non-consuming wait/capacity checks preserve wall observations for settlement without inventing admitted usage. Status reads only four cached process-local scalars; no timer or extra goroutine probes idle sources.
+
+Pure admission uses the bounded optional path profile and pessimistic call counts: 32,794 for setup, one worst-case directory child and full validation; 33,556 for 128 children. Construction adds its separate allowance when needed. Nominal spacing plus one entry spacing must fit half the configured work window. An insufficient profile blocks source without state/power sampling, reservation, claim or a source retry timer. Suppress its source due before comparing future generic-job timers. Runtime canonical-profile refusal retains definite charges and blocks further source attempts in the current run. Existing controls and eligible saved-only/generic work keep their own gates.
+
+Before consuming a pending name, reserve worst-case child and final-validation capacity. Ordinary yield keeps unread names and performs the existing full tail validation; errors discard tentative evidence. Fixed full allowances remain charged and entered kernel calls remain cooperative. Default/manual/hash paths and schemas are unchanged. See the [CLI fields and limits](cli.md#optional-scanner-api-pacing). Default tuning, physical I/O, representative resources and soak remain open.
+
 ## Next integrations
 
 - **P1-05 implemented:** `--experimental-scan` registers metadata inventory, seeds root jobs and commits bounded batches atomically. Schema v3 adds directory watermarks and skip reasons. See [inventory design](inventory.md). Keep experimental activation explicit until budget enforcement is verified.

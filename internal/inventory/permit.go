@@ -51,8 +51,10 @@ func StartupAPIAttemptAllowance(roots, excludes, privatePaths []string) (int64, 
 }
 
 type apiGuard struct {
-	ctx    context.Context
-	permit APIPermit
+	ctx      context.Context
+	permit   APIPermit
+	paced    bool
+	capacity APIEntryCapacity
 }
 
 func deniedAPI(err error) error {

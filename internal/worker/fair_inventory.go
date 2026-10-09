@@ -15,7 +15,7 @@ type fairInventoryPlan struct {
 	generic     bool
 }
 
-func nextFairInventoryPlan(ctx context.Context, w *state.Store, roots state.FairInventoryRoots, genericKinds []string, now time.Time, metadata state.MetadataBudget, startup int64, sourceEnabled bool) (fairInventoryPlan, error) {
+func nextFairInventoryPlan(ctx context.Context, w *state.Store, roots state.FairInventoryRoots, genericKinds []string, now time.Time, metadata state.MetadataBudget, startup int64, sourceEnabled bool, permanentSourceReason ...string) (fairInventoryPlan, error) {
 	allowed, reason, err := metadataReadiness(metadata, now, startup)
 	if err != nil {
 		return fairInventoryPlan{}, err
@@ -40,6 +40,14 @@ func nextFairInventoryPlan(ctx context.Context, w *state.Store, roots state.Fair
 		}
 		if plan.due.Before(now) {
 			plan.due = now
+		}
+	}
+	// A static pacing refusal has no source retry timer. Suppress its due
+	// before comparing generic work, so a future generic job keeps its timer.
+	if !sourceEnabled && plan.schedule.Turn == nil && len(permanentSourceReason) != 0 && permanentSourceReason[0] != "" {
+		plan.due = time.Time{}
+		if !plan.schedule.NextSourceDue.IsZero() {
+			plan.waitReason = permanentSourceReason[0]
 		}
 	}
 	if len(genericKinds) > 0 {

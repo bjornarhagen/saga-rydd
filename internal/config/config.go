@@ -71,6 +71,7 @@ type Scan struct {
 	WorkSeconds            int   `toml:"work_seconds"`
 	IntervalSeconds        int   `toml:"interval_seconds"`
 	MetadataPerSecond      int   `toml:"metadata_per_second"`
+	APIAttemptsPerSecond   int   `toml:"api_attempts_per_second"`
 	MetadataAttemptsPerDay int64 `toml:"metadata_attempts_per_day"`
 	ReadBytesPerSecond     int64 `toml:"read_bytes_per_second"`
 	ReadBytesPerDay        int64 `toml:"read_bytes_per_day"`
@@ -146,6 +147,9 @@ func (c *Config) Validate(home string) error {
 	}
 	if s.MetadataPerSecond < 1 || s.MetadataPerSecond > 100000 {
 		return errors.New("metadata_per_second must be 1–100000")
+	}
+	if s.APIAttemptsPerSecond < 0 || s.APIAttemptsPerSecond > 100000 {
+		return errors.New("api_attempts_per_second must be 0–100000 (0 disables API pacing)")
 	}
 	if s.MetadataAttemptsPerDay < 1 || s.MetadataAttemptsPerDay > 1<<50 {
 		return errors.New("metadata_attempts_per_day must be 1–1125899906842624")

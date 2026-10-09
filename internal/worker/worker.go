@@ -37,6 +37,7 @@ type Snapshot struct {
 	Power            *PowerPolicySnapshot          `json:"power,omitempty"`
 	InventoryState   *InventoryStatePolicySnapshot `json:"inventory_state,omitempty"`
 	AdaptiveRevisits *AdaptiveRevisitSnapshot      `json:"adaptive_revisits,omitempty"`
+	APIPacing        *APIPacingSnapshot            `json:"api_pacing,omitempty"`
 	Metadata         *state.MetadataBudget         `json:"metadata,omitempty"`
 	Priority         *ThreadPriorityObservation    `json:"thread_priority,omitempty"`
 }
@@ -78,8 +79,10 @@ type Options struct {
 	// Production revisits root listings every 24 hours; only fixtures shorten it.
 	revisitInterval time.Duration
 	// Source hooks are private, for bounded permit/failure lifecycle fixtures.
-	scannerNew  func(context.Context, []string, []string, []string, inventory.APIPermit, ...inventory.Option) (*inventory.Scanner, error)
-	scannerNext func(context.Context, *inventory.Scanner, state.Job, inventory.APIPermit) (state.ScanBatch, error)
+	scannerNew       func(context.Context, []string, []string, []string, inventory.APIPermit, ...inventory.Option) (*inventory.Scanner, error)
+	scannerNext      func(context.Context, *inventory.Scanner, state.Job, inventory.APIPermit) (state.ScanBatch, error)
+	scannerPacedNew  func(context.Context, []string, []string, []string, inventory.APIPermit, ...inventory.Option) (*inventory.Scanner, error)
+	scannerPacedNext func(context.Context, *inventory.Scanner, state.Job, inventory.APIPermit, inventory.APIEntryCapacity) (state.ScanBatch, error)
 }
 type outcome struct {
 	result    Result
@@ -175,6 +178,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 	var revisitMore bool
 	var fairRoots state.FairInventoryRoots
 	var adaptive adaptiveRevisitPolicy
+	var apiPacer *sourceAPIPacer
 	scannerNew := options.scannerNew
 	if scannerNew == nil {
 		scannerNew = inventory.NewPermitted
@@ -194,6 +198,16 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 		startupAllowance, err = inventory.StartupAPIAttemptAllowance(cfg.Roots, cfg.Excludes, privatePaths)
 		if err != nil {
 			return err
+		}
+		if cfg.Scan.APIAttemptsPerSecond != 0 {
+			bounds, err := inventory.APIPacingWorkBounds(cfg.Roots, cfg.Excludes, privatePaths)
+			if err != nil {
+				return err
+			}
+			apiPacer, err = newSourceAPIPacer(cfg.Scan.APIAttemptsPerSecond, work, cfg.Scan.MetadataPerSecond, bounds, wallNow, elapsedNow)
+			if err != nil {
+				return err
+			}
 		}
 		if _, exists := handlers[state.ScanKind]; exists {
 			return errors.New("inventory handler already registered")
@@ -300,6 +314,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 			live.Power = powerState.snapshot()
 			live.InventoryState = inventoryState.snapshot()
 			live.AdaptiveRevisits = adaptive.snapshot()
+			live.APIPacing = apiPacer.snapshot()
 		}
 		live.Priority = priorityObservation.Load()
 		observation := cpu.observation
@@ -476,7 +491,8 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 							neededStartup = startupAllowance
 						}
 						planCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-						plan, err = nextFairInventoryPlan(planCtx, w, fairRoots, genericKinds, now, *live.Metadata, neededStartup, powerState.remaining(now, elapsed) == 0 && inventoryState.remaining(now, elapsed) == 0)
+						apiReady := apiPacer.capacity(source.value.Load() == nil)
+						plan, err = nextFairInventoryPlan(planCtx, w, fairRoots, genericKinds, now, *live.Metadata, neededStartup, apiReady && powerState.remaining(now, elapsed) == 0 && inventoryState.remaining(now, elapsed) == 0, apiPacer.blockedReason(apiReady))
 						cancel()
 						due, live.WaitReason = plan.due, plan.waitReason
 						if err == nil {
@@ -544,7 +560,10 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						timer = time.NewTimer(wait.duration)
 						tick = timer.C
 					} else {
-						live.WaitReason = "idle"
+						live.WaitReason = plan.waitReason
+						if live.WaitReason == "" {
+							live.WaitReason = "idle"
+						}
 					}
 				}
 			}
@@ -697,7 +716,8 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 					neededStartup = startupAllowance
 				}
 				planCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-				plan, planErr := nextFairInventoryPlan(planCtx, w, fairRoots, genericKinds, now, *live.Metadata, neededStartup, true)
+				apiReady := apiPacer.capacity(source.value.Load() == nil)
+				plan, planErr := nextFairInventoryPlan(planCtx, w, fairRoots, genericKinds, now, *live.Metadata, neededStartup, apiReady, apiPacer.blockedReason(apiReady))
 				cancel()
 				if planErr != nil {
 					if ctx.Err() != nil {
@@ -744,7 +764,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 					refreshMetrics()
 				}
 				planCtx, cancel = context.WithTimeout(ctx, 2*time.Second)
-				plan, planErr = nextFairInventoryPlan(planCtx, w, fairRoots, genericKinds, wallNow(), *live.Metadata, neededStartup, allowSource)
+				plan, planErr = nextFairInventoryPlan(planCtx, w, fairRoots, genericKinds, wallNow(), *live.Metadata, neededStartup, allowSource, apiPacer.blockedReason(apiReady))
 				cancel()
 				if planErr != nil {
 					if ctx.Err() != nil {
@@ -979,7 +999,17 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 				handler = func(ctx context.Context, j state.Job) (Result, error) {
 					scanner := source.value.Load()
 					if scanner == nil {
-						created, err := scannerNew(ctx, cfg.Roots, cfg.Excludes, privatePaths, startupWindow.permit, inventory.WithEntryRate(cfg.Scan.MetadataPerSecond), inventory.WithRootStreams(state.MaxFairInventoryRoots))
+						var created *inventory.Scanner
+						var err error
+						if apiPacer == nil {
+							created, err = scannerNew(ctx, cfg.Roots, cfg.Excludes, privatePaths, startupWindow.permit, inventory.WithEntryRate(cfg.Scan.MetadataPerSecond), inventory.WithRootStreams(state.MaxFairInventoryRoots))
+						} else {
+							factory := options.scannerPacedNew
+							if factory == nil {
+								factory = inventory.NewPermittedPaced
+							}
+							created, err = factory(ctx, cfg.Roots, cfg.Excludes, privatePaths, apiPacer.permit(startupWindow), inventory.WithEntryRate(cfg.Scan.MetadataPerSecond), inventory.WithRootStreams(state.MaxFairInventoryRoots))
+						}
 						if err != nil {
 							return Result{}, err
 						}
@@ -989,7 +1019,15 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						// both reservations. Fence Next before its first call.
 						nextWindow.inheritHighWater(startupWindow)
 					}
-					batch, err := scannerNext(ctx, scanner, j, nextWindow.permit)
+					var batch state.ScanBatch
+					var err error
+					if apiPacer == nil {
+						batch, err = scannerNext(ctx, scanner, j, nextWindow.permit)
+					} else if options.scannerPacedNext != nil {
+						batch, err = options.scannerPacedNext(ctx, scanner, j, apiPacer.permit(nextWindow), apiPacer.entryCapacity(nextWindow))
+					} else {
+						batch, err = scanner.NextPermittedPaced(ctx, j, apiPacer.permit(nextWindow), apiPacer.entryCapacity(nextWindow))
+					}
 					if err != nil {
 						return Result{}, err
 					}
@@ -1013,6 +1051,9 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 		case result := <-done:
 			cancelTask()
 			cancelTask = nil
+			if apiPacer != nil && errors.Is(result.err, inventory.ErrAPIPacingProfile) {
+				apiPacer.blockProfile()
+			}
 			// Claiming can take time on a busy disk. Pace from actual handler
 			// execution so that database latency never shortens the interval.
 			nextAllowed = result.startedAt.Add(interval)

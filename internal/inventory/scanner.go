@@ -105,6 +105,9 @@ func newScanner(roots, excludes, privatePaths []string, guard *apiGuard, options
 			}
 			continue
 		} // Unavailable roots become saved job errors.
+		if err := guard.pacedRoot(canonical); err != nil {
+			return nil, err
+		}
 		if err := guard.before(s, APIStat); err != nil {
 			return nil, err
 		}
@@ -289,6 +292,9 @@ func (s *Scanner) openGuarded(ctx context.Context, guard *apiGuard, j state.Job)
 	if err != nil {
 		return nil, "", "", err
 	}
+	if err := guard.pacedRoot(canonical); err != nil {
+		return nil, "", "", err
+	}
 	if s.excluded(root) || s.excluded(canonical) || s.excluded(filepath.Join(root, path)) || s.excluded(filepath.Join(canonical, path)) {
 		return nil, "", "", errors.New("directory is excluded or protected")
 	}
@@ -458,6 +464,18 @@ func (s *Scanner) next(ctx context.Context, j state.Job, guard *apiGuard) (state
 				break
 			}
 			return fault(err)
+		}
+		if guard != nil && guard.capacity != nil {
+			fits, err := guard.capacity(ctx, pacedAPIFinalValidation+pacedAPIChild)
+			if err != nil {
+				return fault(deniedAPI(err))
+			}
+			if err := guard.check(s); err != nil {
+				return fault(err)
+			}
+			if !fits {
+				break
+			}
 		}
 		name := stream.pending[0]
 		if name == "." || name == ".." || strings.ContainsRune(name, '/') {

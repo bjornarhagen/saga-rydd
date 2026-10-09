@@ -119,6 +119,18 @@ Throttle waits honor pause/stop cancellation. Each timed scan pass reserves half
 
 This prevents pacing alone from discarding every unfinished batch at low rates. It does not guarantee progress if kernel calls or path revalidation repeatedly exceed the work deadline, nor across continual cancellation/restarts. Resource and huge-directory acceptance gates remain open; use disposable fixtures while scanning is experimental.
 
+## Optional scanner API pacing
+
+`scan.api_attempts_per_second` defaults to zero, which disables this optional experimental-background profile. Positive settings accept 1–100,000 attempts/s. Stop the worker before editing configuration and restart it to apply the setting. It does not activate scanning. Manual scans, hashing and database work retain their separate contracts.
+
+One process-local pacer spaces all six guarded scanner API kinds across construction, scan steps and root switches. Idle time supplies no burst credits. An API attempt can perform several syscalls; the rate is not a physical-I/O limit or a whole-process quota. Existing child-entry pacing, durable full reservations and every other source admission gate still apply. No attempt is counted merely for waiting.
+
+The optional profile supports canonical absolute roots and relative job paths of at most 4,096 bytes each. Before any state/power sample, dispatch reservation or source claim, conservative worst-case construction and one-entry spacing must fit half the work window, including one entry spacing. The remaining half provides headroom, not a kernel-latency guarantee. A low rate can therefore block even a shallow tree. `api_capacity_blocked` has no automatic source retry timer; inspect configuration rather than resetting budgets. An unsupported canonical path discovered during guarded resolution yields `api_profile_blocked` for the current run and retains the settled charge. Eligible saved-only maintenance, generic jobs and controls remain available.
+
+At each pending child, a non-consuming check reserves time for the worst-case child plus full final validation. Ordinary rate yield preserves unread names and can publish a qualified partial batch after validation. Cancellation, expired allowance, clock rollback or validation failure discards tentative evidence. Wait-time high-water observations remain in settlement; reservations are never refunded. Completion is not guaranteed for slow calls, mutation or repeated interruption.
+
+Enabled experimental live status includes optional `worker.live.api_pacing` with `rate_per_second`, `capacity_ready`, `wait_ns` and `waiting`. These are cached process-local scalars; status performs no source probe. Wait duration resets with the worker and saturates at the unsigned 64-bit ceiling. Capacity readiness is conservative configuration planning, not current permission. Default/nonexperimental status omits this field. Full metadata-rate capability remains false. Capabilities expose `scanner_api_pacing: true` and its bounded contract; errors use `api_pacing_invalid` or `api_pacing_unsupported`, with canceled status taking precedence.
+
 ## Experimental source-thread priority requests
 
 Before experimental source construction or a scan step, its handler locks one OS thread and requests a native scheduling setting. Linux preserves an existing nice value of at least ten, otherwise requests ten, and separately requests I/O idle class. macOS requests public thread-background status. The thread stays locked until its goroutine exits and is then terminated; it does not return changed scheduling state to Go's pool. Newly created threads can inherit settings. Other threads and children remain unexamined.

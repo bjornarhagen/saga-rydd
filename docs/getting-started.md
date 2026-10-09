@@ -93,6 +93,7 @@ Start with the same data directory, folder and IDs used by the original command.
 | CPU recovery or backoff delays work | Inspect saved CPU feedback. Writer recovery retains uncertain charges and a cooldown. Status does not recover work. |
 | WAL backpressure delays work | Finish long-lived readers when appropriate. The worker retries under its existing gates. A large reusable WAL is not evidence that history must be deleted. |
 | State threshold delays work | Inspect cached DB/WAL lengths and availability. Pending work remains saved. Restart is not a remedy for the threshold; freed SQLite pages may not shrink file lengths. |
+| Optional API pacing blocks source work | Inspect the rate, work window and blocked reason. Low rates can fail conservative capacity planning; unsupported canonical paths block the current run. Stop before changing configuration. Pending work and charges remain saved. |
 | Power evidence is unknown | Read the qualified status. Unknown evidence retains fixed pacing; it does not establish external power. macOS performs no provider probe. |
 | Clock rollback is refused | Check the machine clock and saved high-water evidence. Preserve the ledger. Do not reset timestamps or budgets to bypass the refusal. |
 | Configuration changed during startup | Reload the intended configuration and start a new worker after the previous writer exits. A worker cannot adopt a mixture of old and new settings. |
