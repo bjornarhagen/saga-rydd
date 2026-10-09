@@ -31,3 +31,7 @@ Native `ProcessState`/`getrusage` measurements report worker user/system CPU and
 State/WAL peaks are sampled lower bounds. Scanner counters count declared API attempts, not physical disk operations. Physical-read bytes and system wakeups remain null/unknown. The file-body digest checks unchanged generated contents; those deliberate harness reads are separate from scanner activity.
 
 No hourly extrapolation, representative-machine tuning, physical power acceptance or soak acceptance follows from a finite run. The full plan still requires measured hourly targets and a representative native macOS/Linux soak.
+
+## Recorded native observations
+
+The [generated macOS one-hour observation](results/README.md) records exact source and executable digests, worker and observer costs, qualified state/API/latency measurements, and open acceptance gates. It is a finite observation of the stated source, not a default-tuning or representative-soak result.

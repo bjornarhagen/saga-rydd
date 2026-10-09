@@ -1,0 +1,123 @@
+{
+  "contract": "generated_background_resources_summary_v1",
+  "date_utc": "2026-10-09",
+  "source_commit": "e8df4a68005a9a4b5fe5e7161b397b887f1c58b1",
+  "source_fingerprints_verified": 388,
+  "cli_sha256": "95df17e795899655b9d2b00a2ce925f07d747c7c388b3043632b3607cd07df52",
+  "harness_sha256": "daa873c745674f084490442ca9ba71057cc6498d29d77570acdc9ab28a23c61c",
+  "raw_result_sha256": "5cc063060274622f28a25b75d06f1b2dc4da15ae6a315aaaf14ac648ba3229ba",
+  "platform": "darwin/arm64",
+  "profile": "defaults_no_power",
+  "requested_seconds": 3600,
+  "generated_roots": 2,
+  "generated_files": 512,
+  "bytes_per_generated_file": 512,
+  "configured_scan": {
+    "interval_seconds": 300,
+    "max_scan_chunks_per_day": 288,
+    "max_state_bytes": 1073741824,
+    "metadata_attempts_per_day": 20000000,
+    "metadata_per_second": 100,
+    "pause_on_battery": false,
+    "read_bytes_per_day": 5368709120,
+    "read_bytes_per_second": 5242880,
+    "work_seconds": 30
+  },
+  "power_probes_disabled": true,
+  "worker_full_lifetime_usage": {
+    "user_cpu_ns": 542387000,
+    "system_cpu_ns": 604932000,
+    "peak_rss_bytes": 25427968,
+    "launch_to_wait_return_elapsed_ns": 3600022631708
+  },
+  "worker_mean_cpu_percent_of_one_core": 0.03186977187017472,
+  "observer_cli_processes": 727,
+  "observer_cli_user_cpu_ns": 6838180000,
+  "observer_cli_system_cpu_ns": 5496296000,
+  "parent_fixture_cpu_ns": null,
+  "sample_count": 720,
+  "sampling_interval_ns": 5000000000,
+  "last_sample_elapsed_ns": 3600038668333,
+  "last_sample_after_worker_reap": true,
+  "command_latencies": {
+    "pause": {
+      "count": 1,
+      "total_ns": 25854167,
+      "max_ns": 25854167
+    },
+    "report": {
+      "count": 1,
+      "total_ns": 12031125,
+      "max_ns": 12031125
+    },
+    "resume": {
+      "count": 1,
+      "total_ns": 12075292,
+      "max_ns": 12075292
+    },
+    "state-init": {
+      "count": 1,
+      "total_ns": 643955458,
+      "max_ns": 643955458
+    },
+    "status": {
+      "count": 722,
+      "total_ns": 15933727991,
+      "max_ns": 57827417
+    },
+    "stop": {
+      "count": 1,
+      "total_ns": 16958125,
+      "max_ns": 16958125
+    }
+  },
+  "sampled_peak_database_bytes": 294912,
+  "sampled_peak_wal_bytes": 984712,
+  "sampled_peaks_are_lower_bounds": true,
+  "scanner_api_observed_attempts": 924,
+  "scanner_metadata_total_charges": {
+    "reserved_attempts": 393250,
+    "observed_attempts": 924,
+    "unknown_reserved_attempts": 0,
+    "outstanding_reserved_attempts": 0,
+    "known_unused_reserved_attempts": 392326
+  },
+  "reserved_dispatch_chunks": 12,
+  "final_saved_summary": {
+    "schema": 12,
+    "sqlite_version": "3.53.4",
+    "enabled_roots": 2,
+    "entries": 514,
+    "pending_jobs": 2,
+    "running_jobs": 0,
+    "complete_directories": 2,
+    "directory_errors": 0,
+    "skipped_entries": 0,
+    "database_bytes": 294912,
+    "wal_bytes": 0,
+    "needs_backpressure": false
+  },
+  "generated_bodies_unchanged": true,
+  "paused_progress_unchanged": true,
+  "pause_exercised_after_inventory_drained": true,
+  "resume_acknowledged": true,
+  "worker_graceful_exit_reaped": true,
+  "physical_read_bytes": null,
+  "system_wakeups": null,
+  "hourly_target_accepted": false,
+  "physical_power_accepted": false,
+  "representative_soak_accepted": false,
+  "concurrent_development": true,
+  "limitations": [
+    "Generated flat folders and cached storage are not a representative workload.",
+    "Worker CPU and RSS exclude observer and parent fixture costs.",
+    "Five-second observer commands can perturb timing; concurrent development ran during this fixture.",
+    "Pause occurred after inventory drained; this is idle-pause evidence, not active-work stress.",
+    "Sampled database and WAL peaks are lower bounds; logical lengths are not physical allocation.",
+    "Scanner API attempts are not syscalls, physical reads or whole-process quotas.",
+    "Physical reads, wakeups, power transitions and parent fixture CPU were not measured.",
+    "The final saved-state sample follows worker reap and is outside its lifetime interval.",
+    "Configured read budgets are settings only; this metadata fixture does not validate their enforcement.",
+    "This e8 source observation does not measure subsequent adaptive, API pacing or compact-background changes."
+  ]
+}
