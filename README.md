@@ -356,6 +356,7 @@ This version records **review consent only**. It cannot execute cleanup. A futur
 
 - [PLAN.md](PLAN.md): architecture, safety requirements and acceptance gates.
 - [PROGRESS.md](PROGRESS.md): completed work, remaining tasks, validation evidence and the next handoff.
+- [Category acceptance](docs/category-acceptance.md): supported read-only profiles, their evidence and the gates still open.
 - [CONTRIBUTING.md](CONTRIBUTING.md): Docker development and native validation.
 - [AGENTS.md](AGENTS.md): working instructions for coding agents.
 - [SQLite decision](docs/decisions/001-sqlite-driver.md): reproducible driver comparison and resource measurements.

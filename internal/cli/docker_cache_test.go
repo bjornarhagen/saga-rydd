@@ -138,8 +138,16 @@ func TestDockerCacheCLIGeneratedProjectionUnknownFieldsAndOldScope(t *testing.T)
 	}
 	var out, stderr bytes.Buffer
 	code := emit(&out, &stderr, map[string]any{"api_version": APIVersion, "ok": true, "command": "docker", "report": r}, 0)
-	dockerCacheCLIEnvelope(t, code, out.String(), stderr.String())
-	if strings.Contains(out.String(), "discard-private") || strings.Contains(out.String(), "123456789") {
+	projected := dockerCacheCLIEnvelope(t, code, out.String(), stderr.String())
+	encoded, err := json.Marshal(projected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertDockerCLIProjectionSizes(t, encoded, "records")
+	if !strings.Contains(projected.Endpoint, "123456789") {
+		t.Fatal("generated cache endpoint lost legitimate numeric canary", projected.Endpoint)
+	}
+	if strings.Contains(out.String(), "discard-private") {
 		t.Fatal("discarded daemon fields leaked", out.String())
 	}
 	var human bytes.Buffer

@@ -23,6 +23,7 @@ import (
 )
 
 const dockerCLIInfoBody = `{"ID":"generated-cli-daemon","OSType":"linux","ServerVersion":"25.0.0","Labels":["discard-private-setting"]}`
+const dockerCLISocketName = "engine-123456789.sock"
 
 type dockerCLIEngine struct {
 	endpoint    string
@@ -38,7 +39,7 @@ func newDockerCLIEngine(t *testing.T, change func(int, http.ResponseWriter, *htt
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(filepath.Join(dir, "engine.sock")) > 90 {
+	if len(filepath.Join(dir, dockerCLISocketName)) > 90 {
 		if err := os.RemoveAll(dir); err != nil {
 			t.Fatal(err)
 		}
@@ -47,7 +48,7 @@ func newDockerCLIEngine(t *testing.T, change func(int, http.ResponseWriter, *htt
 			t.Fatal(err)
 		}
 	}
-	path := filepath.Join(dir, "engine.sock")
+	path := filepath.Join(dir, dockerCLISocketName)
 	listener, err := net.Listen("unix", path)
 	if err != nil {
 		_ = os.RemoveAll(dir)
@@ -116,6 +117,30 @@ func dockerCLIZeroReport(t *testing.T, r DockerMetadataReport, err, want error) 
 	t.Helper()
 	if err == nil || want != nil && !errors.Is(err, want) || !reflect.DeepEqual(r, DockerMetadataReport{}) {
 		t.Fatal("refusal returned positive partial metadata or lost error identity", r, err, want)
+	}
+}
+
+func assertDockerCLIProjectionSizes(t *testing.T, raw []byte, lists ...string) {
+	t.Helper()
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range lists {
+		var rows []map[string]json.RawMessage
+		if err := json.Unmarshal(fields[name], &rows); err != nil {
+			t.Fatal("invalid projected list", name, err)
+		}
+		for _, row := range rows {
+			if size, ok := row["size_bytes"]; !ok || !bytes.Equal(size, []byte("null")) {
+				t.Fatal("projected size must remain explicit null", name, string(raw))
+			}
+			for _, omitted := range []string{"Size", "SizeRw", "SizeRootFs"} {
+				if _, ok := row[omitted]; ok {
+					t.Fatal("unprojected daemon size field exposed", name, omitted, string(raw))
+				}
+			}
+		}
 	}
 }
 
@@ -209,7 +234,11 @@ func TestDockerMetadataCLIGeneratedEngineProjectionAndHumanScope(t *testing.T) {
 			t.Fatal("machine reply lost a metadata qualification", text, string(encoded))
 		}
 	}
-	for _, discarded := range []string{"discard-private-setting", "discard-image-label", "discard-command", "discard-mount", "123456789"} {
+	assertDockerCLIProjectionSizes(t, encoded, "images", "containers")
+	if !strings.Contains(envelope.Report.Endpoint, "123456789") {
+		t.Fatal("generated endpoint lost legitimate numeric canary", envelope.Report.Endpoint)
+	}
+	for _, discarded := range []string{"discard-private-setting", "discard-image-label", "discard-command", "discard-mount"} {
 		if strings.Contains(string(encoded), discarded) {
 			t.Fatal("unrelated daemon metadata leaked", discarded, string(encoded))
 		}

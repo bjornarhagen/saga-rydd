@@ -96,24 +96,53 @@ func TestDockerCacheDiscoverOneHeldConnectionSelectorAndSafeProjection(t *testin
 		t.Fatal("unknown observations became known", second)
 	}
 	cacheReportLimits(t, r)
-	b, err := json.Marshal(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, secret := range []string{"private generated", "discarded-", "generated-volume", "987654321", "Description", "Parents", "Labels", "Mountpoint"} {
-		if strings.Contains(string(b), secret) {
-			t.Fatalf("discarded field exposed: %s", b)
+	assertProjection := func(view CacheReport) {
+		t.Helper()
+		b, err := json.Marshal(view)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, secret := range []string{"private generated build command", "discarded-", "/private/generated-volume", `"Description":`, `"Parents":`, `"Labels":`, `"Mountpoint":`, `"Size":`} {
+			if strings.Contains(string(b), secret) {
+				t.Fatalf("discarded field exposed: %s", b)
+			}
+		}
+		var projection map[string]json.RawMessage
+		if err := json.Unmarshal(b, &projection); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"images", "containers", "volumes"} {
+			if _, ok := projection[name]; ok {
+				t.Fatal("unobserved scope exposed", name)
+			}
+		}
+		if string(projection["savings_bytes"]) != "null" {
+			t.Fatalf("savings became measured in JSON: %s", b)
+		}
+		var records []map[string]json.RawMessage
+		if err := json.Unmarshal(projection["records"], &records); err != nil || len(records) != 2 {
+			t.Fatalf("invalid record projection: %s (%v)", b, err)
+		}
+		keys := []string{"id", "type", "in_use", "shared", "created_at", "last_used_at", "usage_count", "size_bytes"}
+		for _, record := range records {
+			if len(record) != len(keys) || string(record["size_bytes"]) != "null" {
+				t.Fatalf("extra fields or reported size in cache record: %s", b)
+			}
+			for _, key := range keys {
+				if _, ok := record[key]; !ok {
+					t.Fatalf("missing projected record field %q: %s", key, b)
+				}
+			}
 		}
 	}
-	var projection map[string]json.RawMessage
-	if err := json.Unmarshal(b, &projection); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"images", "containers", "volumes"} {
-		if _, ok := projection[name]; ok {
-			t.Fatal("unobserved scope exposed", name)
-		}
-	}
+	assertProjection(r)
+	// Source size digits may legitimately occur in another projected field.
+	// They must not be confused with reported cache sizes.
+	numericOverlap := r
+	numericOverlap.Endpoint = "unix:///tmp/rydd-cache-987654321/engine.sock"
+	numericOverlap.StartedAt = time.Date(2026, 10, 9, 9, 9, 9, 987654321, time.UTC)
+	numericOverlap.CompletedAt = numericOverlap.StartedAt.Add(time.Second)
+	assertProjection(numericOverlap)
 }
 
 func TestDockerCacheDiscoverEmptyRequiresExplicitArrayAndCompleteIdentityChecks(t *testing.T) {

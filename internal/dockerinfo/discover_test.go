@@ -141,15 +141,50 @@ func TestDockerDiscoverOneHeldConnectionAndSafeProjection(t *testing.T) {
 	if !r.SequentialObservations || r.AtomicSnapshot || r.PhysicalLocalityVerified || r.NamespaceAuthenticated || r.SizesMeasured || r.CurrentStateVerified || r.CleanupApproved || r.Executable || r.Persisted {
 		t.Fatalf("authority flags: %#v", r)
 	}
-	b, err := json.Marshal(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, secret := range []string{"discard", "Labels", "Mounts", "Command", "SizeRw", "999"} {
-		if strings.Contains(string(b), secret) {
-			t.Fatalf("discarded metadata exposed: %s", b)
+	assertProjection := func(view Report) {
+		t.Helper()
+		b, err := json.Marshal(view)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, secret := range []string{"discard", `"Labels":`, `"Mounts":`, `"Command":`, `"Size":`, `"SizeRw":`} {
+			if strings.Contains(string(b), secret) {
+				t.Fatalf("discarded metadata exposed: %s", b)
+			}
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(b, &fields); err != nil {
+			t.Fatal(err)
+		}
+		if string(fields["savings_bytes"]) != "null" {
+			t.Fatalf("savings became measured in JSON: %s", b)
+		}
+		for kind, keys := range map[string][]string{
+			"images":     {"id", "tags", "created_at", "size_bytes"},
+			"containers": {"id", "names", "created_at", "state", "size_bytes"},
+		} {
+			var rows []map[string]json.RawMessage
+			if err := json.Unmarshal(fields[kind], &rows); err != nil || len(rows) != 1 {
+				t.Fatalf("invalid %s projection: %s (%v)", kind, b, err)
+			}
+			if len(rows[0]) != len(keys) || string(rows[0]["size_bytes"]) != "null" {
+				t.Fatalf("extra fields or measured size in %s: %s", kind, b)
+			}
+			for _, key := range keys {
+				if _, ok := rows[0][key]; !ok {
+					t.Fatalf("missing projected %s field %q: %s", kind, key, b)
+				}
+			}
 		}
 	}
+	assertProjection(r)
+	// A legitimate endpoint or observation time can contain the discarded
+	// source size's digits. Only the projected fields determine size exposure.
+	numericOverlap := r
+	numericOverlap.Endpoint = "unix:///tmp/rydd-docker-3152999449/engine.sock"
+	numericOverlap.StartedAt = time.Date(2026, 10, 9, 9, 9, 9, 999999999, time.UTC)
+	numericOverlap.CompletedAt = numericOverlap.StartedAt.Add(time.Second)
+	assertProjection(numericOverlap)
 }
 
 func TestDockerDiscoverRejectsRemoteOrNoncanonicalBeforeDial(t *testing.T) {
