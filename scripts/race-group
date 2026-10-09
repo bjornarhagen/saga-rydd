@@ -1,0 +1,100 @@
+#!/bin/bash
+# Partition only this main module; nested modules retain their separate gates.
+set -euo pipefail
+export LC_ALL=C
+
+if [ "$#" -ne 1 ]; then
+    echo 'Usage: scripts/race-group cli|inventory|state|worker|supporting|census' >&2
+    exit 2
+fi
+group=$1
+case "$group" in cli|inventory|state|worker|supporting|census) ;; *)
+    echo 'Unknown native race group' >&2
+    exit 2
+    ;;
+esac
+
+repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$repo_dir"
+module=github.com/bjornarhagen/saga-rydd
+listing=$(mktemp "${TMPDIR:-/tmp}/rydd-race-packages.XXXXXX")
+trap 'rm -f -- "$listing"' EXIT
+if ! go list ./... > "$listing"; then
+    echo 'Main-module package discovery failed' >&2
+    exit 1
+fi
+# Keep the forwarded census and shell allocations finite, including corrupt
+# discovery output. Go itself remains trusted and bounded by the CI job limit.
+bytes=$(wc -c < "$listing")
+if [ "$bytes" -gt 32832 ] || [ "$bytes" -eq 0 ] || grep -a -q '[^A-Za-z0-9._/-]' "$listing"; then
+    echo 'Main-module package census has invalid bytes or bounds' >&2
+    exit 1
+fi
+packages=()
+package_count=0
+selected=()
+seen_cli=0
+seen_inventory=0
+seen_state=0
+seen_worker=0
+supporting=0
+for_path_group() {
+    case "$1" in
+        "$module/internal/cli") path_group=cli ;;
+        "$module/internal/inventory") path_group=inventory ;;
+        "$module/internal/state") path_group=state ;;
+        "$module/internal/worker") path_group=worker ;;
+        *) path_group=supporting ;;
+    esac
+}
+while IFS= read -r package || [ -n "$package" ]; do
+    if [ "$package_count" -ge 64 ] || [ "${#package}" -eq 0 ] || [ "${#package}" -gt 512 ]; then
+        echo 'Main-module package census exceeds its path bounds' >&2
+        exit 1
+    fi
+    case "$package" in "$module"|"$module/"*) ;; *)
+        echo 'Main-module package census contains a foreign path' >&2
+        exit 1
+        ;;
+    esac
+    case "/$package/" in *'//'*|*'/./'*|*'/../'*)
+        echo 'Main-module package census contains an invalid segment' >&2
+        exit 1
+        ;;
+    esac
+    if [ "$package_count" -gt 0 ]; then
+        for previous in "${packages[@]}"; do
+            if [ "$previous" = "$package" ]; then
+                echo 'Main-module package census repeats a path' >&2
+                exit 1
+            fi
+        done
+    fi
+    packages+=("$package")
+    package_count=$((package_count + 1))
+    for_path_group "$package"
+    case "$path_group" in
+        cli) seen_cli=1 ;;
+        inventory) seen_inventory=1 ;;
+        state) seen_state=1 ;;
+        worker) seen_worker=1 ;;
+        supporting) supporting=$((supporting + 1)) ;;
+    esac
+    if [ "$group" = "$path_group" ]; then selected+=("$package"); fi
+done < "$listing"
+if [ "$seen_cli$seen_inventory$seen_state$seen_worker" != 1111 ] || [ "$supporting" -eq 0 ]; then
+    echo 'Main-module package census is missing a required group' >&2
+    exit 1
+fi
+if [ "$group" = census ]; then
+    printf 'Validated main-module race coverage: %s packages\n' "$package_count"
+    for package in "${packages[@]}"; do
+        for_path_group "$package"
+        printf '%s\t%s\n' "$path_group" "$package"
+    done
+    exit 0
+fi
+# The group operand can never become a Go flag or a package expression.
+rm -f -- "$listing"
+trap - EXIT
+exec go test -p 1 -race -timeout=15m "${selected[@]}"

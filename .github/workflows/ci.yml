@@ -56,7 +56,8 @@ jobs:
           cargo_tool_bin="$cargo_tool_root/toolchains/stable-$cargo_tool_triple/bin"
           RYDD_TEST_CARGO_TOOL=1 RYDD_TEST_CARGO_BIN="$cargo_tool_bin/cargo" RYDD_TEST_RUSTC_BIN="$cargo_tool_bin/rustc" \
             go test ./internal/state -run '^TestCargoBuildOutputToolProduced$' -count=1 -v
-      - run: ./scripts/tasks race
+      - name: Main-module race package coverage census
+        run: ./scripts/tasks race-census
       - name: Native no-overwrite rename and directory-sync probe
         run: go test ./experiments/rename -count=1 -v
       - name: Isolated Linux bind-mount boundary
@@ -103,6 +104,27 @@ jobs:
                   assert kernel_io['observed_samples'] == 0 and kernel_io['sampled_delta'] is None
               print(json.dumps({key: measured[key] for key in ('platform', 'profile', 'requested_seconds', 'worker_full_lifetime_usage', 'worker_kernel_io', 'sampled_peak_database_bytes', 'sampled_peak_wal_bytes', 'command_latencies', 'final_saved_summary')}))
           PY
+
+  native-race:
+    name: Native races (${{ matrix.os }} / ${{ matrix.group }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        group: [cli, inventory, state, worker, supporting]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+            experiments/sqlite/go.sum
+      - name: Exact main-module race group
+        run: ./scripts/tasks race-group '${{ matrix.group }}'
 
   candidate-package:
     name: Native candidate packages (${{ matrix.os }})

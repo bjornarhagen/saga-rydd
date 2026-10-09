@@ -92,7 +92,7 @@ The pinned [CGo-free SQLite driver](https://pkg.go.dev/modernc.org/sqlite@v1.59.
 | --- | --- | --- |
 | Source and CI provenance | Reviewed exact source, passing required jobs, recorded artifact hashes and native agreement | Build metadata is an observation, not authentication |
 | Supported platforms | Declared OS/kernel/filesystem minimums and native evidence for each supported OS/architecture | Cross-builds and finite hosted-runner fixtures are insufficient |
-| License | Explicit license selection and dependency/distribution review | [Pinned root notices](dependency-notices.md) are inventoried; project choice, embedded-code audit and notice packaging remain open |
+| License | Explicit license selection and dependency/distribution review | [Pinned root notices and a bounded four-target notice map](dependency-notices.md) are inventoried; project choice, complete retained-code provenance and notice packaging remain open |
 | Signing and distribution | Approved signing, trust and publication procedure | Distribution signing is unverified; no release publisher exists |
 | Installation and services | Reviewed installation/upgrade/recovery instructions and actual supported installed-manager acceptance | Generated artifact/manager fixtures do not prove owner installation |
 | Cleanup scope | Explicit product scope and any required source-action safety, consent and recovery acceptance | Cleanup is unavailable; see [ADR 003](decisions/003-source-namespace-boundary.md) |

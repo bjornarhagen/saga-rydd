@@ -13,18 +13,23 @@ case "$task" in
         (cd experiments/sqlite && go fmt ./...)
         ;;
     test) exec go test ./... "$@" ;;
-    race) exec go test -race -timeout=15m ./... "$@" ;;
+    race) exec go test -p 1 -race -timeout=15m ./... "$@" ;;
+    race-group) exec ./scripts/race-group "$@" ;;
+    race-census)
+        if [ "$#" -ne 0 ]; then echo "race-census accepts no operands" >&2; exit 2; fi
+        exec ./scripts/race-group census
+        ;;
     run) exec go run ./cmd/rydd "$@" ;;
     package) exec go run ./cmd/rydd-package "$@" ;;
     check)
-        unformatted=$(gofmt -l cmd internal experiments)
+        unformatted=$(gofmt -l cmd internal experiments scripts)
         if [ -n "$unformatted" ]; then
             echo 'Run ./scripts/dev fmt to format these files:' >&2
             printf '%s\n' "$unformatted" >&2
             exit 1
         fi
-        go vet ./...
-        go test ./...
+        go vet -p 1 ./...
+        go test -p 1 ./...
         mkdir -p dist
         go build -trimpath -o dist/rydd ./cmd/rydd
         ;;
@@ -50,7 +55,7 @@ case "$task" in
         ;;
     *)
         echo "Unknown task: $task" >&2
-        echo 'Tasks: check, fmt, test, race, run, package, build-all, sqlite-check, sqlite-bench' >&2
+        echo 'Tasks: check, fmt, test, race, race-group, race-census, run, package, build-all, sqlite-check, sqlite-bench' >&2
         exit 2
         ;;
 esac
