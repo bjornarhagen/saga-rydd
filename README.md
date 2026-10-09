@@ -8,7 +8,7 @@ Rydd will gradually discover developer clutter and duplicate files, explain what
 
 For humans and AI: readable output by default, versioned JSON with `--json`, and `rydd capabilities --json` for discovery. Live status also reports scanner metadata API counters to help inspect background work. See the [CLI contract](docs/cli.md).
 
-**Next milestone: saved build-output reports.** The generated owner read-only walkthrough and human-output corrections passed, including guided review and separately consented fresh hashing with historical comparisons. Exact finding dismissal and persistent exclusion controls are available. Linux clone acceptance remains open. Cleanup needs an operation that preserves the exact reviewed source object and ancestor scope; the reviewed rename operations do not provide that boundary. See [ADR 003](docs/decisions/003-source-namespace-boundary.md), the [current handoff](PROGRESS.md#current-state) and [trial lessons](docs/mvp-trial-results.md). Numbered phases are not a strict work order, and the full plan remains unfinished.
+**Next milestone: Docker and cache metadata reports.** The generated owner read-only walkthrough and human-output corrections passed, including guided review and separately consented fresh hashing with historical comparisons. Exact finding dismissal, persistent exclusion controls and saved Cargo build-output reports are available. Linux clone acceptance remains open. Cleanup needs an operation that preserves the exact reviewed source object and ancestor scope; the reviewed rename operations do not provide that boundary. See [ADR 003](docs/decisions/003-source-namespace-boundary.md), the [current handoff](PROGRESS.md#current-state) and [trial lessons](docs/mvp-trial-results.md). Numbered phases are not a strict work order, and the full plan remains unfinished.
 
 ## Scan a chosen folder
 
@@ -61,6 +61,17 @@ rydd report --limit 10 --cursor TOKEN
 ```
 
 The report works while the worker is stopped and reads only saved inventory. It lists the largest observed regular files, sizes, timestamps, parent-pass freshness and saved root diagnostics. Use `--directory` to read a completed scope calculation or measure up to 10,000 saved entries in a selected subtree, with partial/stale/unknown labels and qualified hardlink accounting. `--candidates` selects old recorded `node_modules` and sibling `package.json` timestamps for review. It does not inspect manifest contents or establish inactivity or safe deletion. The default age filter is 90 days; `--min-age-days N` changes it for one report only. Candidate reports now explain selection outcomes (including age, missing evidence and incomplete listings) and whether more saved entries remain. Reports do not rescan paths or delete anything. Use the returned `next_cursor` for another page; keep global `--data-dir` before `report` if using a separate instance. See the [report contract](docs/cli.md#saved-file-reports).
+
+## Review saved Cargo build output
+
+```sh
+rydd report --build-output -d /path/to/project
+rydd report --build-output -d /path/to/project --min-age-days 30 --json
+```
+
+This mode requires an existing manual scan of that exact folder. It recognizes an outermost `target` beside saved `Cargo.toml` and `Cargo.lock`, with a supported `debug` or `release` layout. Every required marker must meet the age filter and have a confirmed saved parent listing. Each page checks up to 1,000 entries and measures up to 20 candidates; use its continuation command when present.
+
+The report reads saved metadata only. It shows qualified logical/allocated sizes and recognition evidence. It does not check artifact contents, project use or whether a build can be reproduced. Custom and unsupported layouts are excluded. There is no cleanup action, saved plan or dismissal for this category. See the [Cargo report contract](docs/cli.md#saved-cargo-build-output).
 
 ## Dismiss one exact saved finding
 

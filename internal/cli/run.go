@@ -75,6 +75,8 @@ Commands:
   hash --run APPROVAL_ID [--json]                    One guarded hash step (at most 1 MiB; no cleanup)
   hash --revoke APPROVAL_ID [--json]                 Revoke read consent; no source or inventory needed
   report --candidates [--include-dismissed] [--min-age-days N] [--cursor TOKEN] [--json]  Node modules review candidates
+  report --build-output -d ROOT [--min-age-days N] [--cursor TOKEN] [--json]
+                                                     Saved Cargo target layouts; review required
   measure -d PATH [--batches N] [--json]               Resume saved compact size calculations
   review -d PATH [--min-age-days N]                   Choose a numbered subset; save unapproved evidence
   review --hashes                                     Review numbered historical hashes; no saved choice
@@ -232,10 +234,19 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 			}
 		}
 	case "report":
-		var r reportResult
-		r, err = report(ctx, remaining[1:], paths)
+		var r dispatchedReport
+		r, err = dispatchReport(ctx, remaining[1:], paths)
 		if err == nil {
-			printReport(out, r)
+			if r.BuildOutput != nil {
+				checked := &reviewOutput{writer: out}
+				printDispatchedReport(checked, r)
+				err = checked.err
+				if err == nil && ctx.Err() != nil {
+					err = fmt.Errorf("Cargo build-output report reply was canceled; no saved records or source files were changed: %w", ctx.Err())
+				}
+			} else {
+				printDispatchedReport(out, r)
+			}
 		}
 	case "status":
 		err = status(ctx, remaining[1:], paths, home, out, errOut)
