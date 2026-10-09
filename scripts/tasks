@@ -15,6 +15,7 @@ case "$task" in
     test) exec go test ./... "$@" ;;
     race) exec go test -race -timeout=15m ./... "$@" ;;
     run) exec go run ./cmd/rydd "$@" ;;
+    package) exec go run ./cmd/rydd-package "$@" ;;
     check)
         unformatted=$(gofmt -l cmd internal experiments)
         if [ -n "$unformatted" ]; then
@@ -49,7 +50,7 @@ case "$task" in
         ;;
     *)
         echo "Unknown task: $task" >&2
-        echo 'Tasks: check, fmt, test, race, run, build-all, sqlite-check, sqlite-bench' >&2
+        echo 'Tasks: check, fmt, test, race, run, package, build-all, sqlite-check, sqlite-bench' >&2
         exit 2
         ;;
 esac

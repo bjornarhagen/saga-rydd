@@ -226,7 +226,7 @@ func runMachine(ctx context.Context, args []string, out, errOut io.Writer) int {
 		return machineFailure(out, errOut, "", "invalid_arguments", err.Error(), 2)
 	}
 	if *version {
-		return emit(out, errOut, map[string]any{"api_version": APIVersion, "ok": true, "command": "version", "version": "dev"}, 0)
+		return versionReply(ctx, out, errOut, true)
 	}
 	a := f.Args()
 	if len(a) == 0 {

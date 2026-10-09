@@ -75,6 +75,55 @@ jobs:
           ./scripts/candidates-smoke ./dist/rydd
           ./scripts/manual-scan-smoke ./dist/rydd
 
+  candidate-package:
+    name: Native candidate packages (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Generated four-target archives and native version agreement
+        run: |
+          export GOCACHE="$(go env GOCACHE)"
+          export GOMODCACHE="$(go env GOMODCACHE)"
+          go mod download
+          RYDD_PACKAGE_BUILD_TEST=1 go test -race -timeout=15m ./internal/buildmetadata ./internal/packaging -count=1 -v
+      - name: Production candidate command and exact generated native archive
+        run: |
+          export GOCACHE="$(go env GOCACHE)"
+          export GOMODCACHE="$(go env GOMODCACHE)"
+          ./scripts/tasks package ci-fixture-v1
+          (cd dist/candidates/ci-fixture-v1 && shasum -a 256 -c SHA256SUMS)
+          case "$RUNNER_OS:$RUNNER_ARCH" in
+            Linux:X64) package_target=linux-amd64 ;;
+            macOS:ARM64) package_target=darwin-arm64 ;;
+            macOS:X64) package_target=darwin-amd64 ;;
+            *) echo 'Unsupported native package fixture runner profile' >&2; exit 1 ;;
+          esac
+          mkdir dist/package-native
+          tar -xzf "dist/candidates/ci-fixture-v1/rydd-ci-fixture-v1-$package_target.tar.gz" -C dist/package-native
+          test "$(./dist/package-native/rydd --version)" = 'rydd ci-fixture-v1 (experimental inventory)'
+          ./dist/package-native/rydd --json --version > dist/package-native/version.json
+          RYDD_PACKAGE_EXPECT_TARGET="$package_target" python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          reply = json.loads(Path('dist/package-native/version.json').read_text())
+          assert reply['api_version'] == 1 and reply['ok'] is True and reply['command'] == 'version'
+          assert reply['version'] == 'ci-fixture-v1'
+          metadata = reply['build_metadata']
+          assert metadata['contract'] == 'build_metadata_v1' and metadata['version'] == reply['version']
+          assert metadata['version_source'] == 'linked_value' and metadata['executable_label_verified'] is True
+          assert (metadata['goos'], metadata['goarch']) == tuple(os.environ['RYDD_PACKAGE_EXPECT_TARGET'].split('-'))
+          assert metadata['go_version'] == 'go1.27.1' and metadata['cgo_enabled'] is False
+          PY
+
   compact-scale:
     name: Native Linux compact scale fixture
     runs-on: ubuntu-latest

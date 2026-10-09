@@ -124,8 +124,7 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 		return 2
 	}
 	if *version {
-		fmt.Fprintln(out, "rydd dev (experimental inventory)")
-		return 0
+		return versionReply(ctx, out, errOut, false)
 	}
 	remaining := flags.Args()
 	if len(remaining) == 0 {

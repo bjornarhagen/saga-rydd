@@ -23,6 +23,10 @@ Every JSON response has `api_version: 1`, `ok` and `command`. Success fields dep
 
 Control responses contain `acknowledged` and a worker snapshot. A stop acknowledgement means shutdown was requested; it does not guarantee process exit. Pause is durable and requests cancellation of the current cooperative batch; an active filesystem call can still be draining. Status reads saved inventory even without a worker. Paths may contain private information; treat reports as local data.
 
+## Version and finite build metadata
+
+`rydd --version` keeps the existing human first-line format. Unstamped development builds retain the dev label; candidate builds show their linked label. `rydd --json --version` preserves `version` and adds `build_metadata` with contract `build_metadata_v1`, version/source, nullable revision, clean/dirty/unknown source status, Go version, OS/architecture and nullable CGO status. A valid runtime label uses `version_source: linked_value` and `executable_label_verified: true`. No configuration, state or source files are opened. Declared VCS provenance is not authentication; private paths, dependencies and raw flags are not projected. Cancellation or failed output returns failure without a second JSON document. See [local candidate packaging](../CONTRIBUTING.md#local-candidate-packages) for the separate structural archive contract and release limits.
+
 ## Human output
 
 Scan, measure, reports and previews use a shared presentation guide inspired by simplified technical English. This is a clarity preference, not formal ASD-STE100 compliance:

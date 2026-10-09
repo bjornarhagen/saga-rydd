@@ -656,4 +656,4 @@ Later candidates: additional ecosystems and automatic categories, personal-file 
 4. Choose initial roots/resource defaults during onboarding design and benchmarks.
 5. Confirmed: Saga — Rydd; repository `saga-rydd`, CLI `rydd`.
 
-Current milestone: verify genuine generated Cargo layout compatibility, then collect the cleanup product/scope and installed/native-environment decisions after independently completable work. Generated reports never establish automatic eligibility or satisfy native/soak/release gates. See the execution priority above and the task handoff in PROGRESS.md.
+Current milestone: continue bounded resource feedback, fair inventory turns, user-service adapters and local candidate packages. Collect the cleanup product/scope and installed/native-environment decisions after independently completable work; elapsed native soak remains separate. Generated reports never establish automatic eligibility or satisfy native/soak/release gates. See the execution priority above and the task handoff in PROGRESS.md.
