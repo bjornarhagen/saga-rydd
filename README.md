@@ -459,6 +459,10 @@ rydd service stop --executable /absolute/path/to/rydd
 
 Use the exact installed spec and selected data directory. These send one explicit request for the idle service. A queued Linux job or successful macOS client reply is historical acceptance evidence; running/stopped state remains unknown. Linux checks declared loaded settings; macOS addresses the fixed current-user managed label without loaded-origin proof. Normal manager dependencies and preflight bookkeeping can be affected. Stop preserves the descriptor and its future-login effects. Inspect an uncertain reply before deciding to retry. See the [request contract](docs/cli.md#explicit-idle-service-start-and-stop-requests).
 
+## Background scan revisits
+
+The experimental scanner now schedules one root listing at least 24 hours after its last completed root listing, once that root's unfinished work drains. A healthy root can revisit while another root waits on an error. Saved due times survive restart; controls and resource gates still apply. Root listing completion does not prove full-tree coverage. Manual scans keep their explicit invocation flow. See the [revisit contract](docs/cli.md#periodic-experimental-scan-revisits).
+
 ## Try the experimental scanner
 
 Try experimental scanning on a disposable fixture with `./scripts/scanner-smoke ./dist/rydd-darwin-arm64` after `./scripts/dev build-all` (choose the binary for your host). Inside Docker, run `./scripts/dev shell -c './scripts/scanner-smoke ./dist/rydd'` after `./scripts/dev check`. The script creates five synthetic entries, scans them with a short fixture cadence, checks results and stops its worker. No ordinary file contents are opened, hashed or deleted. Keep broad personal-directory scans disabled until P1-06 resource enforcement.

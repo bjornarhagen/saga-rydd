@@ -89,6 +89,14 @@ Throttle waits honor pause/stop cancellation. Each timed scan pass reserves half
 
 This prevents pacing alone from discarding every unfinished batch at low rates. It does not guarantee progress if kernel calls or path revalidation repeatedly exceed the work deadline, nor across continual cancellation/restarts. Resource and huge-directory acceptance gates remain open; use disposable fixtures while scanning is experimental.
 
+## Periodic experimental scan revisits
+
+A continuously running `daemon --experimental-scan` schedules one future root listing after that root's saved scan and maintenance work drains. Its fixed due time is the later of now or the last completed root listing plus 24 hours. Unknown prior listing evidence starts now. Root listing completion covers direct children, not a complete tree or current coverage.
+
+Unfinished scans, running jobs and delayed errors stay ahead of that root's revisit. Other drained roots can schedule independently. Startup examines at most 128 raw saved roots plus one continuation row per turn; disabled and blocked roots consume slots. Controls run between pages. Existing saved due times, cursors and tokens survive restart and clock rollback. Overdue work creates one pass without catch-up credits.
+
+The worker sleeps on its saved job timer, with no idle polling. `wait_reason: inventory_revisit` identifies an unchanged future root-listing job supported by matching saved listing evidence; other retries stay qualified separately. A pending future revisit is planned work, not proof of incomplete scan coverage. `inventory_revisit_setup` identifies bounded startup bookkeeping. Resource, CPU and WAL gates still apply. Ordinary idle daemon and explicit foreground scans retain their existing behavior. Adaptive timing and fairness remain open; `periodic_root_revisits` advertises this limited fixed policy.
+
 ## Saved file reports
 
 `rydd report [--limit N] [--cursor TOKEN] [--json]` ranks observed regular files by logical size descending, then saved entry ID descending. The default page size is 20, maximum 200. JSON uses the standard envelope with a `report` object; capabilities advertises `file_reports: true`, with `directory_size_reports: true` and `findings: true`.

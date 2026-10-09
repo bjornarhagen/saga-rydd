@@ -389,7 +389,11 @@ func TestPacedInventoryControlsAndCompletion(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return summary.Entries == 6 && summary.CompleteDirectories == 1 && summary.PendingJobs == 0 && summary.RunningJobs == 0
+		due, dueErr := r.NextJobDue(context.Background(), []string{state.ScanKind})
+		if dueErr != nil {
+			t.Fatal(dueErr)
+		}
+		return summary.Entries == 6 && summary.CompleteDirectories == 1 && summary.PendingJobs == 1 && summary.RunningJobs == 0 && due.After(time.Now().Add(23*time.Hour))
 	})
 	m := control(t, dir, "status").InventoryMetrics
 	if m == nil || m.EntryRatePerSecond != 5 || m.EntryInspections < 5 || m.ThrottleWaitNS == 0 {
@@ -553,11 +557,14 @@ func TestWorkerCPUWindowIncludesProgressCommit(t *testing.T) {
 			if saved.err != nil || saved.summary.RunningJobs != 0 {
 				t.Fatal("CPU observed before progress was saved", saved)
 			}
-			if (mode == "finished" || mode == "scan commit") && saved.summary.PendingJobs != 0 {
+			if mode == "finished" && saved.summary.PendingJobs != 0 {
 				t.Fatal("completion not committed before CPU observation", saved.summary)
 			}
-			if mode == "scan commit" && (saved.summary.Entries != 1 || saved.summary.CompleteDirectories != 1) {
-				t.Fatal("inventory not committed before CPU observation", saved.summary)
+			if mode == "scan commit" {
+				due, err := r.NextJobDue(context.Background(), []string{state.ScanKind})
+				if err != nil || saved.summary.Entries != 1 || saved.summary.CompleteDirectories != 1 || saved.summary.PendingJobs != 1 || !due.After(time.Now().Add(23*time.Hour)) {
+					t.Fatal("inventory completion/revisit not committed before CPU observation", saved.summary, due, err)
+				}
 			}
 			if (mode == "handler error" || mode == "canceled") && saved.summary.PendingJobs != 1 {
 				t.Fatal("interrupted progress not retained", saved.summary)

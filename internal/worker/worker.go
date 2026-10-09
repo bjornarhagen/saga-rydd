@@ -56,6 +56,8 @@ type Options struct {
 	Interval, WorkDuration time.Duration
 	// cpuObserve is private so production always uses native process accounting.
 	cpuObserve func() (time.Duration, error)
+	// Production revisits root listings every 24 hours; only fixtures shorten it.
+	revisitInterval time.Duration
 	// Source hooks are private, for bounded permit/failure lifecycle fixtures.
 	scannerNew  func(context.Context, []string, []string, []string, inventory.APIPermit, ...inventory.Option) (*inventory.Scanner, error)
 	scannerNext func(context.Context, *inventory.Scanner, state.Job, inventory.APIPermit) (state.ScanBatch, error)
@@ -82,6 +84,13 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 	}
 	if interval <= 0 || work <= 0 || work > 24*time.Hour {
 		return errors.New("invalid worker cadence")
+	}
+	revisitInterval := state.InventoryRevisitInterval
+	if options.revisitInterval != 0 {
+		revisitInterval = options.revisitInterval
+	}
+	if revisitInterval <= 0 || revisitInterval > 30*24*time.Hour {
+		return errors.New("invalid root-listing revisit interval")
 	}
 	if options.ExperimentalScan && (cfg.Scan.MetadataAttemptsPerDay < 1 || cfg.Scan.MetadataAttemptsPerDay > state.MetadataDailyLimit) {
 		return state.ErrMetadataInvalid
@@ -113,6 +122,8 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 	defer source.close()
 	var privatePaths []string
 	var startupAllowance int64
+	var revisitCursor int64
+	var revisitMore bool
 	scannerNew := options.scannerNew
 	if scannerNew == nil {
 		scannerNew = inventory.NewPermitted
@@ -146,9 +157,11 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 		if compact {
 			return errors.New("compact inventories currently require the manual scan command; background compact scanning is not enabled")
 		}
-		if err := w.SeedInventory(ctx); err != nil {
+		page, err := w.SeedInventoryRevisitPage(ctx, 0, time.Now(), revisitInterval)
+		if err != nil {
 			return err
 		}
+		revisitCursor, revisitMore = page.Cursor, page.More
 	}
 	// Writer-owned restart recovery retains full unknown charges. Status and
 	// ordinary store opening never perform this mutation, including idle mode.
@@ -258,71 +271,100 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 				live.WaitReason = "paused"
 			}
 			if !live.Paused && !live.Stopping && active == nil {
-				due, err := w.NextJobDue(ctx, kinds)
-				if err != nil {
-					if ctx.Err() != nil {
-						stop()
-						continue
-					}
-					return err
-				}
-				if !due.IsZero() {
-					live.WaitReason = ""
-					now := time.Now()
-					if due.After(now) {
-						live.WaitReason = "job_retry"
-					} else {
-						due = now
-					}
-					if options.ExperimentalScan {
-						budget, err := w.DispatchBudget(ctx, time.Now(), cfg.Scan.MaxScanChunksPerDay)
-						if err != nil {
-							if ctx.Err() != nil {
-								stop()
-								continue
-							}
-							return err
-						}
-						live.Dispatch = &budget
-						if budget.Reason != "" && !budget.NextAllowed.Before(due) {
-							due = budget.NextAllowed
-							live.WaitReason = budget.Reason
-						}
-						if err := refreshMetadata(ctx, now); err != nil {
-							if ctx.Err() != nil {
-								stop()
-								continue
-							}
-							return err
-						}
-						neededStartup := int64(0)
-						if source.value.Load() == nil {
-							neededStartup = startupAllowance
-						}
-						allowed, reason, err := metadataReadiness(*live.Metadata, now, neededStartup)
-						if err != nil {
-							return err
-						}
-						if reason != "" && !allowed.Before(due) {
-							due, live.WaitReason = allowed, reason
-						}
-					}
-					if due.Before(nextAllowed) {
-						due = nextAllowed
-						live.WaitReason = "cadence"
-					}
+				if revisitMore {
+					// Only a bounded raw-root page runs per event-loop turn.
+					// Controls remain available between pages; source permits
+					// are still required before any actual scanner dispatch.
+					due := time.Now()
+					live.WaitReason = "inventory_revisit_setup"
 					if cpu.nextAllowed.After(due) {
-						due = cpu.nextAllowed
-						live.WaitReason = "cpu_backoff"
+						due, live.WaitReason = cpu.nextAllowed, "cpu_backoff"
 					}
 					if walNextAllowed.After(due) {
-						due = walNextAllowed
-						live.WaitReason = "wal_backpressure"
+						due, live.WaitReason = walNextAllowed, "wal_backpressure"
 					}
 					timer = time.NewTimer(max(time.Until(due), 0))
 					tick = timer.C
 				} else {
-					live.WaitReason = "idle"
+					due, err := w.NextJobDue(ctx, kinds)
+					if err != nil {
+						if ctx.Err() != nil {
+							stop()
+							continue
+						}
+						return err
+					}
+					if !due.IsZero() {
+						live.WaitReason = ""
+						now := time.Now()
+						if due.After(now) {
+							live.WaitReason = "job_retry"
+							if options.ExperimentalScan && len(kinds) == 1 && kinds[0] == state.ScanKind {
+								revisit, err := w.InventoryRevisitPending(ctx, due, revisitInterval)
+								if err != nil {
+									if ctx.Err() != nil {
+										stop()
+										continue
+									}
+									return err
+								}
+								if revisit {
+									live.WaitReason = "inventory_revisit"
+								}
+							}
+						} else {
+							due = now
+						}
+						if options.ExperimentalScan {
+							budget, err := w.DispatchBudget(ctx, time.Now(), cfg.Scan.MaxScanChunksPerDay)
+							if err != nil {
+								if ctx.Err() != nil {
+									stop()
+									continue
+								}
+								return err
+							}
+							live.Dispatch = &budget
+							if budget.Reason != "" && !budget.NextAllowed.Before(due) {
+								due = budget.NextAllowed
+								live.WaitReason = budget.Reason
+							}
+							if err := refreshMetadata(ctx, now); err != nil {
+								if ctx.Err() != nil {
+									stop()
+									continue
+								}
+								return err
+							}
+							neededStartup := int64(0)
+							if source.value.Load() == nil {
+								neededStartup = startupAllowance
+							}
+							allowed, reason, err := metadataReadiness(*live.Metadata, now, neededStartup)
+							if err != nil {
+								return err
+							}
+							if reason != "" && !allowed.Before(due) {
+								due, live.WaitReason = allowed, reason
+							}
+						}
+						if due.Before(nextAllowed) {
+							due = nextAllowed
+							live.WaitReason = "cadence"
+						}
+						if cpu.nextAllowed.After(due) {
+							due = cpu.nextAllowed
+							live.WaitReason = "cpu_backoff"
+						}
+						if walNextAllowed.After(due) {
+							due = walNextAllowed
+							live.WaitReason = "wal_backpressure"
+						}
+						timer = time.NewTimer(max(time.Until(due), 0))
+						tick = timer.C
+					} else {
+						live.WaitReason = "idle"
+					}
 				}
 			}
 		}
@@ -384,6 +426,24 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 				if blocked {
 					live.WaitReason = "wal_backpressure"
 					walNextAllowed = time.Now().Add(time.Minute)
+					reschedule = true
+					continue
+				}
+				if revisitMore {
+					pageCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+					page, err := w.SeedInventoryRevisitPage(pageCtx, revisitCursor, time.Now(), revisitInterval)
+					cancel()
+					if err != nil {
+						if ctx.Err() != nil {
+							stop()
+							continue
+						}
+						return fmt.Errorf("schedule root-listing revisits: %w", err)
+					}
+					revisitCursor, revisitMore = page.Cursor, page.More
+					after, cpuErr := observeCPU()
+					cpu.finish(window, time.Now(), after, cpuErr)
+					refreshMetrics()
 					reschedule = true
 					continue
 				}
@@ -556,6 +616,12 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 			if err != nil {
 				cancel()
 				return fmt.Errorf("save job progress: %w", err)
+			}
+			if options.ExperimentalScan && active.Kind == state.ScanKind {
+				if _, err := w.ScheduleInventoryRevisit(finishCtx, active.RootID, time.Now(), revisitInterval); err != nil {
+					cancel()
+					return fmt.Errorf("schedule completed root-listing work: %w", err)
+				}
 			}
 			if err := refreshMetadata(finishCtx, time.Now()); err != nil {
 				cancel()

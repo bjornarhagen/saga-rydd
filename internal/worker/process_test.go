@@ -192,7 +192,11 @@ func TestInventoryWorkerKillAndComplete(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if summary.Entries == 342 && summary.CompleteDirectories == 21 && summary.PendingJobs == 0 && summary.RunningJobs == 0 && summary.DirectoryErrors == 0 {
+		due, dueErr := r.NextJobDue(context.Background(), []string{state.ScanKind})
+		if dueErr != nil {
+			t.Fatal(dueErr)
+		}
+		if summary.Entries == 342 && summary.CompleteDirectories == 21 && summary.PendingJobs == 1 && summary.RunningJobs == 0 && summary.DirectoryErrors == 0 && due.After(time.Now().Add(23*time.Hour)) {
 			break
 		}
 		if time.Now().After(deadline) {
