@@ -40,11 +40,15 @@ Human wording and layout are not a scripting contract. Use `--json` for stable f
 
 `scan.max_scan_chunks_per_day` defaults to 288. The worker reserves each inventory chunk before starting it; reservations and the next permitted dispatch time survive restart. Cancellation or a crash does not refund a reservation. UTC midnight replenishes the count; moving the clock backwards does not refill it. The count uses a single database row. Existing configurations inherit the default.
 
-Worker `wait_reason` reports `paused`, `running`, `idle`, `cadence`, `daily_chunk_limit`, `clock_rollback`, `wal_backpressure` or `stopping` where applicable. `dispatch_budget` is a separate saved-budget view, so its reason need not equal the worker's reason (for example, a paused worker can also have exhausted its daily quota). An empty budget reason means the budget currently permits dispatch; job retries may still delay work.
+Worker `wait_reason` reports `paused`, `running`, `idle`, `cadence`, `job_retry`, `daily_chunk_limit`, `clock_rollback`, `wal_backpressure`, `cpu_backoff` or `stopping` where applicable. `job_retry` means a saved job due date determines the wait; `cpu_backoff` applies only when the live CPU deadline determines it. `dispatch_budget` is a separate saved-budget view, so its reason need not equal the worker's reason (for example, a paused worker can also have exhausted its daily quota). An empty budget reason means the budget currently permits dispatch; job retries may still delay work.
 
 Above 32 MiB of WAL, a passive checkpoint gates new inventory chunks. If a reader pins pending pages, the worker defers scanning and retries after a minute while remaining controllable. A fully checkpointed but physically large WAL can be reused. This is backpressure, not a strict database-size cap; control/startup writes and the active chunk can still add data.
 
 Batch reservations do not meter metadata calls, bytes or CPU. Fine-grained resource limits, battery/sleep integration and production resource measurements remain unfinished. Scanning remains experimental and opt-in on each worker start.
+
+Live `worker.live.cpu` adds contract `worker_process_cpu_window_v1`, source `getrusage_self` and fixed `target_percent: 1`. `status` is `not_recorded`, `observed` or `unknown`; `observed_at`, `window_cpu_ns`, `window_elapsed_ns` and `next_allowed_at` are nullable. A measured zero is an explicit numeric zero. `backoff_ns` is the calculated added wait for the completed window, not remaining wait; `backoff_capped` discloses its one-hour cap. `next_allowed_at` is only the CPU deadline; other gates can delay dispatch further. `unknown_observations` counts unknown windows in this worker instance. This is live process user/system CPU during completed work windows, including saving progress, with child processes and other time excluded. An unknown window adds no CPU wait and does not erase existing restrictions. See [worker CPU pacing](worker.md#process-cpu-observations-and-cooperative-backoff-p1-06b3).
+
+Capabilities expose `process_cpu_accounting` and `cooperative_cpu_backoff`; `cpu_limit` and `power_controls` remain false. This pacing adds no source reads, saved quota or automatic scanner activation and does not prove an hourly resource target.
 
 ## Live scanner accounting
 

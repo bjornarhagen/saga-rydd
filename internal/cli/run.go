@@ -426,6 +426,7 @@ func status(ctx context.Context, args []string, paths config.Paths, home string,
 	fmt.Fprintf(out, "Scan batches reserved today (%s UTC): %d/%d; budget wait: %s\n", budget.Day, budget.Used, budget.Limit, budget.Reason)
 	if connection.Live != nil {
 		fmt.Fprintf(out, "Worker wait: %s\n", connection.Live.WaitReason)
+		printWorkerCPU(out, connection.Live.CPU)
 		if m := connection.Live.InventoryMetrics; m != nil {
 			fmt.Fprintf(out, "Entry inspections: %d; limit: %d/s; throttling: %t; accumulated throttle wait: %s\n", m.EntryInspections, m.EntryRatePerSecond, m.Throttled, time.Duration(m.ThrottleWaitNS))
 			fmt.Fprintf(out, "Scanner API calls this worker: stat=%d; directory open=%d; directory read=%d; filesystem stat=%d; mount identity=%d; path resolution=%d\n", m.StatCalls, m.DirectoryOpenCalls, m.DirectoryReadCalls, m.FilesystemStatCalls, m.MountIdentityCalls, m.PathResolutionCalls)
@@ -438,4 +439,19 @@ func status(ctx context.Context, args []string, paths config.Paths, home string,
 		fmt.Fprintln(out, "WAL exceeds the checkpoint threshold; the worker checks checkpoint progress before further scanning.")
 	}
 	return nil
+}
+
+func printWorkerCPU(out io.Writer, cpu *worker.CPUObservation) {
+	if cpu == nil {
+		return
+	}
+	fmt.Fprintf(out, "Worker CPU observation: %s; unknown windows this worker: %d\n", cpu.Status, cpu.UnknownObservations)
+	if cpu.WindowCPUNS != nil && cpu.WindowElapsedNS != nil {
+		fmt.Fprintf(out, "Process CPU in completed work window: %s; elapsed window: %s\n", time.Duration(*cpu.WindowCPUNS), time.Duration(*cpu.WindowElapsedNS))
+		fmt.Fprintf(out, "Added CPU dispatch wait: %s; pacing target: %d%% of one core; wait capped: %t\n", time.Duration(cpu.BackoffNS), cpu.TargetPercent, cpu.BackoffCapped)
+	}
+	if cpu.Status == "unknown" {
+		fmt.Fprintln(out, "CPU time is unknown for this window. No new CPU wait was calculated.")
+	}
+	fmt.Fprintln(out, "CPU observations cover this process's user and system time during completed work windows. They exclude children, are not saved quotas, and do not enforce an hourly CPU limit.")
 }

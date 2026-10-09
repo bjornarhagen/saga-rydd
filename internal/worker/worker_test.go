@@ -36,6 +36,10 @@ func fixture(t *testing.T) (string, config.Config) {
 
 func start(t *testing.T, dir string, c config.Config, options Options) (Snapshot, <-chan error) {
 	t.Helper()
+	// These fixtures test lifecycle/cadence, independently of host process CPU.
+	if options.cpuObserve == nil {
+		options.cpuObserve = func() (time.Duration, error) { return 0, nil }
+	}
 	ready := make(chan Snapshot, 1)
 	options.Ready = func(s Snapshot) { ready <- s }
 	ctx, cancel := context.WithCancel(context.Background())
@@ -381,4 +385,184 @@ func TestPacedInventoryControlsAndCompletion(t *testing.T) {
 	}
 	control(t, dir, "stop")
 	waitExit(t, done)
+}
+
+func TestWorkerCPUBackoffControlsAndDelayedResume(t *testing.T) {
+	dir, c := fixture(t)
+	w, err := state.OpenWriter(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.EnqueueJob(context.Background(), 1, "fixture", nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	var calls atomic.Int64
+	var samples int64
+	observe := func() (time.Duration, error) {
+		samples++ // Called only by the owning worker loop.
+		return time.Duration(samples/2) * 10 * time.Millisecond, nil
+	}
+	handler := func(context.Context, state.Job) (Result, error) {
+		calls.Add(1)
+		return Result{Cursor: []byte("saved progress")}, nil
+	}
+	_, done := start(t, dir, c, Options{Handlers: map[string]Handler{"fixture": handler}, Interval: time.Millisecond, cpuObserve: observe})
+	var first Snapshot
+	waitUntil(t, func() bool {
+		first = control(t, dir, "status")
+		return first.WaitReason == "cpu_backoff" && first.ActiveJob == 0
+	})
+	if first.CPU == nil || first.CPU.Status != "observed" || first.CPU.WindowCPUNS == nil || *first.CPU.WindowCPUNS != int64(10*time.Millisecond) || first.CPU.NextAllowedAt == nil || first.CPU.BackoffNS <= 0 || calls.Load() != 1 {
+		t.Fatal("missing completed window feedback", first, calls.Load())
+	}
+	control(t, dir, "pause")
+	if resumed := control(t, dir, "resume"); resumed.CPU == nil || resumed.CPU.NextAllowedAt == nil || !resumed.CPU.NextAllowedAt.Equal(*first.CPU.NextAllowedAt) {
+		t.Fatal("resume erased the pending CPU deadline", resumed)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if calls.Load() != 1 {
+		t.Fatal("resume bypassed CPU backoff", calls.Load())
+	}
+	control(t, dir, "pause")
+	// Resume after the prior deadline to model a delayed wake without an OS sleep.
+	time.Sleep(max(time.Until(*first.CPU.NextAllowedAt), 0) + 20*time.Millisecond)
+	control(t, dir, "resume")
+	waitUntil(t, func() bool { return calls.Load() == 2 && control(t, dir, "status").WaitReason == "cpu_backoff" })
+	time.Sleep(50 * time.Millisecond)
+	if calls.Load() != 2 {
+		t.Fatal("delayed resume caused catch-up work", calls.Load())
+	}
+	stoppedAt := time.Now()
+	control(t, dir, "stop")
+	waitExit(t, done)
+	if time.Since(stoppedAt) > time.Second {
+		t.Fatal("CPU backoff delayed stop")
+	}
+}
+
+func TestWorkerCPUUnknownUsesConfiguredCadence(t *testing.T) {
+	dir, c := fixture(t)
+	w, err := state.OpenWriter(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.EnqueueJob(context.Background(), 1, "fixture", nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	var calls atomic.Int64
+	var samples int
+	observe := func() (time.Duration, error) {
+		samples++
+		if samples <= 2 {
+			return 0, errors.New("synthetic observation unavailable")
+		}
+		return 0, nil
+	}
+	handler := func(context.Context, state.Job) (Result, error) {
+		return Result{Done: calls.Add(1) == 2}, nil
+	}
+	_, done := start(t, dir, c, Options{Handlers: map[string]Handler{"fixture": handler}, Interval: 300 * time.Millisecond, cpuObserve: observe})
+	var first Snapshot
+	waitUntil(t, func() bool {
+		first = control(t, dir, "status")
+		return first.CPU != nil && first.CPU.Status == "unknown"
+	})
+	if first.CPU.WindowCPUNS != nil || first.CPU.UnknownObservations != 1 || first.CPU.NextAllowedAt != nil || first.WaitReason != "cadence" || calls.Load() != 1 {
+		t.Fatal("unknown CPU became a bound or bypassed cadence", first, calls.Load())
+	}
+	time.Sleep(50 * time.Millisecond)
+	if calls.Load() != 1 {
+		t.Fatal("unknown CPU bypassed configured cadence")
+	}
+	waitUntil(t, func() bool {
+		snapshot := control(t, dir, "status")
+		return snapshot.WaitReason == "idle" && snapshot.CPU != nil && snapshot.CPU.Status == "observed" && snapshot.CPU.WindowCPUNS != nil && *snapshot.CPU.WindowCPUNS == 0 && snapshot.CPU.UnknownObservations == 1
+	})
+	control(t, dir, "stop")
+	waitExit(t, done)
+}
+
+func TestWorkerCPUWindowIncludesProgressCommit(t *testing.T) {
+	for _, mode := range []string{"finished", "handler error", "canceled", "scan commit"} {
+		t.Run(mode, func(t *testing.T) {
+			dir, c := fixture(t)
+			options := Options{Interval: time.Millisecond}
+			if mode == "scan commit" {
+				c.Roots = []string{t.TempDir()}
+				options.ExperimentalScan = true
+			} else {
+				w, err := state.OpenWriter(context.Background(), dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := w.EnqueueJob(context.Background(), 1, "fixture", nil, time.Now()); err != nil {
+					t.Fatal(err)
+				}
+				w.Close()
+				options.Handlers = map[string]Handler{"fixture": func(context.Context, state.Job) (Result, error) {
+					switch mode {
+					case "handler error":
+						return Result{}, errors.New("synthetic handler failure")
+					case "canceled":
+						return Result{}, context.Canceled
+					default:
+						return Result{Done: true}, nil
+					}
+				}}
+			}
+			r, err := state.OpenReader(context.Background(), dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer r.Close()
+			type savedObservation struct {
+				summary state.Summary
+				err     error
+			}
+			afterCommit := make(chan savedObservation, 1)
+			var samples int
+			options.cpuObserve = func() (time.Duration, error) {
+				samples++
+				if samples == 2 {
+					summary, err := r.Summary(context.Background())
+					afterCommit <- savedObservation{summary, err}
+				}
+				return time.Duration(samples/2) * 20 * time.Millisecond, nil
+			}
+			_, done := start(t, dir, c, options)
+			var saved savedObservation
+			select {
+			case saved = <-afterCommit:
+			case <-time.After(5 * time.Second):
+				t.Fatal("completed-window observation missing")
+			}
+			if saved.err != nil || saved.summary.RunningJobs != 0 {
+				t.Fatal("CPU observed before progress was saved", saved)
+			}
+			if (mode == "finished" || mode == "scan commit") && saved.summary.PendingJobs != 0 {
+				t.Fatal("completion not committed before CPU observation", saved.summary)
+			}
+			if mode == "scan commit" && (saved.summary.Entries != 1 || saved.summary.CompleteDirectories != 1) {
+				t.Fatal("inventory not committed before CPU observation", saved.summary)
+			}
+			if (mode == "handler error" || mode == "canceled") && saved.summary.PendingJobs != 1 {
+				t.Fatal("interrupted progress not retained", saved.summary)
+			}
+			var snapshot Snapshot
+			waitUntil(t, func() bool {
+				snapshot = control(t, dir, "status")
+				return snapshot.CPU != nil && snapshot.CPU.Status == "observed"
+			})
+			if snapshot.CPU.WindowCPUNS == nil || *snapshot.CPU.WindowCPUNS != int64(20*time.Millisecond) || snapshot.CPU.WindowElapsedNS == nil || *snapshot.CPU.WindowElapsedNS <= 0 {
+				t.Fatal("completed/error/canceled CPU delta lost", snapshot.CPU)
+			}
+			if mode == "handler error" && snapshot.WaitReason != "job_retry" {
+				t.Fatal("CPU reason concealed later handler retry", snapshot.WaitReason)
+			}
+			control(t, dir, "stop")
+			waitExit(t, done)
+		})
+	}
 }

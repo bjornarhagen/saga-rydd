@@ -20,6 +20,16 @@ One event loop owns database writes and one handler runs at a time. Handlers are
 
 The next chunk starts no earlier than the configured interval after the preceding start (default five minutes); its cooperative timeout defaults to 30 seconds. A paused worker or a queue with no eligible jobs waits on control/cancellation without repeatedly querying SQLite. Startup can dispatch a due chunk immediately. The interval is not a persisted cross-restart budget.
 
+## Process CPU observations and cooperative backoff (P1-06b3)
+
+The worker observes cumulative native user and system CPU time for its own process before dispatch checks and after saving each completed chunk. The difference covers all process threads in that work window, including the owning loop's database writes and control work. It excludes child processes, startup and time outside completed windows. It does not measure physical disk activity or energy use. macOS and Linux use `getrusage(RUSAGE_SELF)`; no helper process or periodic idle polling is needed.
+
+For a known window, additional wait is `max(0, 100 × CPU time − elapsed window)`, toward the fixed gentle pacing target of 1% of one core. The wait is capped at one hour and the live observation reports whether it was capped. CPU waits share the existing cancellable timer and cannot shorten cadence, job retry or durable dispatch restrictions. Pause/resume preserves the CPU deadline. An overdue timer permits one chunk; the worker earns no catch-up credits. Long waits and generated delayed-clock tests are not physical sleep acceptance: monotonic clocks can stop during system sleep.
+
+Unavailable, decreasing, invalid or overflowing native observations are unknown rather than measured zero. An unknown window adds no new CPU wait; existing restrictions remain. Live status distinguishes `not_recorded`, `observed` and `unknown`, with nullable measurements and an unknown-window count. This state resets with the worker instance and is not a persistent CPU quota. Cooperative pacing cannot interrupt a busy chunk or prove the hourly CPU target. Full metadata/content/CPU quotas, low priority, power detection, native sleep and soak gates remain open.
+
+References: [Apple getrusage](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/getrusage.2.html), [Linux getrusage](https://man7.org/linux/man-pages/man2/getrusage.2.html), and [Go monotonic clocks](https://pkg.go.dev/time#hdr-Monotonic_Clocks).
+
 ## Next integrations
 
 - **P1-05 implemented:** `--experimental-scan` registers metadata inventory, seeds root jobs and commits bounded batches atomically. Schema v3 adds directory watermarks and skip reasons. See [inventory design](inventory.md). Keep experimental activation explicit until budget enforcement is verified.

@@ -30,6 +30,7 @@ type Snapshot struct {
 	WaitReason       string                `json:"wait_reason"`
 	InventoryMetrics *inventory.Metrics    `json:"inventory_metrics,omitempty"`
 	Dispatch         *state.DispatchBudget `json:"dispatch,omitempty"`
+	CPU              *CPUObservation       `json:"cpu,omitempty"`
 }
 
 type Result struct {
@@ -52,6 +53,8 @@ type Options struct {
 	StartupCheck func(context.Context) error
 	// Overrides support small deterministic lifecycle fixtures, not public flags.
 	Interval, WorkDuration time.Duration
+	// cpuObserve is private so production always uses native process accounting.
+	cpuObserve func() (time.Duration, error)
 }
 type outcome struct {
 	result    Result
@@ -60,6 +63,10 @@ type outcome struct {
 }
 
 func Run(ctx context.Context, dir string, cfg config.Config, options Options) error {
+	observeCPU := options.cpuObserve
+	if observeCPU == nil {
+		observeCPU = processCPUTime
+	}
 	interval := time.Duration(cfg.Scan.IntervalSeconds) * time.Second
 	work := time.Duration(cfg.Scan.WorkSeconds) * time.Second
 	if options.Interval > 0 {
@@ -141,7 +148,10 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 		return err
 	}
 	live := Snapshot{PID: os.Getpid(), Instance: hex.EncodeToString(id[:]), StartedAt: time.Now().UTC(), Paused: paused, RecoveredJobs: recovered, Handlers: len(handlers)}
+	cpu := newCPUBudget()
 	refreshMetrics := func() {
+		observation := cpu.observation
+		live.CPU = &observation
 		if scannerMetrics != nil {
 			metrics := scannerMetrics()
 			live.InventoryMetrics = &metrics
@@ -182,6 +192,8 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 	ctxDone := ctx.Done()
 	reschedule := true
 	nextAllowed := time.Time{}
+	walNextAllowed := time.Time{}
+	var activeCPUWindow cpuWindow
 	stop := func() {
 		live.Stopping = true
 		live.WaitReason = "stopping"
@@ -221,6 +233,13 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 					return err
 				}
 				if !due.IsZero() {
+					live.WaitReason = ""
+					now := time.Now()
+					if due.After(now) {
+						live.WaitReason = "job_retry"
+					} else {
+						due = now
+					}
 					if options.ExperimentalScan {
 						budget, err := w.DispatchBudget(ctx, time.Now(), cfg.Scan.MaxScanChunksPerDay)
 						if err != nil {
@@ -231,15 +250,22 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 							return err
 						}
 						live.Dispatch = &budget
-						if budget.NextAllowed.After(due) {
+						if budget.Reason != "" && !budget.NextAllowed.Before(due) {
 							due = budget.NextAllowed
-						}
-						if live.WaitReason != "wal_backpressure" {
 							live.WaitReason = budget.Reason
 						}
 					}
 					if due.Before(nextAllowed) {
 						due = nextAllowed
+						live.WaitReason = "cadence"
+					}
+					if cpu.nextAllowed.After(due) {
+						due = cpu.nextAllowed
+						live.WaitReason = "cpu_backoff"
+					}
+					if walNextAllowed.After(due) {
+						due = walNextAllowed
+						live.WaitReason = "wal_backpressure"
 					}
 					timer = time.NewTimer(max(time.Until(due), 0))
 					tick = timer.C
@@ -290,6 +316,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 			call.reply <- response
 		case <-tick:
 			tick = nil
+			window := beginCPUWindow(observeCPU)
 			if options.ExperimentalScan {
 				blocked, err := w.WALBlocked(ctx, state.WALBackpressureBytes)
 				if err != nil {
@@ -301,7 +328,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 				}
 				if blocked {
 					live.WaitReason = "wal_backpressure"
-					nextAllowed = time.Now().Add(time.Minute)
+					walNextAllowed = time.Now().Add(time.Minute)
 					reschedule = true
 					continue
 				}
@@ -347,6 +374,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 				live.Dispatch = &budget
 			}
 			active = job
+			activeCPUWindow = window
 			live.WaitReason = "running"
 			live.ActiveJob = job.ID
 			cancelTask = startChunk(ctx, work, *job, handlers[job.Kind], done)
@@ -385,6 +413,11 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 			if err != nil {
 				return fmt.Errorf("save job progress: %w", err)
 			}
+			// Include claiming, reservation, handler and owning-loop commit work.
+			// Errors/cancellation still consumed process CPU in this window.
+			after, cpuErr := observeCPU()
+			cpu.finish(activeCPUWindow, time.Now(), after, cpuErr)
+			refreshMetrics()
 			active = nil
 			live.ActiveJob = 0
 			reschedule = true
