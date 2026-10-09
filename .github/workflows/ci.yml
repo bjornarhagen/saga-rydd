@@ -74,6 +74,24 @@ jobs:
           ./scripts/scanner-smoke ./dist/rydd
           ./scripts/candidates-smoke ./dist/rydd
           ./scripts/manual-scan-smoke ./dist/rydd
+      - name: Finite generated background-resource measurements
+        run: |
+          go build -trimpath -o dist/backgroundresources ./experiments/backgroundresources
+          for resource_profile in defaults_no_power short_fixture; do
+            ./dist/backgroundresources -binary ./dist/rydd -profile "$resource_profile" -seconds 30 -roots 2 -files-per-root 64 > "dist/backgroundresources-$resource_profile.json"
+          done
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          for profile in ('defaults_no_power', 'short_fixture'):
+              measured = json.loads(Path(f'dist/backgroundresources-{profile}.json').read_text())
+              assert measured['contract'] == 'generated_background_resources_v1'
+              assert measured['generated_bodies_unchanged'] and measured['paused_progress_unchanged']
+              assert measured['resume_acknowledged'] and measured['worker_graceful_exit_reaped']
+              assert measured['physical_read_bytes'] is None and measured['system_wakeups'] is None
+              assert measured['hourly_target_accepted'] is False and measured['physical_power_accepted'] is False
+              print(json.dumps({key: measured[key] for key in ('platform', 'profile', 'requested_seconds', 'worker_full_lifetime_usage', 'sampled_peak_database_bytes', 'sampled_peak_wal_bytes', 'command_latencies', 'final_saved_summary')}))
+          PY
 
   candidate-package:
     name: Native candidate packages (${{ matrix.os }})
