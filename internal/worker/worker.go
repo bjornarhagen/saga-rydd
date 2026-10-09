@@ -34,6 +34,7 @@ type Snapshot struct {
 	Dispatch         *state.DispatchBudget      `json:"dispatch,omitempty"`
 	CPU              *CPUObservation            `json:"cpu,omitempty"`
 	CPUFeedback      *state.CPUFeedbackState    `json:"cpu_feedback,omitempty"`
+	Power            *PowerPolicySnapshot       `json:"power,omitempty"`
 	Metadata         *state.MetadataBudget      `json:"metadata,omitempty"`
 	Priority         *ThreadPriorityObservation `json:"thread_priority,omitempty"`
 }
@@ -60,6 +61,8 @@ type Options struct {
 	Interval, WorkDuration time.Duration
 	// cpuObserve is private so production always uses native process accounting.
 	cpuObserve func() (time.Duration, error)
+	// Private fixture coordinator; production retains one process-wide slot.
+	powerCoordinator *powerCoordinator
 	// Clock and accounting hooks are private. Production uses the native clocks
 	// and exact writer APIs; fixtures cannot change the recovery-delay policy.
 	wallNow, elapsedNow func() time.Time
@@ -95,6 +98,13 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 		requestPriority = requestThreadPriority
 	}
 	var priorityObservation atomic.Pointer[ThreadPriorityObservation]
+	power := options.powerCoordinator
+	if power == nil {
+		power = processPowerCoordinator
+	}
+	powerLifetime := newSourcePowerLifetime(ctx, power)
+	defer powerLifetime.cancelCurrent()
+	powerState := sourcePowerState{enabled: options.ExperimentalScan && cfg.Scan.PauseOnBattery}
 	observeCPU := options.cpuObserve
 	if observeCPU == nil {
 		observeCPU = processCPUTime
@@ -265,6 +275,9 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 		}
 	}
 	refreshMetrics := func() {
+		if options.ExperimentalScan {
+			live.Power = powerState.snapshot()
+		}
 		live.Priority = priorityObservation.Load()
 		observation := cpu.observation
 		live.CPU = &observation
@@ -351,6 +364,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 	var activeCPUMarker *state.CPUWindowMarker
 	var activeMetadata []*metadataWindow
 	stop := func() {
+		powerLifetime.cancelCurrent()
 		live.Stopping = true
 		live.WaitReason = "stopping"
 		ctxDone = nil
@@ -429,7 +443,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 							neededStartup = startupAllowance
 						}
 						planCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-						plan, err = nextFairInventoryPlan(planCtx, w, fairRoots, genericKinds, now, *live.Metadata, neededStartup)
+						plan, err = nextFairInventoryPlan(planCtx, w, fairRoots, genericKinds, now, *live.Metadata, neededStartup, powerState.remaining(now, elapsed) == 0)
 						cancel()
 						due, live.WaitReason = plan.due, plan.waitReason
 						if err == nil {
@@ -467,6 +481,9 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						}
 						wait := dispatchWait{reason: live.WaitReason}
 						wait.wall(due, now, live.WaitReason)
+						if options.ExperimentalScan && !revisitMore && !plan.generic && plan.schedule.Turn == nil && !plan.schedule.NextSourceDue.IsZero() {
+							wait.add(powerState.remaining(now, elapsed), "power_source_backoff")
+						}
 						if options.ExperimentalScan && !revisitMore {
 							budget, err := w.DispatchBudget(ctx, now, cfg.Scan.MaxScanChunksPerDay)
 							if err != nil {
@@ -500,6 +517,11 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 		}
 
 		select {
+		case <-powerState.wake:
+			powerState.wake = nil
+			powerState.refreshCompletion()
+			refreshMetrics()
+			reschedule = true // A completion only wakes full admission replanning.
 		case <-ctxDone:
 			stop()
 		case err := <-srv.errors:
@@ -526,6 +548,11 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 					break
 				}
 				live.Paused = value
+				if value {
+					powerLifetime.cancelCurrent()
+				} else {
+					powerLifetime.resume()
+				}
 				reschedule = true
 				if value && cancelTask != nil {
 					cancelTask()
@@ -619,7 +646,44 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 					neededStartup = startupAllowance
 				}
 				planCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-				plan, planErr := nextFairInventoryPlan(planCtx, w, fairRoots, genericKinds, now, *live.Metadata, neededStartup)
+				plan, planErr := nextFairInventoryPlan(planCtx, w, fairRoots, genericKinds, now, *live.Metadata, neededStartup, true)
+				cancel()
+				if planErr != nil {
+					if ctx.Err() != nil {
+						stop()
+						continue
+					}
+					return planErr
+				}
+				// No observation starts on a quota-gated timer or before source
+				// metadata readiness. A maintenance-selected turn may still have
+				// another eligible due source, which must be screened before claim.
+				budget, budgetErr := w.DispatchBudget(ctx, wallNow(), cfg.Scan.MaxScanChunksPerDay)
+				if budgetErr != nil {
+					if ctx.Err() != nil {
+						stop()
+						continue
+					}
+					return budgetErr
+				}
+				live.Dispatch = &budget
+				if budget.Reason != "" {
+					reschedule = true
+					continue
+				}
+				sourceScreened := plan.allowSource && !plan.schedule.NextSourceDue.IsZero() && !plan.schedule.NextSourceDue.After(now)
+				allowSource := sourceScreened
+				if sourceScreened && cfg.Scan.PauseOnBattery {
+					decision := power.sourcePolicy(powerLifetime.ctx)
+					powerState.update(decision, wallNow())
+					if decision.Started {
+						powerLifetime.owned = decision.Ticket
+					}
+					allowSource = !decision.SourceBackoff
+					refreshMetrics()
+				}
+				planCtx, cancel = context.WithTimeout(ctx, 2*time.Second)
+				plan, planErr = nextFairInventoryPlan(planCtx, w, fairRoots, genericKinds, wallNow(), *live.Metadata, neededStartup, allowSource)
 				cancel()
 				if planErr != nil {
 					if ctx.Err() != nil {
@@ -629,7 +693,11 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 					return planErr
 				}
 				releaseDormantRootStreams(&source, plan.schedule)
-				if plan.due.IsZero() || plan.due.After(now) {
+				if !plan.generic && plan.schedule.Turn == nil {
+					reschedule = true
+					continue
+				}
+				if plan.due.IsZero() || plan.due.After(wallNow()) {
 					reschedule = true
 					continue
 				}
@@ -668,6 +736,20 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						}
 						return fmt.Errorf("reserve inventory root turn: %w", reserveErr)
 					}
+					nextAllowed = reservedElapsed.Add(interval)
+					// The receipt remains charged if freshness changed. This
+					// recheck cannot launch another callback after reservation.
+					if sourceScreened && cfg.Scan.PauseOnBattery && plan.allowSource {
+						decision := power.recheckSourcePolicy(powerLifetime.ctx)
+						powerState.update(decision, wallNow())
+						refreshMetrics()
+						if decision.Status == "sample_required" {
+							cancel()
+							reschedule = true
+							continue
+						}
+						plan.allowSource = !decision.SourceBackoff
+					}
 					turn, claimErr := w.ClaimFairInventoryTurn(turnCtx, fairRoots, wallNow(), work+10*time.Second, plan.allowSource, reservedAt)
 					if claimErr != nil {
 						cancel()
@@ -682,7 +764,6 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						reschedule = true
 						continue
 					}
-					nextAllowed = reservedElapsed.Add(interval)
 					start := state.CPUWindowStart{Instance: live.Instance, WindowStartedAt: windowWall}
 					var begun state.CPUWindowMarker
 					var beginErr error

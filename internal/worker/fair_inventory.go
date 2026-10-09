@@ -15,12 +15,12 @@ type fairInventoryPlan struct {
 	generic     bool
 }
 
-func nextFairInventoryPlan(ctx context.Context, w *state.Store, roots state.FairInventoryRoots, genericKinds []string, now time.Time, metadata state.MetadataBudget, startup int64) (fairInventoryPlan, error) {
+func nextFairInventoryPlan(ctx context.Context, w *state.Store, roots state.FairInventoryRoots, genericKinds []string, now time.Time, metadata state.MetadataBudget, startup int64, sourceEnabled bool) (fairInventoryPlan, error) {
 	allowed, reason, err := metadataReadiness(metadata, now, startup)
 	if err != nil {
 		return fairInventoryPlan{}, err
 	}
-	plan := fairInventoryPlan{allowSource: reason == ""}
+	plan := fairInventoryPlan{allowSource: reason == "" && sourceEnabled}
 	plan.schedule, err = w.NextFairInventoryTurn(ctx, roots, now, plan.allowSource)
 	if err != nil {
 		return fairInventoryPlan{}, err
@@ -47,7 +47,7 @@ func nextFairInventoryPlan(ctx context.Context, w *state.Store, roots state.Fair
 		if err != nil {
 			return fairInventoryPlan{}, err
 		}
-		if !due.IsZero() && (plan.due.IsZero() || due.Before(plan.due)) {
+		if !due.IsZero() && (plan.due.IsZero() || due.Before(plan.due) || (!plan.allowSource && plan.schedule.Turn == nil && !due.After(now))) {
 			plan.due, plan.generic = due, true
 			plan.waitReason = ""
 			if due.After(now) {

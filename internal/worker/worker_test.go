@@ -36,7 +36,16 @@ func fixture(t *testing.T) (string, config.Config) {
 
 func start(t *testing.T, dir string, c config.Config, options Options) (Snapshot, <-chan error) {
 	t.Helper()
+	snapshot, done, _ := startCancelable(t, dir, c, options)
+	return snapshot, done
+}
+
+func startCancelable(t *testing.T, dir string, c config.Config, options Options, capture ...func(context.CancelFunc, <-chan error)) (Snapshot, <-chan error, context.CancelFunc) {
+	t.Helper()
 	// These fixtures test lifecycle/cadence, independently of host process CPU.
+	if options.powerCoordinator == nil {
+		options.powerCoordinator = fixturePowerCoordinator(options.wallNow, options.elapsedNow)
+	}
 	if options.cpuObserve == nil {
 		options.cpuObserve = func() (time.Duration, error) { return 0, nil }
 	}
@@ -51,16 +60,19 @@ func start(t *testing.T, dir string, c config.Config, options Options) (Snapshot
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	done := make(chan error, 1)
-	go func() { done <- Run(ctx, dir, c, options) }()
+	for _, save := range capture {
+		save(cancel, done)
+	}
+	go func() { defer close(done); done <- Run(ctx, dir, c, options) }()
 	select {
 	case s := <-ready:
-		return s, done
+		return s, done, cancel
 	case err := <-done:
 		t.Fatal("worker did not start", err)
 	case <-time.After(5 * time.Second):
 		t.Fatal("start timed out")
 	}
-	return Snapshot{}, nil
+	return Snapshot{}, nil, cancel
 }
 
 func control(t *testing.T, dir, command string) Snapshot {

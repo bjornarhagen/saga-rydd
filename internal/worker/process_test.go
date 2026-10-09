@@ -28,7 +28,7 @@ func TestWorkerProcess(t *testing.T) {
 	}
 	c := config.Default()
 	c.Roots = []string{"/synthetic"}
-	options := Options{Ready: func(s Snapshot) { _ = json.NewEncoder(os.Stdout).Encode(s) }}
+	options := Options{Ready: func(s Snapshot) { _ = json.NewEncoder(os.Stdout).Encode(s) }, powerCoordinator: fixturePowerCoordinator(nil, nil)}
 	// Recovery fixtures retain their existing bounded cadence. Native CPU
 	// measurement and feedback are checked by the dedicated CPU fixtures.
 	if os.Getenv("RYDD_TEST_WORKER_CPU_NATIVE") != "1" {

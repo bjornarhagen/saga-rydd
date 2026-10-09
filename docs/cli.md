@@ -58,6 +58,14 @@ Saved `status.cpu_feedback` and live `worker.live.cpu_feedback` use `worker_cpu_
 
 Pending interruption recovery adds a fixed one-hour cooldown once, without presenting it as measured CPU use. Saved views perform no recovery or clock updates; a pending record does not establish an active process. Schema-12 writers initialize the bounded record; older supported readers report it unavailable without migration. Corrupt saved evidence uses `cpu_feedback_invalid`, and unsupported feedback schemas use `cpu_feedback_unavailable`. See [saved CPU feedback and clock limits](worker.md#saved-experimental-turn-cpu-feedback-p1-06b7).
 
+## Cached experimental power policy
+
+Experimental workers with `scan.pause_on_battery = true` use sparse power observations for otherwise admissible due source work. Setting it to false bypasses the observer and source delay. Unknown/unsupported results retain fixed pacing; macOS performs no provider probe. A fresh positive discharge witness delays source work while controls and eligible database-only maintenance remain available. This is not verified current battery state or full power control.
+
+Live `worker.live.power` uses `worker_source_power_policy_v1`. `last_decision_status`, `last_decision_reason`, nullable `last_decision_at`, `last_source_backoff`, `last_wait_ns` and `last_next_sample_wait_ns` describe the last admission decision. Separate nullable `ticket_id`, `sample_launch_at`, `sample_completed_at`, `callback_returned`, `sample_status`, `sample_reason` and `observation` describe that selected check's historical result. A result can finish after the last decision. Cached wait values are not remaining time; reading status neither reevaluates permission nor starts a probe.
+
+`power_policy_contract` declares scope `due_experimental_source_admission`, one process-wide slot, a five-second observation deadline and at least five minutes between starts. Canceled but blocked callbacks retain their slot. History is not persistent across process restart. Capabilities expose `bounded_power_observations` and `source_discharge_backoff`; `power_controls`, external/physical power verification and scanner-allowance coverage of power calls remain false. See [power scheduling and validation boundaries](power.md).
+
 ## Fair experimental inventory scheduling
 
 `daemon --experimental-scan` admits at most 32 configured roots before writer/root/source changes. Configuration can still hold up to 128 roots for other workflows; this narrower background limit is explicit. The worker rotates source and eligible saved-only maintenance turns with a durable root cursor and retains bounded per-root directory streams under shared entry pacing. A busy root therefore cannot keep winning every ready turn. Delayed/error jobs retain their evidence and block only their own maintenance. Source API quota waits can allow other-root database-only work; shared dispatch, CPU/WAL and control gates still apply.

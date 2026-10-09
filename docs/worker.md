@@ -79,11 +79,17 @@ One shared scanner retains at most 32 logical streams with no eviction. Each hol
 
 Schema 11 adds scheduler/cache indexes and one bounded saved rotation value; schema-10 saved readers remain compatible without migration. Capabilities use `experimental_root_turns_v1` with the 32-root/stream and 128-name limits. Full CPU/power, adaptive revisits and portable directory continuation remain false.
 
+## Sparse experimental power admission (P1-06b8b)
+
+When `scan.pause_on_battery` is true, an otherwise admissible due source turn can start one asynchronous power check before dispatch reservation. A fresh positive discharge witness delays source work; unknown or unsupported evidence retains fixed pacing. Checks start at least five minutes apart and have a five-second admission window in independent wall and elapsed clocks. A blocked callback keeps the process-wide slot occupied, including across in-process worker restarts. Controls and eligible saved-only maintenance continue. Pause/stop cancels only the worker's own check without waiting for its callback.
+
+Post-reservation freshness checks cannot start a probe. A charged abort keeps its reservation and elapsed cadence. Completion wakes the owning loop once to recheck every gate; cached status cannot consume that wake or renew evidence. Setting `pause_on_battery = false` bypasses the observer and its delay. macOS currently uses unsupported/unknown fallback without a provider probe. Power calls are outside scanner API allowances, and this policy does not establish hardware behavior or physical sleep. See [power bounds and status](power.md).
+
 ## Next integrations
 
 - **P1-05 implemented:** `--experimental-scan` registers metadata inventory, seeds root jobs and commits bounded batches atomically. Schema v3 adds directory watermarks and skip reasons. See [inventory design](inventory.md). Keep experimental activation explicit until budget enforcement is verified.
 - **P1-06:** enforce persistent metadata/content/CPU and daily budgets, power/sleep behavior and low priority. Durable dispatch cadence/daily batch reservations and WAL checkpoint backpressure are implemented; see [CLI contract](cli.md). The current cadence is only dispatch pacing; it does not enforce those resource targets.
 - **P1-07:** fair/adaptive revisits and robust continuation across large directories.
-- **P1-09:** install/uninstall native launchd/systemd user services. The current command does not self-install, detach or survive an unsupervised terminal closing.
+- **P1-09:** exact idle-only descriptors, explicit start/stop requests, descriptor removal and a selected Linux login link are implemented. Native installed-manager/runtime/login acceptance remains open. The foreground daemon does not self-install or detach.
 
 Tests use synthetic queue jobs, disposable filesystem trees and private temporary state. Process tests cover SIGKILL with an active lease, preserved cursor, stale endpoint replacement, persistent pause, SIGTERM and scanner restart/completion. Native binary smoke checks exercise the CLI and writer exclusion. No cleanup runs; experimental scanning only runs when explicitly selected.
