@@ -19,9 +19,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const cargoProducerVersion = "1.98.1"
-
 type cargoProducerToolchain struct{ cargo, rustc, bin, sysroot string }
+type cargoProducerVersions struct{ cargo, rustc string }
 
 // Only an explicitly declared preinstalled toolchain is eligible. In
 // particular, PATH's Cargo/Rustup shims are never a fallback. The executable
@@ -158,18 +157,50 @@ func cargoProducerRun(parent context.Context, tool, cwd string, env []string, ar
 	return output.String(), errors.Join(err, parent.Err())
 }
 
-func cargoProducerCheckVersion(ctx context.Context, tool, cwd string, env []string, name string) error {
+func cargoProducerProbeVersion(ctx context.Context, tool, cwd string, env []string, name string) (string, error) {
 	probe, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	output, err := cargoProducerRun(probe, tool, cwd, env, "--version")
 	if err != nil {
-		return fmt.Errorf("preinstalled %s version probe failed: %w", name, err)
+		return "", fmt.Errorf("preinstalled %s version probe failed: %w", name, err)
 	}
 	line := strings.TrimSpace(output)
-	if strings.ContainsAny(line, "\r\n") || !strings.HasPrefix(line, name+" "+cargoProducerVersion+" (") || !strings.HasSuffix(line, ")") {
-		return fmt.Errorf("Cargo producer gate requires exact preinstalled %s %s before project creation", name, cargoProducerVersion)
+	if len(line) > 256 || strings.ContainsFunc(line, func(r rune) bool { return r < 0x20 || r == 0x7f }) || !strings.HasPrefix(line, name+" ") || !strings.HasSuffix(line, ")") {
+		return "", fmt.Errorf("preinstalled %s version probe did not return a bounded single version line", name)
 	}
-	return nil
+	version, build, ok := strings.Cut(strings.TrimPrefix(line, name+" "), " (")
+	parts := strings.Split(version, ".")
+	if !ok || len(build) < 2 || len(version) > 32 || len(parts) != 3 {
+		return "", fmt.Errorf("preinstalled %s version probe did not return a bounded semantic version", name)
+	}
+	for _, part := range parts {
+		if len(part) == 0 || len(part) > 8 || strings.ContainsFunc(part, func(r rune) bool { return r < '0' || r > '9' }) {
+			return "", fmt.Errorf("preinstalled %s version probe did not return a bounded semantic version", name)
+		}
+	}
+	return version, nil
+}
+
+func cargoProducerCheckVersions(ctx context.Context, tool cargoProducerToolchain, cwd string, env []string) (cargoProducerVersions, error) {
+	var versions cargoProducerVersions
+	var err error
+	if versions.cargo, err = cargoProducerProbeVersion(ctx, tool.cargo, cwd, env, "cargo"); err != nil {
+		return versions, err
+	}
+	if versions.rustc, err = cargoProducerProbeVersion(ctx, tool.rustc, cwd, env, "rustc"); err != nil {
+		return versions, err
+	}
+	if err = ctx.Err(); err != nil {
+		return versions, err
+	}
+	// These explicit pairs come from declared runner image profiles. Never
+	// infer a Cargo patch number from rustc or accept arbitrary/mixed releases.
+	switch versions {
+	case cargoProducerVersions{"1.98.1", "1.98.1"}, cargoProducerVersions{"1.99.0", "1.99.0"}:
+		return versions, nil
+	default:
+		return versions, fmt.Errorf("Cargo producer gate requires a declared exact Cargo/Rust pair before project creation; observed cargo %q and rustc %q", versions.cargo, versions.rustc)
+	}
 }
 
 func TestCargoBuildOutputProducerGuardsAndBounds(t *testing.T) {
@@ -207,8 +238,36 @@ func TestCargoBuildOutputProducerGuardsAndBounds(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err = cargoProducerCheckVersion(ctx, cargo, base, env, "cargo"); err == nil || !strings.Contains(err.Error(), "requires exact preinstalled cargo "+cargoProducerVersion) {
-		t.Fatal("mismatched producer version was accepted", err)
+	for _, versions := range []struct {
+		cargo, rustc string
+		accepted     bool
+	}{
+		{"9.9.9", "9.9.9", false},
+		{"1.98.1", "1.99.0", false},
+		{"1.99.0", "1.98.1", false},
+		{"1.98.1", "1.98.1", true},
+		{"1.99.0", "1.99.0", true},
+	} {
+		for _, probe := range []struct{ path, name, version string }{{cargo, "cargo", versions.cargo}, {rustc, "rustc", versions.rustc}} {
+			if err = os.WriteFile(probe.path, []byte(fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' '%s %s (generated)'\n", probe.name, probe.version)), 0700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		observed, err := cargoProducerCheckVersions(ctx, tool, base, env)
+		if (err == nil) != versions.accepted || observed != (cargoProducerVersions{versions.cargo, versions.rustc}) {
+			t.Fatal("unknown/mixed version refusal or declared pair differs", observed, versions, err)
+		}
+		if err != nil && (!strings.Contains(err.Error(), "declared exact Cargo/Rust pair") || !strings.Contains(err.Error(), fmt.Sprintf("cargo %q and rustc %q", versions.cargo, versions.rustc))) {
+			t.Fatal("version refusal omitted safe exact observed pair", err)
+		}
+	}
+	for _, malformed := range []string{"cargo 1.99.0 (generated)\nprivate-generated-version-canary", "cargo 1.99.0-private-generated-version-canary (generated)"} {
+		if err = os.WriteFile(cargo, []byte(fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' '%s'\n", malformed)), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = cargoProducerCheckVersions(ctx, tool, base, env); err == nil || strings.Contains(err.Error(), "private-generated-version-canary") {
+			t.Fatal("malformed version output was accepted or disclosed", err)
+		}
 	}
 	if _, err = os.Lstat(filepath.Join(base, "projects")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("version refusal created producer projects", err)
@@ -352,11 +411,11 @@ func TestCargoBuildOutputToolProduced(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	env := cargoProducerEnv(tool, base)
-	for _, probe := range []struct{ path, name string }{{tool.cargo, "cargo"}, {tool.rustc, "rustc"}} {
-		if err = cargoProducerCheckVersion(ctx, probe.path, base, env, probe.name); err != nil {
-			t.Fatal(err)
-		}
+	versions, err := cargoProducerCheckVersions(ctx, tool, base, env)
+	if err != nil {
+		t.Fatal(err)
 	}
+	t.Logf("declared exact preinstalled producer pair: cargo %s and rustc %s", versions.cargo, versions.rustc)
 	root := filepath.Join(base, "projects")
 	if err = os.Mkdir(root, 0700); err != nil {
 		t.Fatal(err)
@@ -398,10 +457,10 @@ func TestCargoBuildOutputToolProduced(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cargoProducerVerifySavedReports(t, ctx, root, base, observations)
+	cargoProducerVerifySavedReports(t, ctx, root, base, observations, versions)
 }
 
-func cargoProducerVerifySavedReports(t *testing.T, ctx context.Context, root, base string, observations []cargoProducerObservation) {
+func cargoProducerVerifySavedReports(t *testing.T, ctx context.Context, root, base string, observations []cargoProducerObservation, versions cargoProducerVersions) {
 	t.Helper()
 	byPath := make(map[string]cargoProducerObservation, len(observations))
 	for _, observation := range observations {
@@ -427,7 +486,7 @@ func cargoProducerVerifySavedReports(t *testing.T, ctx context.Context, root, ba
 		} {
 			observed, exists := byPath[spec.path]
 			if !exists || observed.kind != spec.kind {
-				t.Fatalf("preinstalled Cargo %s did not create the supported %s marker %q of kind %s", cargoProducerVersion, profile, spec.path, spec.kind)
+				t.Fatalf("preinstalled Cargo %s did not create the supported %s marker %q of kind %s", versions.cargo, profile, spec.path, spec.kind)
 			}
 			want.markers = append(want.markers, observed)
 		}
@@ -556,5 +615,5 @@ func cargoProducerVerifySavedReports(t *testing.T, ctx context.Context, root, ba
 	if _, err = os.Lstat(root); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("saved-only Cargo report recreated its absent source", err)
 	}
-	t.Logf("preinstalled exact Cargo/Rust %s: genuine debug/release seven-marker layouts; %d independent metadata observations and %d saved-only report pages, including an empty continuing page; no regeneration or cleanup claim", cargoProducerVersion, len(observations), pages)
+	t.Logf("preinstalled exact cargo %s and rustc %s: genuine debug/release seven-marker layouts; %d independent metadata observations and %d saved-only report pages, including an empty continuing page; no regeneration or cleanup claim", versions.cargo, versions.rustc, len(observations), pages)
 }
