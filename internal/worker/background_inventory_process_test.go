@@ -148,12 +148,15 @@ func TestWorkerCompactSIGKILLRetainsPartialModeAndCursor(t *testing.T) {
 	}
 	defer r.Close()
 	waitUntil(t, func() bool {
+		if control(t, dir, "status").WaitReason != "daily_chunk_limit" {
+			return false
+		}
 		m, e := r.MeasureDirectory(context.Background(), root)
 		if e != nil {
 			return false
 		}
 		f, e := r.CPUFeedback(context.Background())
-		return e == nil && m.CompactedFiles == state.MaxBatchEntries && m.Status == "partial" && f.Status == "observed" && f.Window != nil && f.Window.JobID == saved.JobID && f.Window.CPUTimeNS != nil && *f.Window.CPUTimeNS == 0 && control(t, dir, "status").WaitReason == "daily_chunk_limit"
+		return e == nil && m.CompactedFiles == state.MaxBatchEntries && m.Status == "partial" && f.Status == "observed" && f.Window != nil && f.Window.JobID == saved.JobID && f.Window.CPUTimeNS != nil && *f.Window.CPUTimeNS == 0
 	})
 	dueBefore, err := r.NextJobDue(context.Background(), []string{state.ScanKind})
 	if err != nil {
@@ -191,10 +194,26 @@ func TestWorkerCompactSIGKILLRetainsPartialModeAndCursor(t *testing.T) {
 	if err = json.Unmarshal([]byte(child.line(t)), &resumed); err != nil || resumed.JobID != saved.JobID || !bytes.Equal(resumed.Cursor, saved.Cursor) {
 		t.Fatal("restart did not retain exact saved job and cursor", saved, resumed, err)
 	}
-	waitUntil(t, func() bool {
-		m, e := r.MeasureDirectory(context.Background(), root)
-		return e == nil && m.Status == "recorded_complete" && m.CompactedFiles == 400 && m.LogicalBytes != nil && *m.LogicalBytes == logical && m.AllocatedBytes != nil && *m.AllocatedBytes == allocated && m.AllocatedSizeSource == "cached_reduction" && control(t, dir, "status").WaitReason == "inventory_revisit"
-	})
+	// Keep a finite restart bound inside the child's unchanged 30-second lease.
+	// The generic five-second lifecycle wait is too short for this completion
+	// fixture on a concurrent native race runner. Observe cached drain status,
+	// then perform one independent exact report instead of polling fallback
+	// measurements while the saved reduction is still running.
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		live := control(t, dir, "status")
+		if live.WaitReason == "inventory_revisit" {
+			break
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatal("compact restart did not drain within its fixture bound", live)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	completed, err := r.MeasureDirectory(context.Background(), root)
+	if err != nil || completed.Status != "recorded_complete" || completed.CompactedFiles != 400 || completed.LogicalBytes == nil || *completed.LogicalBytes != logical || completed.AllocatedBytes == nil || *completed.AllocatedBytes != allocated || completed.AllocatedSizeSource != "cached_reduction" {
+		t.Fatal("restart reduction differs from independent native oracle", completed, err)
+	}
 	_, _, _, afterBody := compactWorkerOracle(t, root)
 	if beforeBody != afterBody {
 		t.Fatal("process/restart changed source bodies")

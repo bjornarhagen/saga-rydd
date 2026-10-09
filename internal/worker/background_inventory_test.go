@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -121,16 +122,35 @@ func TestWorkerCompactBackgroundBeyondReportLimit(t *testing.T) {
 	}
 	defer reader.Close()
 	var report state.DirectoryReport
+	var lastPollErr error
+	drained := false
 	deadline := time.Now().Add(90 * time.Second)
 	for time.Now().Before(deadline) {
-		report, err = reader.MeasureDirectory(context.Background(), modules)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if report.AllocatedSizeSource == "cached_reduction" && report.Status == "recorded_complete" && control(t, dir, "status").WaitReason == "inventory_revisit" {
+		// Until the worker drains, this report falls back to examining 10,000
+		// identities. Repeated fallback queries compete with the reduction being
+		// tested, especially under concurrent package race instrumentation.
+		live, pollErr := Send(context.Background(), dir, "status")
+		if pollErr != nil {
+			// A cooperative database turn can delay a read-only status reply.
+			// Retry only transport timeouts within the unchanged fixture bound;
+			// protocol, ownership and other errors remain immediate failures.
+			var timeout net.Error
+			if !errors.As(pollErr, &timeout) || !timeout.Timeout() {
+				t.Fatal(pollErr)
+			}
+			lastPollErr = pollErr
+		} else if live.WaitReason == "inventory_revisit" {
+			drained = true
 			break
 		}
-		time.Sleep(15 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !drained {
+		t.Fatal("compact worker did not drain within its fixture bound", lastPollErr)
+	}
+	report, err = reader.MeasureDirectory(context.Background(), modules)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if report.Status != "recorded_complete" || report.Truncated || report.LogicalBytes == nil || *report.LogicalBytes != logical || report.AllocatedBytes == nil || *report.AllocatedBytes != allocated || report.AllocatedSizeSource != "cached_reduction" || report.InodeEntriesExamined != 0 || report.CompactedFiles != count+2 || report.RepeatedInodes != 2 || report.CurrentStateVerified {
 		t.Fatal("complete reduction differs from independent native oracle", report, logical, allocated)

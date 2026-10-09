@@ -246,7 +246,11 @@ func TestWorkerAPIPacingSavesValidatedPartialThenContinues(t *testing.T) {
 	}
 	summary, err := r.Summary(context.Background())
 	r.Close()
-	if err != nil || batches.Load() < 3 || entries.Load() != 3 || summary.Entries != 4 || summary.CompleteDirectories != 1 || s.Metadata.TotalCharges.Observed < 1 || s.Metadata.TotalCharges.UnknownReserved != 0 || s.APIPacing.WaitNS == 0 {
+	// Scheduler/API work can already exceed the spacing on a busy race runner.
+	// A zero wait then means no extra delay was needed. Deterministic pacer tests
+	// separately verify actual wait accounting; this fixture verifies dispatch
+	// through the configured profile and validated one-entry partial commits.
+	if err != nil || batches.Load() < 3 || entries.Load() != 3 || summary.Entries != 4 || summary.CompleteDirectories != 1 || s.Metadata.TotalCharges.Observed < 1 || s.Metadata.TotalCharges.UnknownReserved != 0 || s.APIPacing == nil || s.APIPacing.RatePerSecond != 100000 || !s.APIPacing.CapacityReady || s.APIPacing.Waiting {
 		t.Fatal(summary, err, batches.Load(), entries.Load(), s)
 	}
 	control(t, dir, "stop")

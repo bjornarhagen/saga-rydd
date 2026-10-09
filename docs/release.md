@@ -71,13 +71,28 @@ A failed or canceled reply does not prove that no candidate was saved. Preserve 
 
 The command does not recover staging, import partial archives or overwrite an existing candidate. Do not delete an unexplained leftover or choose another label to bypass the refusal. Establish what was published before deciding how to handle those exact generated artifacts. A missing final sync confirmation remains uncertainty, not release acceptance.
 
+## Technical platform floors
+
+These requirements constrain a future support choice. They do not declare a tested release matrix.
+
+| Candidate targets | Toolchain and CPU requirement | Source-access requirement |
+| --- | --- | --- |
+| macOS amd64 / arm64 | macOS 13 or newer; AMD64 `v1` / ARMv8.0 | Scanner accepts APFS and HFS filesystem scopes |
+| Linux amd64 / arm64 | AMD64 `v1` / ARMv8.0; architecture-specific kernel support also matters | Scanner and live hashing require working `STATX_MNT_ID` observations |
+
+The pinned Go 1.27.1 toolchain requires macOS 13. Its linker defaults to a 13.0.0 deployment target. Separate structural inspection of all four frozen P1-06b10 core artifacts verified that deployment target in both Darwin binaries and found neither an interpreter nor dynamic-link program header in either Linux binary. Those Linux artifacts require no installed dynamic glibc, musl or SQLite library. This was file-header inspection, not execution on minimum platforms. See the [Go platform requirements](https://go.dev/wiki/MinimumRequirements) and [Go 1.27 linker changes](https://go.dev/doc/go1.27#linker).
+
+Linux introduced `STATX_MNT_ID` in upstream 5.8; it is absent from the 5.7 interface. The product requires the capability and refuses missing observations rather than falling back to weaker mount identity. Backports, filesystem support and syscall restrictions can change availability, so a kernel version alone is insufficient. See the [5.8 interface](https://raw.githubusercontent.com/torvalds/linux/v5.8/include/uapi/linux/stat.h), [5.7 interface](https://raw.githubusercontent.com/torvalds/linux/v5.7/include/uapi/linux/stat.h) and [product checks](../internal/inventory/platform_linux.go).
+
+The pinned [CGo-free SQLite driver](https://pkg.go.dev/modernc.org/sqlite@v1.59.0) supports all four build targets. Its `modernc.org/libc` dependency is translated Go code, not an installed host-libc requirement. Optional power and generated measurement observations retain their unsupported/unknown results; they do not establish the ordinary product's support matrix. Service publication and clone tests also depend on actual platform/filesystem capabilities. Choose the release-tested minimums and test each supported OS/architecture separately before accepting P5-01.
+
 ## Gates before a public release
 
 | Gate | Required decision or evidence | Current limit |
 | --- | --- | --- |
 | Source and CI provenance | Reviewed exact source, passing required jobs, recorded artifact hashes and native agreement | Build metadata is an observation, not authentication |
 | Supported platforms | Declared OS/kernel/filesystem minimums and native evidence for each supported OS/architecture | Cross-builds and finite hosted-runner fixtures are insufficient |
-| License | Explicit license selection and dependency/distribution review | License decision remains open |
+| License | Explicit license selection and dependency/distribution review | [Pinned root notices](dependency-notices.md) are inventoried; project choice, embedded-code audit and notice packaging remain open |
 | Signing and distribution | Approved signing, trust and publication procedure | Distribution signing is unverified; no release publisher exists |
 | Installation and services | Reviewed installation/upgrade/recovery instructions and actual supported installed-manager acceptance | Generated artifact/manager fixtures do not prove owner installation |
 | Cleanup scope | Explicit product scope and any required source-action safety, consent and recovery acceptance | Cleanup is unavailable; see [ADR 003](decisions/003-source-namespace-boundary.md) |
