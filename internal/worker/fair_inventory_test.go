@@ -172,7 +172,12 @@ func TestWorkerFairRechecksRootEligibilityAfterCPUWait(t *testing.T) {
 		return s.NextPermitted(ctx, j, p)
 	}
 	_, done := start(t, dir, c, options)
-	waitUntil(t, func() bool { return control(t, dir, "status").WaitReason == "cpu_backoff" })
+	waitUntil(t, func() bool {
+		// The experimental worker enforces both live elapsed and saved wall
+		// restrictions. Either clock domain can be the longer CPU gate.
+		reason := control(t, dir, "status").WaitReason
+		return reason == "cpu_backoff" || reason == "durable_cpu_backoff"
+	})
 	before := control(t, dir, "status")
 	if before.Dispatch.Used != 1 || <-starts != wide {
 		t.Fatal("first source turn differs", before)

@@ -42,6 +42,7 @@ type FairInventoryTurn struct {
 	RootPath []byte
 	Kind     string
 	Job      *Job
+	receipt  *fairInventoryReceipt
 }
 
 // NextSourceDue includes blocked due source work. The owner combines it with
@@ -384,5 +385,6 @@ func (s *Store) ClaimFairInventoryTurn(ctx context.Context, scope FairInventoryR
 	if err = ctx.Err(); err != nil {
 		return nil, err
 	}
+	turn.receipt = newFairInventoryReceipt(s, turn, reservedAt)
 	return turn, nil
 }

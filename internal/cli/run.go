@@ -101,8 +101,8 @@ Commands:
 
 Options: --help, --version; --json on finite commands
 
-Experimental metadata scanning, charged background scanner API allowances, explicit hashing
-and idle-service descriptor controls are available. Full global CPU/I/O/power limits, verified
+Experimental metadata scanning, charged background scanner API allowances, saved CPU pacing,
+explicit hashing and idle-service descriptor controls are available. Full global CPU/I/O/power limits, verified
 service runtime state and cleanup remain unavailable.
 `
 
@@ -417,6 +417,10 @@ func status(ctx context.Context, args []string, paths config.Paths, home string,
 	if err != nil {
 		return err
 	}
+	feedback, err := r.CPUFeedback(ctx)
+	if err != nil {
+		return err
+	}
 	type workerStatus struct {
 		State string           `json:"state"`
 		Live  *worker.Snapshot `json:"live,omitempty"`
@@ -432,17 +436,20 @@ func status(ctx context.Context, args []string, paths config.Paths, home string,
 	}
 	if *asJSON {
 		return json.NewEncoder(out).Encode(struct {
-			Stage           string               `json:"stage"`
-			ConfigFile      string               `json:"config_file"`
-			StateDir        string               `json:"state_dir"`
-			ConfiguredRoots []string             `json:"configured_roots"`
-			State           state.Summary        `json:"state"`
-			Paused          bool                 `json:"saved_pause"`
-			Worker          workerStatus         `json:"worker"`
-			Dispatch        state.DispatchBudget `json:"dispatch_budget"`
-			Metadata        state.MetadataBudget `json:"scanner_metadata_budget"`
-		}{"experimental-inventory", paths.ConfigFile, paths.StateDir, c.Roots, summary, paused, connection, budget, metadata})
+			Stage           string                 `json:"stage"`
+			ConfigFile      string                 `json:"config_file"`
+			StateDir        string                 `json:"state_dir"`
+			ConfiguredRoots []string               `json:"configured_roots"`
+			State           state.Summary          `json:"state"`
+			Paused          bool                   `json:"saved_pause"`
+			Worker          workerStatus           `json:"worker"`
+			Dispatch        state.DispatchBudget   `json:"dispatch_budget"`
+			Metadata        state.MetadataBudget   `json:"scanner_metadata_budget"`
+			CPUFeedback     state.CPUFeedbackState `json:"cpu_feedback"`
+		}{"experimental-inventory", paths.ConfigFile, paths.StateDir, c.Roots, summary, paused, connection, budget, metadata, feedback})
 	}
+	guard := &reviewOutput{writer: out}
+	out = guard
 	fmt.Fprintf(out, "Saga — Rydd\nConfig: %q\nState: %q\nSchema: %d (SQLite %s)\nConfigured roots: %d; saved enabled roots: %d\nSaved observations: %d; pending jobs: %d; running jobs: %d\nDatabase: %d bytes; WAL: %d bytes\nWorker: %s; saved pause: %t\nScanning: experimental, opt-in; full resource limits not enforced.\n", paths.ConfigFile, paths.StateDir, summary.Schema, summary.SQLiteVersion, len(c.Roots), summary.EnabledRoots, summary.Entries, summary.PendingJobs, summary.RunningJobs, summary.DatabaseBytes, summary.WALBytes, connection.State, paused)
 	fmt.Fprintf(out, "Completed directory passes: %d; directory errors: %d; skipped observations: %d\n", summary.CompleteDirectories, summary.DirectoryErrors, summary.SkippedEntries)
 	if connection.Live != nil {
@@ -450,6 +457,7 @@ func status(ctx context.Context, args []string, paths config.Paths, home string,
 	}
 	fmt.Fprintf(out, "Scan batches reserved today (%s UTC): %d/%d; budget wait: %s\n", budget.Day, budget.Used, budget.Limit, budget.Reason)
 	printScannerMetadata(out, &metadata)
+	printCPUFeedback(out, &feedback)
 	if connection.Live != nil {
 		fmt.Fprintf(out, "Worker wait: %s\n", connection.Live.WaitReason)
 		printWorkerCPU(out, connection.Live.CPU)
@@ -465,7 +473,7 @@ func status(ctx context.Context, args []string, paths config.Paths, home string,
 	if summary.NeedsBackpressure {
 		fmt.Fprintln(out, "WAL exceeds the checkpoint threshold; the worker checks checkpoint progress before further scanning.")
 	}
-	return nil
+	return errors.Join(guard.err, ctx.Err())
 }
 
 func printWorkerCPU(out io.Writer, cpu *worker.CPUObservation) {

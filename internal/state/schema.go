@@ -4,7 +4,7 @@ package state
 // must never be deleted/recreated as a migration strategy: future action/restore
 // records must stay separate from rebuildable inventory. Saved selections use
 // their own database; this inventory has a durable incarnation identity.
-const schemaVersion = 11
+const schemaVersion = 12
 const applicationID = 0x52594444 // RYDD
 
 const migration1 = `
@@ -62,7 +62,40 @@ var migrations = []struct{ name, sql string }{
 	{"inventory-incarnation", migration9},
 	{"scanner-metadata-reservations", migration10},
 	{"fair-inventory-root-turns", migration11},
+	{"experimental-worker-cpu-feedback", migration12},
 }
+
+const migration12 = `
+CREATE TABLE worker_cpu_feedback (
+ singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+ tracking_started_ns INTEGER NOT NULL CHECK(typeof(tracking_started_ns)='integer' AND tracking_started_ns>0),
+ max_now_ns INTEGER NOT NULL CHECK(typeof(max_now_ns)='integer' AND max_now_ns>=tracking_started_ns),
+ last_begun_dispatch_ns INTEGER NOT NULL CHECK(typeof(last_begun_dispatch_ns)='integer' AND last_begun_dispatch_ns>0),
+ completed_unknown INTEGER NOT NULL CHECK(typeof(completed_unknown)='integer' AND completed_unknown>=0),
+ recovered_unknown INTEGER NOT NULL CHECK(typeof(recovered_unknown)='integer' AND recovered_unknown>=0),
+ count_saturated INTEGER NOT NULL CHECK(count_saturated IN (0,1)),
+ token TEXT NOT NULL CHECK(length(token)=64 AND token NOT GLOB '*[^0-9a-f]*'),
+ instance TEXT NOT NULL CHECK(length(instance)=32 AND instance NOT GLOB '*[^0-9a-f]*'),
+ kind TEXT NOT NULL CHECK(kind IN ('source','maintenance')),
+ root_id INTEGER NOT NULL CHECK(typeof(root_id)='integer' AND root_id>0),
+ job_id INTEGER NOT NULL CHECK(typeof(job_id)='integer' AND job_id>=0), job_token TEXT NOT NULL,
+ job_lease_until_ns INTEGER CHECK(job_lease_until_ns IS NULL OR (typeof(job_lease_until_ns)='integer' AND job_lease_until_ns>0)),
+ dispatch_reserved_ns INTEGER NOT NULL CHECK(typeof(dispatch_reserved_ns)='integer' AND dispatch_reserved_ns>0),
+ window_started_ns INTEGER NOT NULL CHECK(typeof(window_started_ns)='integer' AND window_started_ns>0),
+ recorded_ns INTEGER NOT NULL CHECK(typeof(recorded_ns)='integer' AND recorded_ns>0),
+ status TEXT NOT NULL CHECK(status IN ('pending','observed','completed_unknown','recovered_unknown')),
+ settled_ns INTEGER CHECK(settled_ns IS NULL OR (typeof(settled_ns)='integer' AND settled_ns>0)),
+ cpu_time_ns INTEGER CHECK(cpu_time_ns IS NULL OR (typeof(cpu_time_ns)='integer' AND cpu_time_ns>=0)),
+ elapsed_ns INTEGER CHECK(elapsed_ns IS NULL OR (typeof(elapsed_ns)='integer' AND elapsed_ns>0)),
+ reason TEXT NOT NULL CHECK(length(reason)<=64),
+ backoff_ns INTEGER NOT NULL CHECK(typeof(backoff_ns)='integer' AND backoff_ns BETWEEN 0 AND 3600000000000),
+ backoff_capped INTEGER NOT NULL CHECK(backoff_capped IN (0,1)),
+ next_allowed_ns INTEGER CHECK(next_allowed_ns IS NULL OR (typeof(next_allowed_ns)='integer' AND next_allowed_ns>0)),
+ CHECK(last_begun_dispatch_ns=dispatch_reserved_ns AND dispatch_reserved_ns<=recorded_ns AND window_started_ns<=recorded_ns),
+ CHECK((kind='source' AND job_id>0 AND length(job_token)=32 AND job_token NOT GLOB '*[^0-9a-f]*' AND job_lease_until_ns>recorded_ns) OR
+       (kind='maintenance' AND job_id=0 AND job_token='' AND job_lease_until_ns IS NULL))
+);
+`
 
 const migration11 = `
 CREATE INDEX jobs_inventory_root_due ON jobs(root_id,due_at_ns,id)

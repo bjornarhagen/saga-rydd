@@ -1,8 +1,10 @@
 package worker
 
-import "time"
+import (
+	"time"
 
-const cpuBackoffLimit = time.Hour
+	"github.com/bjornarhagen/saga-rydd/internal/state"
+)
 
 // CPUObservation describes one completed worker window. It is live feedback,
 // not a persisted CPU quota or an observation of physical I/O or energy use.
@@ -40,18 +42,26 @@ func newCPUBudget() cpuBudget {
 }
 
 func beginCPUWindow(observe func() (time.Duration, error)) cpuWindow {
-	window := cpuWindow{startedAt: time.Now()}
+	return beginCPUWindowAt(observe, time.Now())
+}
+
+func beginCPUWindowAt(observe func() (time.Duration, error), started time.Time) cpuWindow {
+	window := cpuWindow{startedAt: started}
 	window.before, window.err = observe()
 	return window
 }
 
 func (budget *cpuBudget) finish(window cpuWindow, completed time.Time, after time.Duration, observationErr error) {
-	at := completed.UTC()
+	budget.finishWithClocks(window, completed, completed, after, observationErr)
+}
+
+func (budget *cpuBudget) finishWithClocks(window cpuWindow, completedWall, completedElapsed time.Time, after time.Duration, observationErr error) {
+	at := completedWall.UTC()
 	unknown := budget.observation.UnknownObservations
 	observation := newCPUBudget().observation
 	observation.ObservedAt = &at
 	observation.UnknownObservations = unknown
-	elapsed := completed.Sub(window.startedAt)
+	elapsed := completedElapsed.Sub(window.startedAt)
 	if elapsed > 0 {
 		nanos := int64(elapsed)
 		observation.WindowElapsedNS = &nanos
@@ -74,8 +84,8 @@ func (budget *cpuBudget) finish(window cpuWindow, completed time.Time, after tim
 		observation.BackoffNS, observation.BackoffCapped = int64(wait), capped
 		budget.nextAllowed = time.Time{}
 		if wait > 0 {
-			budget.nextAllowed = completed.Add(wait)
-			next := budget.nextAllowed.UTC()
+			budget.nextAllowed = completedElapsed.Add(wait)
+			next := completedWall.Add(wait).UTC()
 			observation.NextAllowedAt = &next
 		}
 		budget.observation = observation
@@ -95,16 +105,5 @@ func (budget *cpuBudget) finish(window cpuWindow, completed time.Time, after tim
 // period, capped at one hour. It retains no credit from earlier idle windows.
 // Divide elapsed first so valid large counters cannot overflow CPU*100.
 func cpuFeedbackWait(cpu, elapsed time.Duration) (time.Duration, bool) {
-	headroom := cpu - elapsed/100
-	if headroom <= 0 {
-		return 0, false
-	}
-	if headroom > cpuBackoffLimit/100+1 {
-		return cpuBackoffLimit, true
-	}
-	wait := headroom*100 - elapsed%100
-	if wait > cpuBackoffLimit {
-		return cpuBackoffLimit, true
-	}
-	return wait, false
+	return state.CPUFeedbackWait(cpu, elapsed)
 }

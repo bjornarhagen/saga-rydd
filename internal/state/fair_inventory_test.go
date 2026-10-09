@@ -326,7 +326,7 @@ func TestFairInventorySchema10SavedReaderAndMigration(t *testing.T) {
 	}
 	defer w.Close()
 	var kept []byte
-	if err = w.db.QueryRow("SELECT value FROM settings WHERE key='preserve'").Scan(&kept); err != nil || !bytes.Equal(kept, []byte{0, 255}) || w.schema != 11 {
+	if err = w.db.QueryRow("SELECT value FROM settings WHERE key='preserve'").Scan(&kept); err != nil || !bytes.Equal(kept, []byte{0, 255}) || w.schema != schemaVersion {
 		t.Fatal("additive migration lost history", kept, w.schema, err)
 	}
 	if _, err = w.ResolveFairInventoryRoots(ctx, []string{"/fixture"}); err != nil {

@@ -33,6 +33,7 @@ type Snapshot struct {
 	InventoryMetrics *inventory.Metrics         `json:"inventory_metrics,omitempty"`
 	Dispatch         *state.DispatchBudget      `json:"dispatch,omitempty"`
 	CPU              *CPUObservation            `json:"cpu,omitempty"`
+	CPUFeedback      *state.CPUFeedbackState    `json:"cpu_feedback,omitempty"`
 	Metadata         *state.MetadataBudget      `json:"metadata,omitempty"`
 	Priority         *ThreadPriorityObservation `json:"thread_priority,omitempty"`
 }
@@ -59,6 +60,12 @@ type Options struct {
 	Interval, WorkDuration time.Duration
 	// cpuObserve is private so production always uses native process accounting.
 	cpuObserve func() (time.Duration, error)
+	// Clock and accounting hooks are private. Production uses the native clocks
+	// and exact writer APIs; fixtures cannot change the recovery-delay policy.
+	wallNow, elapsedNow func() time.Time
+	cpuBegin            func(context.Context, *state.Store, *state.FairInventoryTurn, time.Time, state.CPUWindowStart) (state.CPUWindowMarker, error)
+	cpuSettle           func(context.Context, *state.Store, state.CPUWindowMarker, time.Time, state.CPUWindowMeasurement) (state.CPUFeedbackState, error)
+	cpuRecover          func(context.Context, *state.Store, time.Time) (state.CPUFeedbackState, error)
 	// Scheduling requests are private so production uses the native source-thread adapter.
 	priorityRequest func(context.Context) ThreadPriorityObservation
 	// Production revisits root listings every 24 hours; only fixtures shorten it.
@@ -75,6 +82,14 @@ type outcome struct {
 }
 
 func Run(ctx context.Context, dir string, cfg config.Config, options Options) error {
+	wallClock, elapsedNow := options.wallNow, options.elapsedNow
+	if wallClock == nil {
+		wallClock = time.Now
+	}
+	if elapsedNow == nil {
+		elapsedNow = time.Now
+	}
+	wallNow := func() time.Time { return wallClock().UTC() }
 	requestPriority := options.priorityRequest
 	if requestPriority == nil {
 		requestPriority = requestThreadPriority
@@ -174,7 +189,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 		if compact {
 			return errors.New("compact inventories currently require the manual scan command; background compact scanning is not enabled")
 		}
-		page, err := w.SeedInventoryRevisitPage(ctx, 0, time.Now(), revisitInterval)
+		page, err := w.SeedInventoryRevisitPage(ctx, 0, wallNow(), revisitInterval)
 		if err != nil {
 			return err
 		}
@@ -186,10 +201,10 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 	}
 	// Writer-owned restart recovery retains full unknown charges. Status and
 	// ordinary store opening never perform this mutation, including idle mode.
-	if _, err := w.RecoverMetadataReservations(ctx, time.Now()); err != nil {
+	if _, err := w.RecoverMetadataReservations(ctx, wallNow()); err != nil {
 		return err
 	}
-	recovered, err := w.RecoverJobs(ctx, time.Now())
+	recovered, err := w.RecoverJobs(ctx, wallNow())
 	if err != nil {
 		return err
 	}
@@ -201,8 +216,54 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 	if _, err := rand.Read(id[:]); err != nil {
 		return err
 	}
-	live := Snapshot{PID: os.Getpid(), Instance: hex.EncodeToString(id[:]), StartedAt: time.Now().UTC(), Paused: paused, RecoveredJobs: recovered, Handlers: len(handlers)}
+	live := Snapshot{PID: os.Getpid(), Instance: hex.EncodeToString(id[:]), StartedAt: wallNow().UTC(), Paused: paused, RecoveredJobs: recovered, Handlers: len(handlers)}
 	cpu := newCPUBudget()
+	var savedCPU cpuFeedbackGate
+	setCPUFeedbackAt := func(feedback state.CPUFeedbackState, wall, elapsed time.Time) {
+		live.CPUFeedback = &feedback
+		savedCPU.update(feedback, wall, elapsed)
+	}
+	setCPUFeedback := func(feedback state.CPUFeedbackState) {
+		setCPUFeedbackAt(feedback, wallNow(), elapsedNow())
+	}
+	refreshCPUFeedback := func(queryCtx context.Context) error {
+		if !options.ExperimentalScan {
+			return nil
+		}
+		feedback, err := w.CPUFeedback(queryCtx)
+		if err == nil {
+			setCPUFeedback(feedback)
+		}
+		return err
+	}
+	recoverCPUFeedback := func(queryCtx context.Context) error {
+		if !options.ExperimentalScan {
+			return nil
+		}
+		// Anchor a newly recovered delay before publication. A forward wall
+		// adjustment during the write cannot shorten its live elapsed wait.
+		wall, elapsed := wallNow(), elapsedNow()
+		var feedback state.CPUFeedbackState
+		var err error
+		if options.cpuRecover == nil {
+			feedback, err = w.RecoverCPUWindow(queryCtx, wall)
+		} else {
+			feedback, err = options.cpuRecover(queryCtx, w, wall)
+		}
+		if err == nil || errors.Is(err, state.ErrCPUFeedbackClockRollback) {
+			setCPUFeedbackAt(feedback, wall, elapsed)
+			return nil // Keep controls available during a saved clock wait.
+		}
+		return err
+	}
+	if options.ExperimentalScan {
+		feedbackCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		err := recoverCPUFeedback(feedbackCtx)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("recover worker CPU feedback: %w", err)
+		}
+	}
 	refreshMetrics := func() {
 		live.Priority = priorityObservation.Load()
 		observation := cpu.observation
@@ -211,6 +272,31 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 			metrics := scanner.Metrics()
 			live.InventoryMetrics = &metrics
 		}
+	}
+	finishCPU := func(window cpuWindow, marker *state.CPUWindowMarker) error {
+		after, observationErr := observeCPU()
+		completedWall, completedElapsed := wallNow(), elapsedNow()
+		cpu.finishWithClocks(window, completedWall, completedElapsed, after, observationErr)
+		refreshMetrics()
+		if marker == nil {
+			return nil
+		}
+		settleCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		var feedback state.CPUFeedbackState
+		var err error
+		if options.cpuSettle == nil {
+			feedback, err = w.SettleCPUWindow(settleCtx, *marker, completedWall, cpuMeasurement(cpu.observation))
+		} else {
+			feedback, err = options.cpuSettle(settleCtx, w, *marker, completedWall, cpuMeasurement(cpu.observation))
+		}
+		if err != nil {
+			return fmt.Errorf("settle worker CPU window %s (saved source progress is retained; further dispatch stopped): %w", marker.Token(), err)
+		}
+		// The saved and live delays for this same completed window share
+		// their original anchors; publication latency adds no new wait.
+		setCPUFeedbackAt(feedback, completedWall, completedElapsed)
+		return nil
 	}
 	refreshMetadata := func(queryCtx context.Context, now time.Time) error {
 		if !options.ExperimentalScan {
@@ -222,7 +308,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 		}
 		return err
 	}
-	if err := refreshMetadata(ctx, time.Now()); err != nil {
+	if err := refreshMetadata(ctx, wallNow()); err != nil {
 		return err
 	}
 	refreshMetrics()
@@ -262,6 +348,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 	nextAllowed := time.Time{}
 	walNextAllowed := time.Time{}
 	var activeCPUWindow cpuWindow
+	var activeCPUMarker *state.CPUWindowMarker
 	var activeMetadata []*metadataWindow
 	stop := func() {
 		live.Stopping = true
@@ -293,26 +380,43 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 				live.WaitReason = "paused"
 			}
 			if !live.Paused && !live.Stopping && active == nil {
-				if revisitMore {
-					// Only a bounded raw-root page runs per event-loop turn.
-					// Controls remain available between pages; source permits
-					// are still required before any actual scanner dispatch.
-					due := time.Now()
-					live.WaitReason = "inventory_revisit_setup"
-					if cpu.nextAllowed.After(due) {
-						due, live.WaitReason = cpu.nextAllowed, "cpu_backoff"
+				if err := refreshCPUFeedback(ctx); err != nil {
+					if ctx.Err() != nil {
+						stop()
+						continue
 					}
-					if walNextAllowed.After(due) {
-						due, live.WaitReason = walNextAllowed, "wal_backpressure"
+					return err
+				}
+				if feedback := live.CPUFeedback; feedback != nil && feedback.Status == "pending" && feedback.ClockHighWater != nil && !wallNow().Before(*feedback.ClockHighWater) {
+					recoveryCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+					err := recoverCPUFeedback(recoveryCtx)
+					cancel()
+					if err != nil {
+						if ctx.Err() != nil {
+							stop()
+							continue
+						}
+						return fmt.Errorf("recover worker CPU feedback: %w", err)
 					}
-					timer = time.NewTimer(max(time.Until(due), 0))
+				}
+				if feedback := live.CPUFeedback; feedback != nil && feedback.Status == "pending" {
+					// Accounting recovery has its own clock wait. A future job,
+					// cadence or exhausted quota cannot postpone that transition.
+					wait := dispatchWait{reason: "cpu_accounting_pending"}
+					if feedback.ClockHighWater != nil {
+						wait.wall(*feedback.ClockHighWater, wallNow(), "cpu_clock_rollback")
+					}
+					live.WaitReason = wait.reason
+					timer = time.NewTimer(wait.duration)
 					tick = timer.C
 				} else {
-					now := time.Now()
+					now, elapsed := wallNow(), elapsedNow()
 					var due time.Time
 					var plan fairInventoryPlan
 					var err error
-					if options.ExperimentalScan {
+					if revisitMore {
+						due, live.WaitReason = now, "inventory_revisit_setup"
+					} else if options.ExperimentalScan {
 						if err = refreshMetadata(ctx, now); err != nil {
 							if ctx.Err() != nil {
 								stop()
@@ -327,12 +431,13 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						planCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 						plan, err = nextFairInventoryPlan(planCtx, w, fairRoots, genericKinds, now, *live.Metadata, neededStartup)
 						cancel()
-						due = plan.due
+						due, live.WaitReason = plan.due, plan.waitReason
 						if err == nil {
 							releaseDormantRootStreams(&source, plan.schedule)
 						}
 					} else {
 						due, err = w.NextJobDue(ctx, kinds)
+						live.WaitReason = ""
 					}
 					if err != nil {
 						if ctx.Err() != nil {
@@ -342,7 +447,6 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						return err
 					}
 					if !due.IsZero() {
-						live.WaitReason = plan.waitReason
 						if due.After(now) {
 							if live.WaitReason == "" {
 								live.WaitReason = "job_retry"
@@ -360,11 +464,11 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 									live.WaitReason = "inventory_revisit"
 								}
 							}
-						} else {
-							due = now
 						}
-						if options.ExperimentalScan {
-							budget, err := w.DispatchBudget(ctx, time.Now(), cfg.Scan.MaxScanChunksPerDay)
+						wait := dispatchWait{reason: live.WaitReason}
+						wait.wall(due, now, live.WaitReason)
+						if options.ExperimentalScan && !revisitMore {
+							budget, err := w.DispatchBudget(ctx, now, cfg.Scan.MaxScanChunksPerDay)
 							if err != nil {
 								if ctx.Err() != nil {
 									stop()
@@ -373,25 +477,20 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 								return err
 							}
 							live.Dispatch = &budget
-							if budget.Reason != "" && !budget.NextAllowed.Before(due) {
-								due = budget.NextAllowed
-								live.WaitReason = budget.Reason
+							if remaining := budget.NextAllowed.UTC().Sub(now); budget.Reason != "" && remaining >= wait.duration {
+								wait.duration, wait.reason = max(remaining, 0), budget.Reason
 							}
-
 						}
-						if due.Before(nextAllowed) {
-							due = nextAllowed
-							live.WaitReason = "cadence"
+						if !revisitMore {
+							wait.elapsed(nextAllowed, elapsed, "cadence")
 						}
-						if cpu.nextAllowed.After(due) {
-							due = cpu.nextAllowed
-							live.WaitReason = "cpu_backoff"
+						wait.elapsed(cpu.nextAllowed, elapsed, "cpu_backoff")
+						if live.CPUFeedback != nil {
+							savedCPU.add(&wait, *live.CPUFeedback, now, elapsed)
 						}
-						if walNextAllowed.After(due) {
-							due = walNextAllowed
-							live.WaitReason = "wal_backpressure"
-						}
-						timer = time.NewTimer(max(time.Until(due), 0))
+						wait.elapsed(walNextAllowed, elapsed, "wal_backpressure")
+						live.WaitReason = wait.reason
+						timer = time.NewTimer(wait.duration)
 						tick = timer.C
 					} else {
 						live.WaitReason = "idle"
@@ -399,6 +498,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 				}
 			}
 		}
+
 		select {
 		case <-ctxDone:
 			stop()
@@ -437,14 +537,38 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 				response.Error = "unknown control command"
 			}
 			refreshMetrics()
-			if err := refreshMetadata(call.ctx, time.Now()); err != nil {
+			if err := refreshMetadata(call.ctx, wallNow()); err != nil {
+				response.OK, response.Error = false, err.Error()
+			}
+			if err := refreshCPUFeedback(call.ctx); err != nil {
 				response.OK, response.Error = false, err.Error()
 			}
 			response.Status = live
 			call.reply <- response
 		case <-tick:
 			tick = nil
-			window := beginCPUWindow(observeCPU)
+			if live.CPUFeedback != nil && live.CPUFeedback.Status == "pending" {
+				// A rollback timer may reach the saved high-water without any
+				// control request. Recover before reserving another root turn.
+				reschedule = true
+				continue
+			}
+			// A timer is only a wakeup. Recheck independent clock domains before
+			// a reservation, so forward wall changes cannot erase live waits.
+			wait := dispatchWait{}
+			wait.elapsed(nextAllowed, elapsedNow(), "cadence")
+			wait.elapsed(cpu.nextAllowed, elapsedNow(), "cpu_backoff")
+			if live.CPUFeedback != nil {
+				savedCPU.add(&wait, *live.CPUFeedback, wallNow(), elapsedNow())
+			}
+			wait.elapsed(walNextAllowed, elapsedNow(), "wal_backpressure")
+			if wait.duration > 0 {
+				reschedule = true
+				continue
+			}
+			windowWall := wallNow()
+			window := beginCPUWindowAt(observeCPU, elapsedNow())
+			var marker *state.CPUWindowMarker
 			if options.ExperimentalScan {
 				blocked, err := w.WALBlocked(ctx, state.WALBackpressureBytes)
 				if err != nil {
@@ -456,13 +580,13 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 				}
 				if blocked {
 					live.WaitReason = "wal_backpressure"
-					walNextAllowed = time.Now().Add(time.Minute)
+					walNextAllowed = elapsedNow().Add(time.Minute)
 					reschedule = true
 					continue
 				}
 				if revisitMore {
 					pageCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-					page, err := w.SeedInventoryRevisitPage(pageCtx, revisitCursor, time.Now(), revisitInterval)
+					page, err := w.SeedInventoryRevisitPage(pageCtx, revisitCursor, wallNow(), revisitInterval)
 					cancel()
 					if err != nil {
 						if ctx.Err() != nil {
@@ -472,14 +596,14 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						return fmt.Errorf("schedule root-listing revisits: %w", err)
 					}
 					revisitCursor, revisitMore = page.Cursor, page.More
-					after, cpuErr := observeCPU()
-					cpu.finish(window, time.Now(), after, cpuErr)
-					refreshMetrics()
+					if err := finishCPU(window, nil); err != nil {
+						return err
+					}
 					reschedule = true
 					continue
 				}
 			}
-			now := time.Now()
+			now := wallNow()
 			var job *state.Job
 			var err error
 			if options.ExperimentalScan {
@@ -510,7 +634,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 					continue
 				}
 				if plan.generic {
-					budget, budgetErr := w.DispatchBudget(ctx, time.Now(), cfg.Scan.MaxScanChunksPerDay)
+					budget, budgetErr := w.DispatchBudget(ctx, wallNow(), cfg.Scan.MaxScanChunksPerDay)
 					if budgetErr != nil {
 						if ctx.Err() != nil {
 							stop()
@@ -526,7 +650,8 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 					job, err = w.ClaimJob(ctx, genericKinds, now, work+10*time.Second)
 				} else {
 					// One committed dispatch receipt funds one fair root turn.
-					reservedAt := time.Now()
+					reservedAt := wallNow()
+					reservedElapsed := elapsedNow()
 					turnCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 					budget, reserveErr := w.ReserveScanChunk(turnCtx, reservedAt, interval, cfg.Scan.MaxScanChunksPerDay)
 					live.Dispatch = &budget
@@ -543,7 +668,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						}
 						return fmt.Errorf("reserve inventory root turn: %w", reserveErr)
 					}
-					turn, claimErr := w.ClaimFairInventoryTurn(turnCtx, fairRoots, time.Now(), work+10*time.Second, plan.allowSource, reservedAt)
+					turn, claimErr := w.ClaimFairInventoryTurn(turnCtx, fairRoots, wallNow(), work+10*time.Second, plan.allowSource, reservedAt)
 					if claimErr != nil {
 						cancel()
 						if ctx.Err() != nil {
@@ -557,14 +682,59 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						reschedule = true
 						continue
 					}
-					nextAllowed = reservedAt.Add(interval)
+					nextAllowed = reservedElapsed.Add(interval)
+					start := state.CPUWindowStart{Instance: live.Instance, WindowStartedAt: windowWall}
+					var begun state.CPUWindowMarker
+					var beginErr error
+					if options.cpuBegin == nil {
+						begun, beginErr = w.BeginCPUWindow(turnCtx, turn, wallNow(), start)
+					} else {
+						begun, beginErr = options.cpuBegin(turnCtx, w, turn, wallNow(), start)
+					}
+					if beginErr != nil {
+						cancel()
+						if begun.Token() != "" || errors.Is(beginErr, state.ErrCPUFeedbackPublication) {
+							return fmt.Errorf("begin worker CPU window %s (no handler/source call attempted; inspect saved feedback before restart): %w", begun.Token(), beginErr)
+						}
+						// A definite denial cannot leave an unstarted source lease
+						// running. Keep the exact old cursor and charged rotation.
+						if turn.Job != nil {
+							releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 2*time.Second)
+							releaseErr := w.FinishJob(releaseCtx, *turn.Job, false, turn.Job.Cursor, time.Unix(0, 1), "")
+							releaseCancel()
+							if releaseErr != nil {
+								return errors.Join(beginErr, releaseErr)
+							}
+						}
+						if err := finishCPU(window, nil); err != nil {
+							return err
+						}
+						if ctx.Err() != nil {
+							stop()
+							continue
+						}
+						if errors.Is(beginErr, state.ErrCPUFeedbackDeferred) || errors.Is(beginErr, state.ErrCPUFeedbackClockRollback) {
+							reschedule = true
+							continue
+						}
+						return fmt.Errorf("begin worker CPU window: %w", beginErr)
+					}
+					marker = &begun
+					if err := refreshCPUFeedback(turnCtx); err != nil {
+						cancel()
+						return err // Pending provenance remains; no work has run.
+					}
 					if turn.Kind == state.FairInventoryMaintenance {
 						step, retireErr := w.RetireInventoryForRoot(turnCtx, turn.RootID)
 						if retireErr == nil && step.Eligible && !step.Remaining {
-							_, retireErr = w.ScheduleInventoryRevisit(turnCtx, turn.RootID, time.Now(), revisitInterval)
+							_, retireErr = w.ScheduleInventoryRevisit(turnCtx, turn.RootID, wallNow(), revisitInterval)
 						}
 						cancel()
+						cpuErr := finishCPU(window, marker)
 						if retireErr != nil {
+							if cpuErr != nil {
+								return errors.Join(retireErr, cpuErr)
+							}
 							if ctx.Err() != nil {
 								stop()
 								continue
@@ -574,9 +744,9 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						if step.Eligible && step.Remaining && !step.Worked {
 							return state.ErrInventoryRetirementCorrupt
 						}
-						after, cpuErr := observeCPU()
-						cpu.finish(window, time.Now(), after, cpuErr)
-						refreshMetrics()
+						if cpuErr != nil {
+							return cpuErr
+						}
 						reschedule = true
 						continue
 					}
@@ -604,30 +774,34 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 				var startupWindow *metadataWindow
 				var reserveErr error
 				if source.value.Load() == nil {
-					reservation, err := w.ReserveMetadata(ctx, time.Now(), state.MetadataStartup, nil, startupAllowance, cfg.Scan.MetadataAttemptsPerDay)
+					reservation, err := w.ReserveMetadata(ctx, wallNow(), state.MetadataStartup, nil, startupAllowance, cfg.Scan.MetadataAttemptsPerDay)
 					reserveErr = err
 					if err == nil {
-						startupWindow = newMetadataWindow(reservation, work)
+						startupWindow = metadataWindowWithClocks(reservation, work, wallNow, elapsedNow)
 						activeMetadata = append(activeMetadata, startupWindow)
 					}
 				}
 				var reservation state.MetadataReservation
 				if reserveErr == nil {
-					reservation, reserveErr = w.ReserveMetadata(ctx, time.Now(), state.MetadataNext, job, inventory.MaxAPIAttemptAllowance, cfg.Scan.MetadataAttemptsPerDay)
+					reservation, reserveErr = w.ReserveMetadata(ctx, wallNow(), state.MetadataNext, job, inventory.MaxAPIAttemptAllowance, cfg.Scan.MetadataAttemptsPerDay)
 				}
 				if reserveErr != nil {
 					// A rollback or cancellation can race with readiness. No
 					// source call has run: settle any charge as known zero, then
 					// retain the old cursor and keep the control loop available.
 					settleCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-					settleErr := settleMetadata(settleCtx, w, activeMetadata, false, time.Now())
+					settleErr := settleMetadata(settleCtx, w, activeMetadata, false, wallNow())
 					if settleErr == nil {
 						settleErr = w.FinishJob(settleCtx, *job, false, job.Cursor, time.Unix(0, 1), "")
 					}
 					cancel()
 					activeMetadata = nil
+					cpuErr := finishCPU(window, marker)
 					if settleErr != nil {
-						return errors.Join(reserveErr, settleErr)
+						return errors.Join(reserveErr, settleErr, cpuErr)
+					}
+					if cpuErr != nil {
+						return errors.Join(reserveErr, cpuErr)
 					}
 					if ctx.Err() != nil {
 						stop()
@@ -639,7 +813,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 					}
 					return fmt.Errorf("reserve scanner metadata: %w", reserveErr)
 				}
-				nextWindow := newMetadataWindow(reservation, work)
+				nextWindow := metadataWindowWithClocks(reservation, work, wallNow, elapsedNow)
 				if startupWindow != nil {
 					startupWindow.highWater = reservation.ClockHighWater
 				}
@@ -666,6 +840,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 			}
 			active = job
 			activeCPUWindow = window
+			activeCPUMarker = marker
 			live.WaitReason = "running"
 			live.ActiveJob = job.ID
 			var priorityRequest func(context.Context) ThreadPriorityObservation
@@ -676,7 +851,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 					return observation
 				}
 			}
-			cancelTask = startChunkWithPriority(ctx, work, *job, handler, done, priorityRequest)
+			cancelTask = startChunkWithPriorityClock(ctx, work, *job, handler, done, priorityRequest, elapsedNow)
 		case result := <-done:
 			cancelTask()
 			cancelTask = nil
@@ -685,7 +860,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 			nextAllowed = result.startedAt.Add(interval)
 			due := result.result.NextAt
 			if due.IsZero() {
-				due = time.Now()
+				due = wallNow()
 			}
 			lastError := ""
 			if result.err != nil {
@@ -693,18 +868,18 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 				lastError = result.err.Error()
 				if metadataInterruption(result.err) {
 					lastError = ""
-					due = time.Now()
+					due = wallNow()
 					if active.Kind == state.ScanKind {
 						due = time.Unix(0, 1)
 					}
 				} else {
-					due = time.Now().Add(min(time.Second*time.Duration(1<<min(active.Attempts, 12)), time.Hour))
+					due = wallNow().Add(min(time.Second*time.Duration(1<<min(active.Attempts, 12)), time.Hour))
 				}
 			}
 			finishCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			if err := settleMetadata(finishCtx, w, activeMetadata, result.panicked, time.Now()); err != nil {
+			if err := settleMetadata(finishCtx, w, activeMetadata, result.panicked, wallNow()); err != nil {
 				cancel()
-				return fmt.Errorf("settle scanner metadata: %w", err)
+				return errors.Join(fmt.Errorf("settle scanner metadata: %w", err), finishCPU(activeCPUWindow, activeCPUMarker))
 			}
 			activeMetadata = nil
 			var err error
@@ -715,24 +890,25 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 			}
 			if err != nil {
 				cancel()
-				return fmt.Errorf("save job progress: %w", err)
+				return errors.Join(fmt.Errorf("save job progress: %w", err), finishCPU(activeCPUWindow, activeCPUMarker))
 			}
 			if options.ExperimentalScan && active.Kind == state.ScanKind {
-				if _, err := w.ScheduleInventoryRevisit(finishCtx, active.RootID, time.Now(), revisitInterval); err != nil {
+				if _, err := w.ScheduleInventoryRevisit(finishCtx, active.RootID, wallNow(), revisitInterval); err != nil {
 					cancel()
-					return fmt.Errorf("schedule completed root-listing work: %w", err)
+					return errors.Join(fmt.Errorf("schedule completed root-listing work: %w", err), finishCPU(activeCPUWindow, activeCPUMarker))
 				}
 			}
-			if err := refreshMetadata(finishCtx, time.Now()); err != nil {
+			if err := refreshMetadata(finishCtx, wallNow()); err != nil {
 				cancel()
-				return err
+				return errors.Join(err, finishCPU(activeCPUWindow, activeCPUMarker))
 			}
 			cancel()
 			// Include claiming, reservation, handler and owning-loop commit work.
 			// Errors/cancellation still consumed process CPU in this window.
-			after, cpuErr := observeCPU()
-			cpu.finish(activeCPUWindow, time.Now(), after, cpuErr)
-			refreshMetrics()
+			if err := finishCPU(activeCPUWindow, activeCPUMarker); err != nil {
+				return err
+			}
+			activeCPUMarker = nil
 			active = nil
 			live.ActiveJob = 0
 			reschedule = true
@@ -745,10 +921,14 @@ func startChunk(ctx context.Context, duration time.Duration, job state.Job, hand
 }
 
 func startChunkWithPriority(ctx context.Context, duration time.Duration, job state.Job, handler Handler, done chan<- outcome, priorityRequest func(context.Context) ThreadPriorityObservation) context.CancelFunc {
+	return startChunkWithPriorityClock(ctx, duration, job, handler, done, priorityRequest, time.Now)
+}
+
+func startChunkWithPriorityClock(ctx context.Context, duration time.Duration, job state.Job, handler Handler, done chan<- outcome, priorityRequest func(context.Context) ThreadPriorityObservation, elapsedNow func() time.Time) context.CancelFunc {
 	taskCtx, cancel := context.WithTimeout(ctx, duration)
 	go func() {
 		defer cancel()
-		result := outcome{startedAt: time.Now()}
+		result := outcome{startedAt: elapsedNow()}
 		defer func() {
 			if recover() != nil {
 				result.result = Result{}
