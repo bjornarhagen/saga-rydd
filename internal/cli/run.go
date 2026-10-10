@@ -29,6 +29,9 @@ Commands:
   exclude --list / --add ABSOLUTE_PATH / --remove ABSOLUTE_PATH [--json]
                                                      Edit existing exclusions for later invocations
   state init                                           Initialize/migrate state from existing config
+  backup --plans --to ABSENT_DESTINATION [--json]      Export history from an explicit existing --data-dir
+  backup --verify ARTIFACT --scratch-dir PRIVATE_PARENT [--json]
+                                                     Verify artifact structure using a scratch copy
   status [--json]                                       Read saved state summary
   status --cpu-charges [--json]                       Read saved conservative CPU charge history
   status --cpu-period-charges [--json]                Read saved UTC hour/day charge history
@@ -139,8 +142,11 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 		return 0
 	}
 	if remaining[0] == "capabilities" && len(remaining) == 1 {
-		fmt.Fprintln(out, "Rydd commands: init, config check, exclude, state init, status, scan, measure, report, docker, service, review, plan, ignore, journal, hashes, hash, pause, resume, stop, capabilities.\nAdd --json for versioned machine output on finite commands. review prompts in text mode; daemon uses foreground text output.\nOther commands are noninteractive. Exit codes: 0 success, 1 operation failed, 2 invalid usage.\nScanning is experimental. Deletion, duplicate detection, and full resource controls are unavailable.")
+		fmt.Fprintln(out, "Rydd commands: init, config check, exclude, state init, backup, status, scan, measure, report, docker, service, review, plan, ignore, journal, hashes, hash, pause, resume, stop, capabilities.\nAdd --json for versioned machine output on finite commands. review prompts in text mode; daemon uses foreground text output.\nOther commands are noninteractive. Exit codes: 0 success, 1 operation failed, 2 invalid usage.\nScanning is experimental. Deletion, duplicate detection, and full resource controls are unavailable.")
 		return 0
+	}
+	if remaining[0] == "backup" {
+		return runBackup(ctx, remaining[1:], *dataDir, backupDataDirCount(args), out, errOut, false)
 	}
 	if remaining[0] == "status" {
 		periodMode, modeErr := cpuPeriodChargesStatusMode(remaining[1:])

@@ -116,7 +116,31 @@ Start with the same data directory, folder and IDs used by the original command.
 | Clock rollback is refused | Check the machine clock and saved high-water evidence. Preserve the ledger. Do not reset timestamps or budgets to bypass the refusal. |
 | Configuration changed during startup | Reload the intended configuration and start a new worker after the previous writer exits. A worker cannot adopt a mixture of old and new settings. |
 
-Do not delete a lock, database, WAL, consent record or history to clear a refusal. There is no supported automatic repair or backup/export command yet. For corrupt state or uncertain storage, stop new writes, preserve the files and collect the exact private error before choosing a recovery action.
+Do not delete a lock, database, WAL, consent record or history to clear a refusal. There is no automatic repair or restore command. The plans-history export below does not repair corrupt state or back up the full instance. For corrupt state or uncertain storage, stop new writes, preserve the files and collect the exact private error before choosing a recovery action.
+
+## Plans-history export
+
+Use them only with an explicitly selected existing private plans store; do not treat them as recovery for a damaged instance.
+
+1. Select the existing private data directory and an absent destination outside it, whose private parent already exists. Stop a writer when appropriate and wait for its exit, then export:
+
+   ```sh
+   rydd --data-dir /absolute/private/state backup --plans --to /absolute/private/exports/plans-export
+   ```
+
+2. Select the artifact and an existing private scratch parent outside it, then verify:
+
+   ```sh
+   rydd backup --verify /absolute/private/exports/plans-export --scratch-dir /absolute/private/scratch
+   ```
+
+Verification takes no `--data-dir`; it uses no default instance, configuration or `HOME` for selection. It opens SQLite only on a private scratch copy. Use clean absolute paths; relative paths, `~/` expansion and symlink components are refused.
+
+The artifact contains `plans.sqlite3` and `manifest.json`. Its committed history depends on the existing plans-store schema. It omits inventory, hashes and read-consent charges, configuration, services, source files and quarantined file bodies. Unused database pages can retain private remnants, so keep the artifact and output private. This is not a full-instance backup or a sanitized report.
+
+Verification checks the digest and supported database structure/integrity. It does not check record meanings or present permission and grants no import, restore or cleanup action. The fixed 120-second limit is cooperative; an entered filesystem or driver call can take longer.
+
+If either command fails or its reply is lost, preserve the exact destination and any reported candidate or scratch. An unconfirmed identity makes the reported name inspection-only; a prior identity observation does not establish the current object or permit removal. Inspect the destination before another export; a complete artifact can be checked with the verification command. Do not replace, prune or retry automatically. An incomplete or unfamiliar retained directory has no automatic repair. See [scope, fixed limits and uncertain outcomes](cli.md#plans-history-export-and-artifact-verification).
 
 ## Inspect an interrupted or uncertain read
 

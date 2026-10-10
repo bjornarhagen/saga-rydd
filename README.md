@@ -367,6 +367,26 @@ This version records **review consent only**. It cannot execute cleanup. A futur
 
 Native Linux can observe an already loaded idle service with `service runtime-status --executable /absolute/path/to/rydd`. Manager state labels are historical evidence; running, stopped and application readiness remain unknown. The command starts or loads no unit. macOS currently returns unsupported without a manager probe. See the [runtime observation contract](docs/cli.md#existing-loaded-service-observations).
 
+## Plans-history export
+
+These commands export and verify saved plans history.
+
+1. Select an existing private data directory and an absent destination outside it. Export only its existing plans store:
+
+   ```sh
+   rydd --data-dir /absolute/private/state backup --plans --to /absolute/private/exports/plans-export
+   ```
+
+2. Verify that artifact using an existing private scratch parent outside the artifact. This mode takes no `--data-dir`:
+
+   ```sh
+   rydd backup --verify /absolute/private/exports/plans-export --scratch-dir /absolute/private/scratch
+   ```
+
+The private artifact contains `plans.sqlite3` and `manifest.json`. Its committed history depends on the existing plans-store schema; unused pages can retain private remnants. It omits inventory, hashes and read-consent charges, configuration, services, source files and quarantined file bodies. It is not a full-instance backup or a sanitized report.
+
+Verification checks the digest, supported structure and integrity on a separate scratch copy. It does not check record meanings or current permission, and grants no import, restore or cleanup action. A failure or lost reply can leave a candidate, published destination or scratch. A reported unconfirmed identity makes that name inspection-only; an earlier identity observation does not prove the current object or permit removal. Preserve the exact paths and inspect them before another export; do not replace or prune them automatically. See [export scope, limits and uncertain outcomes](docs/cli.md#plans-history-export-and-artifact-verification).
+
 ## Project map
 
 - [PLAN.md](PLAN.md): architecture, safety requirements and acceptance gates.

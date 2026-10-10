@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	InventoryStatePolicyContract = "worker_inventory_state_admission_v1"
+	InventoryStatePolicyContract = "worker_inventory_state_admission_v2"
 	inventoryStateRetryInterval  = 5 * time.Minute
 	inventoryStateSampleWindow   = 2 * time.Second
 )
@@ -33,6 +33,9 @@ type InventoryStatePolicySnapshot struct {
 	RetryStartedAt        *time.Time                  `json:"retry_started_at"`
 	RetryAfterAt          *time.Time                  `json:"retry_after_at"`
 	Observation           *state.InventoryStateBudget `json:"observation"`
+	SamplingState         string                      `json:"sampling_state"`
+	CallbackReturned      bool                        `json:"callback_returned"`
+	ProcessSlotOccupied   bool                        `json:"process_slot_occupied"`
 }
 
 type sourceInventoryState struct {
@@ -190,4 +193,60 @@ func (p *sourceInventoryState) snapshot() *InventoryStatePolicySnapshot {
 
 func inventoryStateReceiptCurrent(ctx context.Context, reservedWall, reservedElapsed, wall, elapsed time.Time) bool {
 	return ctx.Err() == nil && !wall.Before(reservedWall) && !elapsed.Before(reservedElapsed) && wall.Sub(reservedWall) < state.FairInventoryClaimWindow && elapsed.Sub(reservedElapsed) < state.FairInventoryClaimWindow
+}
+
+// asyncDecision is historical cached phase evidence. Scheduling/failure clocks
+// belong to the retained coordinator, never this public projection.
+func (p *sourceInventoryState) asyncDecision(d inventoryStateAsyncDecision) {
+	if d.Started {
+		p.phase = d.Ticket.request.phase
+		p.startedWall = d.Ticket.launch.wall
+		p.finishedWall = time.Time{}
+		p.status, p.reason, p.backoff, p.observation = "source_deferred", "inventory_state_pending", true, nil
+		p.retryWall = time.Time{}
+	} else if d.Reason != "" {
+		p.status, p.reason, p.backoff = "source_deferred", d.Reason, true
+		if d.SamplingState == "foreign_slot" {
+			p.observation = nil
+		}
+	}
+}
+
+func (p *sourceInventoryState) asyncCompletion(r inventoryStateCompletion, allowed bool) {
+	p.phase, p.startedWall, p.finishedWall = r.Phase, r.LaunchWall, r.CompletedWall
+	p.status, p.reason, p.backoff = "source_deferred", r.Reason, !allowed
+	p.observation = cloneInventoryStateBudget(r.Observation)
+	if allowed {
+		p.status, p.reason = "source_admitted", ""
+	}
+	if !allowed && p.reason == "" {
+		p.reason = "inventory_state_expired"
+	}
+	// Only a frozen failed callback supplies five-minute failure history. A
+	// successful but stale consumer never manufactures a failed-call retry.
+	p.retryWall = time.Time{}
+	if r.Reason != "" {
+		p.retryWall, _ = inventoryStateTimeAdd(r.LaunchWall, inventoryStateRetryInterval)
+	}
+}
+
+func (p *sourceInventoryState) asyncSnapshot(d inventoryStateAsyncDecision) *InventoryStatePolicySnapshot {
+	s := p.snapshot()
+	if p.status != "" {
+		s.LastDecisionStatus, s.LastDecisionReason = p.status, p.reason
+	}
+	s.SamplingState, s.CallbackReturned, s.ProcessSlotOccupied = d.SamplingState, d.CallbackReturned, d.ProcessSlotOccupied
+	if d.SamplingState == "pending" || d.SamplingState == "foreign_slot" {
+		s.Observation = nil
+	}
+	if d.SamplingState == "foreign_slot" && p.status == "" {
+		s.LastDecisionStatus, s.LastDecisionReason = "source_deferred", d.Reason
+	}
+	if !p.retryWall.IsZero() {
+		started, retry := p.startedWall, p.retryWall
+		s.RetryStartedAt, s.RetryAfterAt = &started, &retry
+	} else {
+		s.RetryStartedAt, s.RetryAfterAt = nil, nil
+	}
+	return s
 }

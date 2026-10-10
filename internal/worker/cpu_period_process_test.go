@@ -37,7 +37,7 @@ func TestCPUPeriodWorkerKillChild(t *testing.T) {
 		}
 		return marker, cpu, a, err
 	}}
-	err := Run(ctx, dir, cfg, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, cpuPeriodHooks: hook, cpuObserve: func() (time.Duration, error) { return 0, nil }, cpuSessionObserve: func() (time.Duration, error) { return 0, nil }})
+	err := Run(ctx, dir, cfg, fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, cpuPeriodHooks: hook, cpuObserve: func() (time.Duration, error) { return 0, nil }, cpuSessionObserve: func() (time.Duration, error) { return 0, nil }}))
 	t.Fatal("child escaped its declared committed boundary", err)
 }
 func TestCPUPeriodWorkerActualProcessLossUsesLimitedRecovery(t *testing.T) {
@@ -99,10 +99,10 @@ func TestCPUPeriodWorkerActualProcessLossUsesLimitedRecovery(t *testing.T) {
 		t.Fatal(before, cpu)
 	}
 	// Fresh Run uses actual16 even with zero new caps; bare methods cannot recover it.
-	options := Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, cpuObserve: func() (time.Duration, error) { return 0, nil }, cpuSessionObserve: func() (time.Duration, error) { return 0, nil }, cpuSessionHooks: &cpuSessionHooks{recover: func(context.Context, *state.Store, time.Time) (state.CPUChargeState, error) {
+	options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, cpuObserve: func() (time.Duration, error) { return 0, nil }, cpuSessionObserve: func() (time.Duration, error) { return 0, nil }, cpuSessionHooks: &cpuSessionHooks{recover: func(context.Context, *state.Store, time.Time) (state.CPUChargeState, error) {
 		t.Error("schema15 recovery used for16")
 		return state.CPUChargeState{}, state.ErrCPUChargeAdmissionPolicyRequired
-	}}}
+	}}})
 	_, done := start(t, dir, cfg, options)
 	waitUntil(t, func() bool { return sessionSaved(t, dir).Generation == 2 })
 	after := periodSaved(t, dir)

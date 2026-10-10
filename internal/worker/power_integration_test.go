@@ -86,7 +86,7 @@ func TestWorkerPowerNoProbeWithoutAdmissibleDueSource(t *testing.T) {
 				probes.Add(1)
 				return powerinfo.Observation{}, errors.New("must not probe")
 			}, nil, nil)
-			_, done := start(t, dir, c, Options{ExperimentalScan: mode != "idle", powerCoordinator: p, Interval: time.Millisecond, WorkDuration: time.Second})
+			_, done := start(t, dir, c, fixtureInventoryStateOptions(t, Options{ExperimentalScan: mode != "idle", powerCoordinator: p, Interval: time.Millisecond, WorkDuration: time.Second}))
 			time.Sleep(50 * time.Millisecond)
 			status := control(t, dir, "status")
 			if probes.Load() != 0 || status.InventoryMetrics != nil {
@@ -116,7 +116,7 @@ func TestWorkerPowerPendingNoReceiptAndResponsiveControls(t *testing.T) {
 	var runDone <-chan error
 	unblock := cleanupWorkerPowerFixture(t, p, release, &runCancel, &runDone)
 
-	_, done, cancel := startCancelable(t, dir, c, Options{ExperimentalScan: true, powerCoordinator: p, Interval: time.Millisecond, WorkDuration: time.Second}, func(cancel context.CancelFunc, done <-chan error) { runCancel, runDone = cancel, done })
+	_, done, cancel := startCancelable(t, dir, c, fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, powerCoordinator: p, Interval: time.Millisecond, WorkDuration: time.Second}), func(cancel context.CancelFunc, done <-chan error) { runCancel, runDone = cancel, done })
 	runCancel, runDone = cancel, done
 	select {
 	case <-entered:
@@ -164,7 +164,10 @@ func TestWorkerPowerPendingAllowsMaintenanceAndGeneric(t *testing.T) {
 		return powerinfo.Observation{}, ctx.Err()
 	}, nil, nil)
 	var generic, sourceCalls atomic.Int64
-	options := Options{ExperimentalScan: true, powerCoordinator: p, Interval: time.Millisecond, WorkDuration: time.Second, Handlers: map[string]Handler{"fixture": func(context.Context, state.Job) (Result, error) { generic.Add(1); return Result{Done: true}, nil }}}
+	options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, powerCoordinator: p, Interval: time.Millisecond, WorkDuration: time.Second, Handlers: map[string]Handler{"fixture": func(context.Context, state.Job) (Result, error) { generic.Add(1); return Result{Done: true}, nil }}})
+	// Return the genuine finite pre sample before maintenance/generic work
+	// can revoke it; the deliberately blocked power callback stays asynchronous.
+	options.inventoryStatePhaseStarted = returnedInventoryStatePrePhaseForFixture
 	noRetirementSource(t, &options, &sourceCalls)
 	var runCancel context.CancelFunc
 	var runDone <-chan error
@@ -210,7 +213,7 @@ func TestWorkerPowerDisabledDoesNotProbeOrDeferSource(t *testing.T) {
 	var runDone <-chan error
 	_ = cleanupWorkerPowerFixture(t, p, release, &runCancel, &runDone)
 
-	_, done, cancel := startCancelable(t, dir, c, Options{ExperimentalScan: true, powerCoordinator: p, Interval: time.Millisecond, WorkDuration: time.Second}, func(cancel context.CancelFunc, done <-chan error) { runCancel, runDone = cancel, done })
+	_, done, cancel := startCancelable(t, dir, c, fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, powerCoordinator: p, Interval: time.Millisecond, WorkDuration: time.Second}), func(cancel context.CancelFunc, done <-chan error) { runCancel, runDone = cancel, done })
 	runCancel, runDone = cancel, done
 	waitUntil(t, func() bool { return control(t, dir, "status").InventoryMetrics != nil })
 	status := control(t, dir, "status")
@@ -262,7 +265,7 @@ func TestWorkerPowerReceiptRecheckNeverStartsProbe(t *testing.T) {
 	var runDone <-chan error
 	_ = cleanupWorkerPowerFixture(t, p, release, &runCancel, &runDone)
 
-	_, done, cancel := startCancelable(t, dir, c, Options{ExperimentalScan: true, powerCoordinator: p, Interval: 80 * time.Millisecond, WorkDuration: time.Second, wallNow: func() time.Time { return time.Now().Add(time.Duration(wallJump.Load())) }}, func(cancel context.CancelFunc, done <-chan error) { runCancel, runDone = cancel, done })
+	_, done, cancel := startCancelable(t, dir, c, fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, powerCoordinator: p, Interval: 80 * time.Millisecond, WorkDuration: time.Second, wallNow: func() time.Time { return time.Now().Add(time.Duration(wallJump.Load())) }}), func(cancel context.CancelFunc, done <-chan error) { runCancel, runDone = cancel, done })
 	runCancel, runDone = cancel, done
 	select {
 	case <-entered:
@@ -307,7 +310,7 @@ func TestWorkerPowerCanceledRunRetainsBlockedSlot(t *testing.T) {
 		<-release
 		return powerinfo.Observation{}, ctx.Err()
 	}, nil, nil)
-	options := Options{ExperimentalScan: true, powerCoordinator: p, Interval: time.Millisecond, WorkDuration: time.Second}
+	options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, powerCoordinator: p, Interval: time.Millisecond, WorkDuration: time.Second})
 	var runCancel context.CancelFunc
 	var runDone <-chan error
 	_ = cleanupWorkerPowerFixture(t, p, release, &runCancel, &runDone)
@@ -351,7 +354,7 @@ func TestWorkerPowerFreshDischargeAndSparseResample(t *testing.T) {
 		}
 		return powerinfo.Observation{Contract: powerinfo.Contract, Platform: "darwin", Profile: "unsupported", Status: "unknown", Reason: "fixture_unknown", StartedAt: at, FinishedAt: at, SequentialObservations: true}, nil
 	}, wall, elapsed)
-	_, done := start(t, dir, c, Options{ExperimentalScan: true, powerCoordinator: p, wallNow: wall, elapsedNow: elapsed, Interval: time.Millisecond, WorkDuration: time.Second})
+	_, done := start(t, dir, c, fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, powerCoordinator: p, wallNow: wall, elapsedNow: elapsed, Interval: time.Millisecond, WorkDuration: time.Second}))
 	waitUntil(t, func() bool {
 		s := control(t, dir, "status")
 		return s.Power.LastDecisionReason == "power_discharge_witness" && s.WaitReason == "power_source_backoff"
@@ -393,7 +396,10 @@ func TestWorkerPowerCompletionWakeRechecksDispatchQuota(t *testing.T) {
 		return powerinfo.Observation{Contract: powerinfo.Contract, Platform: "darwin", Profile: "unsupported", Status: "unknown", Reason: "fixture_unknown", StartedAt: at, FinishedAt: at, SequentialObservations: true}, nil
 	}, nil, nil)
 	var sourceCalls atomic.Int64
-	options := Options{ExperimentalScan: true, powerCoordinator: p, Interval: time.Millisecond, WorkDuration: time.Second}
+	options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, powerCoordinator: p, Interval: time.Millisecond, WorkDuration: time.Second})
+	// Return the genuine finite pre sample before maintenance/generic work
+	// can revoke it; the deliberately blocked power callback stays asynchronous.
+	options.inventoryStatePhaseStarted = returnedInventoryStatePrePhaseForFixture
 	noRetirementSource(t, &options, &sourceCalls)
 	var runCancel context.CancelFunc
 	var runDone <-chan error

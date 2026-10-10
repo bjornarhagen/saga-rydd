@@ -24,7 +24,7 @@ func TestWorkerPeriodicRevisitFindsNewEntryWithoutRestart(t *testing.T) {
 	}
 	var passes atomic.Int64
 	var latestGeneration atomic.Int64
-	options := Options{ExperimentalScan: true, Interval: 5 * time.Millisecond, WorkDuration: time.Second, revisitInterval: 350 * time.Millisecond}
+	options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: 5 * time.Millisecond, WorkDuration: time.Second, revisitInterval: 350 * time.Millisecond})
 	options.scannerNext = func(ctx context.Context, s *inventory.Scanner, j state.Job, p inventory.APIPermit) (state.ScanBatch, error) {
 		b, err := s.NextPermitted(ctx, j, p)
 		if err == nil && b.Complete {
@@ -125,7 +125,10 @@ func TestWorkerPeriodicRevisitKeepsOfflineEvidenceAndHealthyRootActive(t *testin
 		}
 	})
 	var failed, healthyPasses atomic.Int64
-	options := Options{ExperimentalScan: true, Interval: 5 * time.Millisecond, WorkDuration: time.Second, revisitInterval: 150 * time.Millisecond}
+	options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: 5 * time.Millisecond, WorkDuration: time.Second, revisitInterval: 150 * time.Millisecond})
+	// Join genuine finite state phases before competing writer work can revoke
+	// the SOURCE intent; this fixture tests fairness/revisit ordering.
+	options.inventoryStatePhaseStarted = returnedInventoryStateFinitePhaseForFixture
 	options.scannerNext = func(ctx context.Context, s *inventory.Scanner, j state.Job, p inventory.APIPermit) (state.ScanBatch, error) {
 		b, e := s.NextPermitted(ctx, j, p)
 		if string(j.RootPath) == offline && b.Fault != "" {
@@ -188,7 +191,7 @@ func TestWorkerPeriodicRevisitRetainsWideDirectoryContinuation(t *testing.T) {
 		complete   bool
 	}
 	batches := make(chan observation, 32)
-	options := Options{ExperimentalScan: true, Interval: 5 * time.Millisecond, WorkDuration: time.Second, revisitInterval: time.Millisecond}
+	options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: 5 * time.Millisecond, WorkDuration: time.Second, revisitInterval: time.Millisecond})
 	options.scannerNext = func(ctx context.Context, s *inventory.Scanner, j state.Job, p inventory.APIPermit) (state.ScanBatch, error) {
 		b, e := s.NextPermitted(ctx, j, p)
 		if e == nil && b.Fault == "" {
@@ -245,7 +248,7 @@ func TestWorkerPeriodicRevisitCannotBypassDailyQuotas(t *testing.T) {
 				want = "daily_metadata_limit"
 			}
 			var calls atomic.Int64
-			options := Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, revisitInterval: time.Millisecond}
+			options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, revisitInterval: time.Millisecond})
 			options.scannerNext = func(ctx context.Context, s *inventory.Scanner, j state.Job, p inventory.APIPermit) (state.ScanBatch, error) {
 				calls.Add(1)
 				return s.NextPermitted(ctx, j, p)
@@ -324,7 +327,7 @@ func TestWorkerPeriodicStartupPagesReachRootAfterDisabledHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	var calls atomic.Int64
-	options := Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second}
+	options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second})
 	options.scannerNext = func(ctx context.Context, s *inventory.Scanner, j state.Job, p inventory.APIPermit) (state.ScanBatch, error) {
 		if string(j.RootPath) != c.Roots[0] {
 			return state.ScanBatch{}, fmt.Errorf("disabled root dispatched")
@@ -344,7 +347,7 @@ func TestWorkerPeriodicProductionIntervalAndOrdinaryIdle(t *testing.T) {
 			dir, c := fixture(t)
 			c.Roots = []string{t.TempDir()}
 			var calls, samples atomic.Int64
-			options := Options{ExperimentalScan: experimental, Interval: time.Millisecond, WorkDuration: time.Second, cpuObserve: func() (time.Duration, error) { samples.Add(1); return 0, nil }}
+			options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: experimental, Interval: time.Millisecond, WorkDuration: time.Second, cpuObserve: func() (time.Duration, error) { samples.Add(1); return 0, nil }})
 			options.scannerNext = func(ctx context.Context, s *inventory.Scanner, j state.Job, p inventory.APIPermit) (state.ScanBatch, error) {
 				calls.Add(1)
 				return s.NextPermitted(ctx, j, p)

@@ -62,7 +62,7 @@ func TestCPUSessionWorkerIdleAndDefaultOffDoNotActivateOrObserve(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			dir, fixtureCfg := sessionWorkerFixture(t)
 			cfg := fixtureCfg
-			options := Options{Interval: 10 * time.Millisecond, WorkDuration: time.Second, cpuSessionObserve: func() (time.Duration, error) { t.Error("inactive gate sampled native CPU"); return 0, nil }}
+			options := fixtureInventoryStateOptions(t, Options{Interval: 10 * time.Millisecond, WorkDuration: time.Second, cpuSessionObserve: func() (time.Duration, error) { t.Error("inactive gate sampled native CPU"); return 0, nil }})
 			if mode == "experimental_off" {
 				options.ExperimentalScan = true
 				cfg.Scan.CPUSessionCharges = false
@@ -93,10 +93,10 @@ func TestCPUSessionWorkerFiniteBoundariesAndCachedControls(t *testing.T) {
 	}
 	w.Close()
 	var observations, handled atomic.Int64
-	options := Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second,
+	options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second,
 		cpuSessionObserve: func() (time.Duration, error) { observations.Add(1); return 0, nil },
 		Handlers:          map[string]Handler{"fixture": func(context.Context, state.Job) (Result, error) { handled.Add(1); return Result{Done: true}, nil }},
-	}
+	})
 	_, done := start(t, dir, fixtureCfg, options)
 	waitUntil(t, func() bool {
 		return sessionSaved(t, dir).Session != nil && sessionSaved(t, dir).Session.LastOrdinal >= 8
@@ -131,10 +131,10 @@ func TestCPUSessionWorkerUnknownKeepsControlsButDispatchesNothing(t *testing.T) 
 	}
 	w.Close()
 	var observations, handled atomic.Int64
-	_, done := start(t, dir, fixtureCfg, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second,
+	_, done := start(t, dir, fixtureCfg, fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second,
 		cpuSessionObserve: func() (time.Duration, error) { observations.Add(1); return 0, errors.New("generated unknown SELF") },
 		Handlers:          map[string]Handler{"fixture": func(context.Context, state.Job) (Result, error) { handled.Add(1); return Result{Done: true}, nil }},
-	})
+	}))
 	waitUntil(t, func() bool { return control(t, dir, "status").WaitReason == "cpu_session_unknown" })
 	for i := 0; i < 3; i++ {
 		control(t, dir, "pause")
@@ -155,7 +155,8 @@ func TestCPUSessionWorkerUnknownKeepsControlsButDispatchesNothing(t *testing.T) 
 
 func TestCPUSessionWorkerExplicitOptOutPreservesActivatedHistory(t *testing.T) {
 	dir, cfg := sessionWorkerFixture(t)
-	_, firstDone := start(t, dir, cfg, Options{ExperimentalScan: true, WorkDuration: time.Second, cpuSessionObserve: func() (time.Duration, error) { return 0, nil }})
+	stateOwner := fixtureInventoryStateOptions(t, Options{}).inventoryStateOwner
+	_, firstDone := start(t, dir, cfg, fixtureInventoryStateOptions(t, Options{inventoryStateOwner: stateOwner, ExperimentalScan: true, WorkDuration: time.Second, cpuSessionObserve: func() (time.Duration, error) { return 0, nil }}))
 	waitUntil(t, func() bool { return sessionSaved(t, dir).Status == "active" })
 	control(t, dir, "stop")
 	waitExit(t, firstDone)
@@ -170,7 +171,7 @@ func TestCPUSessionWorkerExplicitOptOutPreservesActivatedHistory(t *testing.T) {
 	w.Close()
 	cfg.Scan.CPUSessionCharges = false
 	var handled atomic.Int64
-	_, done := start(t, dir, cfg, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, cpuSessionObserve: func() (time.Duration, error) { t.Error("opt-out sampled session CPU"); return 0, nil }, Handlers: map[string]Handler{"fixture": func(context.Context, state.Job) (Result, error) { handled.Add(1); return Result{Done: true}, nil }}})
+	_, done := start(t, dir, cfg, fixtureInventoryStateOptions(t, Options{inventoryStateOwner: stateOwner, ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, cpuSessionObserve: func() (time.Duration, error) { t.Error("opt-out sampled session CPU"); return 0, nil }, Handlers: map[string]Handler{"fixture": func(context.Context, state.Job) (Result, error) { handled.Add(1); return Result{Done: true}, nil }}}))
 	waitUntil(t, func() bool { return handled.Load() == 1 })
 	control(t, dir, "stop")
 	waitExit(t, done)
@@ -199,9 +200,9 @@ func TestCPUSessionWorkerUncertainAdmissionKeepsFrozenRequestAndNoReceipt(t *tes
 		}
 		return got, state.ErrCPUChargesPublication
 	}}
-	_, done := start(t, dir, fixtureCfg, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, cpuSessionObserve: func() (time.Duration, error) { return 0, nil }, cpuSessionHooks: hooks,
+	_, done := start(t, dir, fixtureCfg, fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, cpuSessionObserve: func() (time.Duration, error) { return 0, nil }, cpuSessionHooks: hooks,
 		Handlers: map[string]Handler{"fixture": func(context.Context, state.Job) (Result, error) { handled.Add(1); return Result{Done: true}, nil }},
-	})
+	}))
 	waitUntil(t, func() bool { return control(t, dir, "status").WaitReason == "cpu_session_outcome_unknown" })
 	for i := 0; i < 4; i++ {
 		control(t, dir, "resume")
@@ -241,13 +242,13 @@ func TestCPUSessionWorkerCancelSettlesHandlerThenFinishes(t *testing.T) {
 	}
 	w.Close()
 	entered := make(chan struct{})
-	_, done, cancel := startCancelable(t, dir, fixtureCfg, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, cpuSessionObserve: func() (time.Duration, error) { return 0, nil },
+	_, done, cancel := startCancelable(t, dir, fixtureCfg, fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, cpuSessionObserve: func() (time.Duration, error) { return 0, nil },
 		Handlers: map[string]Handler{"fixture": func(ctx context.Context, _ state.Job) (Result, error) {
 			close(entered)
 			<-ctx.Done()
 			return Result{}, ctx.Err()
 		}},
-	})
+	}))
 	select {
 	case <-entered:
 	case <-time.After(5 * time.Second):
@@ -315,7 +316,7 @@ func TestCPUSessionWorkerUncooperativeHandlerLeavesOpenRecoveryEvidence(t *testi
 			t.Error("generated blocked handler leaked")
 		}
 	})
-	_, done, _ := startCancelable(t, dir, fixtureCfg, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: 10 * time.Second,
+	_, done, _ := startCancelable(t, dir, fixtureCfg, fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: 10 * time.Second,
 		cpuSessionObserve: func() (time.Duration, error) { observations.Add(1); return 0, nil },
 		Handlers: map[string]Handler{"fixture": func(context.Context, state.Job) (Result, error) {
 			defer close(exited)
@@ -323,7 +324,7 @@ func TestCPUSessionWorkerUncooperativeHandlerLeavesOpenRecoveryEvidence(t *testi
 			<-release
 			return Result{Done: true}, nil
 		}},
-	}, func(cancel context.CancelFunc, done <-chan error) { ownCancel, ownDone = cancel, done })
+	}), func(cancel context.CancelFunc, done <-chan error) { ownCancel, ownDone = cancel, done })
 	select {
 	case <-entered:
 	case <-time.After(5 * time.Second):
@@ -349,10 +350,10 @@ func TestCPUSessionWorkerDoesNotSampleIneligibleSourceOrFutureWork(t *testing.T)
 		t.Run(gate, func(t *testing.T) {
 			dir, cfg := sessionWorkerFixture(t)
 			var observations, sourceCalls atomic.Int64
-			options := Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, cpuSessionObserve: func() (time.Duration, error) { observations.Add(1); return 0, nil }, scannerNew: func(context.Context, []string, []string, []string, inventory.APIPermit, ...inventory.Option) (*inventory.Scanner, error) {
+			options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, cpuSessionObserve: func() (time.Duration, error) { observations.Add(1); return 0, nil }, scannerNew: func(context.Context, []string, []string, []string, inventory.APIPermit, ...inventory.Option) (*inventory.Scanner, error) {
 				sourceCalls.Add(1)
 				return nil, errors.New("unexpected source admission")
-			}}
+			}})
 			w, err := state.OpenWriter(context.Background(), dir)
 			if err != nil {
 				t.Fatal(err)
@@ -375,7 +376,7 @@ func TestCPUSessionWorkerDoesNotSampleIneligibleSourceOrFutureWork(t *testing.T)
 				}}
 			case "state":
 				cfg.Scan.APIAttemptsPerSecond = 0
-				options.inventoryStateObserve = func(context.Context, *state.Store, int64) (state.InventoryStateBudget, error) {
+				options.inventoryStateObserve = func(context.Context, state.InventoryStateBudgetSampler, int64) (state.InventoryStateBudget, error) {
 					return state.InventoryStateBudget{}, errors.New("generated unavailable state sample")
 				}
 			}
@@ -418,7 +419,7 @@ func TestCPUSessionLateElapsedRefusalRetainsReceiptAndUnstartedCursor(t *testing
 	cfg.Scan.APIAttemptsPerSecond = 0
 	wall := time.Now().UTC()
 	var elapsedNS, observations, sourceCalls atomic.Int64
-	options := Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second,
+	options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second,
 		wallNow: func() time.Time { return wall }, elapsedNow: func() time.Time { return wall.Add(time.Duration(elapsedNS.Load())) },
 		cpuSessionObserve: func() (time.Duration, error) {
 			observations.Add(1)
@@ -434,7 +435,7 @@ func TestCPUSessionLateElapsedRefusalRetainsReceiptAndUnstartedCursor(t *testing
 			sourceCalls.Add(1)
 			return nil, errors.New("late gate admitted source")
 		},
-	}
+	})
 	_, done := start(t, dir, cfg, options)
 	waitUntil(t, func() bool { return control(t, dir, "status").WaitReason == "cpu_session_unknown" })
 	status := control(t, dir, "status")
@@ -503,7 +504,7 @@ func TestCPUSessionLateMaintenanceRefusalLeavesExactRetirementProgress(t *testin
 	}
 	wall := time.Now().UTC()
 	var elapsedNS, observations, sourceCalls atomic.Int64
-	options := Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second,
+	options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second,
 		wallNow: func() time.Time { return wall }, elapsedNow: func() time.Time { return wall.Add(time.Duration(elapsedNS.Load())) },
 		cpuSessionObserve: func() (time.Duration, error) {
 			observations.Add(1)
@@ -518,7 +519,7 @@ func TestCPUSessionLateMaintenanceRefusalLeavesExactRetirementProgress(t *testin
 			elapsedNS.Add(-int64(3 * time.Millisecond))
 			return marker, err
 		},
-	}
+	})
 	noRetirementSource(t, &options, &sourceCalls)
 	_, done := start(t, dir, cfg, options)
 	waitUntil(t, func() bool { return control(t, dir, "status").WaitReason == "cpu_session_unknown" })

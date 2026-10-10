@@ -64,9 +64,9 @@ func TestCPUPeriodWorkerPartialBlocksSetupButControlsRemainAvailable(t *testing.
 	cfg.Scan.CPUChargeSecondsPerHour = 1
 	c := newPeriodWorkerClock()
 	var observations atomic.Int64
-	ready, done := start(t, dir, cfg, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, wallNow: c.wallNow, elapsedNow: c.elapsedNow,
+	ready, done := start(t, dir, cfg, fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, wallNow: c.wallNow, elapsedNow: c.elapsedNow,
 		cpuObserve:        func() (time.Duration, error) { c.advance(time.Millisecond); return 0, nil },
-		cpuSessionObserve: func() (time.Duration, error) { observations.Add(1); c.advance(time.Millisecond); return 0, nil }})
+		cpuSessionObserve: func() (time.Duration, error) { observations.Add(1); c.advance(time.Millisecond); return 0, nil }}))
 	if ready.InventoryMode != nil {
 		t.Fatal("unaccounted setup before listener", ready)
 	}
@@ -119,9 +119,9 @@ func TestCPUPeriodWorkerActual16RoutesZeroTrackingAndGapOptOut(t *testing.T) {
 				t.Error("bare API reached actual16")
 				return state.CPUChargeState{}, state.ErrCPUChargeAdmissionPolicyRequired
 			}}
-			_, done := start(t, dir, cfg, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, wallNow: c.wallNow, elapsedNow: c.elapsedNow, cpuSessionHooks: hooks,
+			_, done := start(t, dir, cfg, fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, wallNow: c.wallNow, elapsedNow: c.elapsedNow, cpuSessionHooks: hooks,
 				cpuSessionObserve: func() (time.Duration, error) { sessions.Add(1); c.advance(time.Millisecond); return 0, nil },
-				cpuObserve:        func() (time.Duration, error) { feedback.Add(1); c.advance(time.Millisecond); return 0, nil }})
+				cpuObserve:        func() (time.Duration, error) { feedback.Add(1); c.advance(time.Millisecond); return 0, nil }}))
 			waitUntil(t, func() bool { return control(t, dir, "status").InventoryMode != nil })
 			a := periodSaved(t, dir)
 			if tracking {
@@ -157,7 +157,7 @@ func TestCPUPeriodWorkerGapUncertaintyAndMalformedStateKeepControls(t *testing.T
 			cfg.Scan.CPUSessionCharges = false
 			c := newPeriodWorkerClock()
 			activatePeriodWorkerFixture(t, dir, c.wallNow(), true)
-			options := Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, wallNow: c.wallNow, elapsedNow: c.elapsedNow, cpuSessionObserve: func() (time.Duration, error) { t.Error("failed/gap role sampled SESSION CPU"); return 0, nil }}
+			options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, wallNow: c.wallNow, elapsedNow: c.elapsedNow, cpuSessionObserve: func() (time.Duration, error) { t.Error("failed/gap role sampled SESSION CPU"); return 0, nil }})
 			if failure == "gap_uncertain" {
 				options.cpuPeriodHooks = &cpuPeriodHooks{gap: func(ctx context.Context, w *state.Store, q state.CPUTrackingGapRequest) (state.CPUChargeState, state.CPUChargeAdmissionState, error) {
 					cpu, a, err := w.OpenCPUTrackingGap(ctx, q)
@@ -200,7 +200,7 @@ func TestCPUPeriodWorkerBoundaryOvershootRefusesBeforeSetupAndReceipt(t *testing
 	cfg.Scan.CPUChargeSecondsPerHour = 1
 	c := newPeriodWorkerClock()
 	var samples atomic.Int64
-	_, done := start(t, dir, cfg, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, wallNow: c.wallNow, elapsedNow: c.elapsedNow,
+	_, done := start(t, dir, cfg, fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, wallNow: c.wallNow, elapsedNow: c.elapsedNow,
 		cpuSessionObserve: func() (time.Duration, error) {
 			n := samples.Add(1)
 			c.advance(time.Millisecond)
@@ -208,7 +208,7 @@ func TestCPUPeriodWorkerBoundaryOvershootRefusesBeforeSetupAndReceipt(t *testing
 				return 0, nil
 			}
 			return 2 * time.Second, nil
-		}, cpuObserve: func() (time.Duration, error) { c.advance(time.Millisecond); return 0, nil }})
+		}, cpuObserve: func() (time.Duration, error) { c.advance(time.Millisecond); return 0, nil }}))
 	waitUntil(t, func() bool { return control(t, dir, "status").WaitReason == "cpu_hour_charge_partial" })
 	c.advance(2 * time.Hour)
 	control(t, dir, "resume")
@@ -273,7 +273,7 @@ func TestCPUPeriodWorkerExpiredPostSampleEvidenceCannotClaim(t *testing.T) {
 		}
 		return cpu, admission, err
 	}}
-	_, done := start(t, dir, cfg, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, wallNow: c.wallNow, elapsedNow: c.elapsedNow, cpuPeriodHooks: hooks,
+	_, done := start(t, dir, cfg, fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, wallNow: c.wallNow, elapsedNow: c.elapsedNow, cpuPeriodHooks: hooks,
 		cpuObserve: func() (time.Duration, error) { c.advance(time.Millisecond); return 0, nil },
 		cpuSessionObserve: func() (time.Duration, error) {
 			n := observations.Add(1)
@@ -283,7 +283,7 @@ func TestCPUPeriodWorkerExpiredPostSampleEvidenceCannotClaim(t *testing.T) {
 			}
 			return 0, nil
 		},
-		Handlers: map[string]Handler{"fixture": func(context.Context, state.Job) (Result, error) { handled.Add(1); return Result{Done: true}, nil }}})
+		Handlers: map[string]Handler{"fixture": func(context.Context, state.Job) (Result, error) { handled.Add(1); return Result{Done: true}, nil }}}))
 	waitUntil(t, func() bool { return control(t, dir, "status").WaitReason == "cpu_hour_charge_partial" })
 	c.advance(2 * time.Hour)
 	control(t, dir, "resume")
@@ -308,7 +308,7 @@ func TestCPUPeriodWorkerBeginWallRolloverRetainsActivationElapsedFence(t *testin
 			cfg.Scan.CPUChargeSecondsPerHour, cfg.Scan.CPUChargeSecondsPerDay = profile.hour, profile.day
 			c := newPeriodWorkerClock()
 			var observations atomic.Int64
-			ready, done := start(t, dir, cfg, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, wallNow: c.wallNow, elapsedNow: c.elapsedNow,
+			ready, done := start(t, dir, cfg, fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, wallNow: c.wallNow, elapsedNow: c.elapsedNow,
 				cpuObserve: func() (time.Duration, error) { c.advance(time.Millisecond); return 0, nil },
 				cpuSessionObserve: func() (time.Duration, error) {
 					if observations.Add(1) == 1 {
@@ -316,7 +316,7 @@ func TestCPUPeriodWorkerBeginWallRolloverRetainsActivationElapsedFence(t *testin
 					}
 					c.advance(time.Millisecond)
 					return 0, nil
-				}})
+				}}))
 			if ready.InventoryMode != nil {
 				t.Fatal("setup preceded listener", ready)
 			}

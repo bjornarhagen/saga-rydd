@@ -54,11 +54,11 @@ func TestWorkerInventoryStateNoSampleWithoutAdmissibleDueSource(t *testing.T) {
 				probes.Add(1)
 				return powerinfo.Observation{}, errors.New("unexpected probe")
 			}, nil, nil)
-			o := Options{ExperimentalScan: mode != "idle", powerCoordinator: p, Interval: time.Millisecond, WorkDuration: time.Second,
-				inventoryStateObserve: func(context.Context, *state.Store, int64) (state.InventoryStateBudget, error) {
+			o := fixtureInventoryStateOptions(t, Options{ExperimentalScan: mode != "idle", powerCoordinator: p, Interval: time.Millisecond, WorkDuration: time.Second,
+				inventoryStateObserve: func(context.Context, state.InventoryStateBudgetSampler, int64) (state.InventoryStateBudget, error) {
 					samples.Add(1)
 					return state.InventoryStateBudget{}, errors.New("unexpected sample")
-				}}
+				}})
 			_, done := start(t, dir, c, o)
 			time.Sleep(30 * time.Millisecond)
 			s := control(t, dir, "status")
@@ -78,13 +78,13 @@ func TestWorkerInventoryStateReachedUnknownAndControlsRetainRetry(t *testing.T) 
 			dir := filepath.Join(t.TempDir(), "state")
 			c := config.Default()
 			c.Roots = []string{root}
-			var samples, probes, sources atomic.Int64
+			var samples, probes, sources, cpuReads atomic.Int64
 			p := newPowerCoordinator(func(context.Context) (powerinfo.Observation, error) {
 				probes.Add(1)
 				return powerinfo.Observation{}, nil
 			}, nil, nil)
-			o := Options{ExperimentalScan: true, powerCoordinator: p, Interval: time.Millisecond, WorkDuration: time.Second,
-				inventoryStateObserve: func(_ context.Context, _ *state.Store, limit int64) (state.InventoryStateBudget, error) {
+			o := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, powerCoordinator: p, Interval: time.Millisecond, WorkDuration: time.Second,
+				inventoryStateObserve: func(_ context.Context, _ state.InventoryStateBudgetSampler, limit int64) (state.InventoryStateBudget, error) {
 					samples.Add(1)
 					r := fixtureInventoryStateReport(limit, limit, time.Now())
 					switch mode {
@@ -98,20 +98,28 @@ func TestWorkerInventoryStateReachedUnknownAndControlsRetainRetry(t *testing.T) 
 						return state.InventoryStateBudget{}, context.DeadlineExceeded
 					}
 					return r, nil
-				}}
+				}})
 			noRetirementSource(t, &o, &sources)
+			o.cpuObserve = func() (time.Duration, error) { cpuReads.Add(1); return 0, nil }
 			_, done := start(t, dir, c, o)
-			waitUntil(t, func() bool { return control(t, dir, "status").WaitReason == "inventory_state_source_backoff" })
+			waitUntil(t, func() bool {
+				s := control(t, dir, "status")
+				return s.WaitReason == "inventory_state_source_backoff" && s.InventoryState != nil && s.InventoryState.CallbackReturned && !s.InventoryState.ProcessSlotOccupied && s.InventoryState.LastAttemptFinishedAt != nil && s.InventoryState.RetryAfterAt != nil
+			})
 			before := control(t, dir, "status")
+			beforeCPU := cpuReads.Load()
 			if samples.Load() != 1 || probes.Load() != 0 || sources.Load() != 0 || before.Dispatch.Used != 0 || before.CPUFeedback.Window != nil || before.InventoryState.LastDecisionStatus != "source_deferred" || before.InventoryState.RetryAfterAt == nil {
 				t.Fatal(before, samples.Load(), probes.Load(), sources.Load())
+			}
+			if before.InventoryState.LastAttemptStartedAt == nil || !before.InventoryState.RetryAfterAt.Equal(before.InventoryState.LastAttemptStartedAt.Add(inventoryStateRetryInterval)) {
+				t.Fatal("completion renewed the frozen retry anchor", before.InventoryState)
 			}
 			for _, command := range []string{"status", "pause", "status", "resume", "status"} {
 				control(t, dir, command)
 			}
 			time.Sleep(20 * time.Millisecond)
 			after := control(t, dir, "status")
-			if samples.Load() != 1 || !reflect.DeepEqual(before.InventoryState, after.InventoryState) || after.Dispatch.Used != 0 {
+			if samples.Load() != 1 || cpuReads.Load() != beforeCPU || !reflect.DeepEqual(before.InventoryState, after.InventoryState) || after.Dispatch.Used != 0 {
 				t.Fatal("controls renewed retry or sampled/charged", before, after, samples.Load())
 			}
 			control(t, dir, "stop")
@@ -138,16 +146,20 @@ func TestWorkerInventoryStateAllowsMaintenanceAndGeneric(t *testing.T) {
 		probes.Add(1)
 		return powerinfo.Observation{}, nil
 	}, nil, nil)
-	o := Options{ExperimentalScan: true, powerCoordinator: p, Interval: time.Millisecond, WorkDuration: time.Second,
+	o := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, powerCoordinator: p, Interval: time.Millisecond, WorkDuration: time.Second,
 		Handlers: map[string]Handler{"fixture": func(context.Context, state.Job) (Result, error) { generic.Add(1); return Result{Done: true}, nil }},
-		inventoryStateObserve: func(_ context.Context, _ *state.Store, limit int64) (state.InventoryStateBudget, error) {
+		inventoryStateObserve: func(_ context.Context, _ state.InventoryStateBudgetSampler, limit int64) (state.InventoryStateBudget, error) {
 			samples.Add(1)
 			return fixtureInventoryStateReport(limit, limit, time.Now()), nil
-		}}
+		}})
 	noRetirementSource(t, &o, &sources)
+	// This finite pre result must be returned before the existing maintenance
+	// can revoke a still-pending SOURCE intent. Production has no such wait.
+	o.inventoryStatePhaseStarted = returnedInventoryStatePrePhaseForFixture
 	_, done := start(t, dir, c, o)
 	waitUntil(t, func() bool {
-		return generic.Load() == 1 && control(t, dir, "status").WaitReason == "inventory_state_source_backoff"
+		s := control(t, dir, "status")
+		return generic.Load() == 1 && s.WaitReason == "inventory_state_source_backoff" && s.InventoryState != nil && s.InventoryState.CallbackReturned && !s.InventoryState.ProcessSlotOccupied && s.InventoryState.LastAttemptFinishedAt != nil
 	})
 	r, err := state.OpenReader(context.Background(), dir)
 	if err != nil {
@@ -173,8 +185,8 @@ func TestWorkerInventoryStatePostReceiptRefusalRetainsChargeAndCadence(t *testin
 			var samples, sources, wallOffset, elapsedOffset atomic.Int64
 			wall := func() time.Time { return time.Now().Add(time.Duration(wallOffset.Load())).UTC() }
 			elapsed := func() time.Time { return time.Now().Add(time.Duration(elapsedOffset.Load())) }
-			o := Options{ExperimentalScan: true, Interval: 80 * time.Millisecond, WorkDuration: time.Second, wallNow: wall, elapsedNow: elapsed,
-				inventoryStateObserve: func(_ context.Context, _ *state.Store, limit int64) (state.InventoryStateBudget, error) {
+			o := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: 80 * time.Millisecond, WorkDuration: time.Second, wallNow: wall, elapsedNow: elapsed,
+				inventoryStateObserve: func(_ context.Context, _ state.InventoryStateBudgetSampler, limit int64) (state.InventoryStateBudget, error) {
 					n := samples.Add(1)
 					r := fixtureInventoryStateReport(limit, 1, wall())
 					if n != 2 {
@@ -197,12 +209,12 @@ func TestWorkerInventoryStatePostReceiptRefusalRetainsChargeAndCadence(t *testin
 						wallOffset.Store(-int64(time.Second))
 					}
 					return r, nil
-				}}
+				}})
 			noRetirementSource(t, &o, &sources)
 			_, done := start(t, dir, c, o)
 			waitUntil(t, func() bool {
 				s := control(t, dir, "status")
-				return s.InventoryState != nil && s.InventoryState.LastAttemptPhase == "after_receipt"
+				return s.InventoryState != nil && s.InventoryState.LastAttemptPhase == "after_receipt" && s.InventoryState.CallbackReturned && !s.InventoryState.ProcessSlotOccupied && s.InventoryState.LastAttemptFinishedAt != nil && s.InventoryState.LastDecisionReason != "inventory_state_pending"
 			})
 			before := control(t, dir, "status")
 			if samples.Load() != 2 || sources.Load() != 0 || before.Dispatch.Used != 1 || before.InventoryState.LastDecisionStatus != "source_deferred" || before.CPUFeedback.Window != nil || before.ActiveJob != 0 {
@@ -300,17 +312,31 @@ func TestWorkerInventoryStateRealThresholdRetainsHistoryAcrossRestart(t *testing
 	w.Close()
 	before := inventoryStateSavedJobs(t, dir)
 	var sources atomic.Int64
+	o := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second})
 	for run := 0; run < 2; run++ {
-		o := Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second}
 		noRetirementSource(t, &o, &sources)
 		_, done := start(t, dir, c, o)
 		waitUntil(t, func() bool {
 			s := control(t, dir, "status")
-			return s.InventoryState.Observation != nil && s.InventoryState.Observation.Status == "limit_reached"
+			return (run == 0 && s.InventoryState != nil && s.InventoryState.CallbackReturned && !s.InventoryState.ProcessSlotOccupied && s.InventoryState.LastAttemptFinishedAt != nil && s.InventoryState.Observation != nil && s.InventoryState.Observation.Status == "limit_reached") || (run == 1 && s.WaitReason == "inventory_state_source_backoff")
 		})
 		s := control(t, dir, "status")
-		if sources.Load() != 0 || s.Dispatch.Used != 0 || s.CPUFeedback.Window != nil || s.InventoryState.Observation.TotalBytes == nil || *s.InventoryState.Observation.TotalBytes < c.Scan.MaxStateBytes {
+		if sources.Load() != 0 || (s.Dispatch != nil && s.Dispatch.Used != 0) || s.CPUFeedback.Window != nil || (run == 0 && (s.InventoryState.Observation.TotalBytes == nil || *s.InventoryState.Observation.TotalBytes < c.Scan.MaxStateBytes)) || (run == 1 && s.InventoryState.Observation != nil) {
 			t.Fatal(s, sources.Load())
+		}
+		// A retained process retry can defer SOURCE before a restarted live query.
+		// Require the saved zero charge on both Runs while preserving every job.
+		readCtx, readCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		reader, readErr := state.OpenReader(readCtx, dir)
+		if readErr != nil {
+			readCancel()
+			t.Fatal(readErr)
+		}
+		budget, budgetErr := reader.DispatchBudget(readCtx, time.Now(), c.Scan.MaxScanChunksPerDay)
+		closeErr := reader.Close()
+		readCancel()
+		if budgetErr != nil || closeErr != nil || budget.Used != 0 {
+			t.Fatal("threshold or retained retry acquired charged work", budget, budgetErr, closeErr)
 		}
 		control(t, dir, "pause")
 		control(t, dir, "resume")
@@ -332,8 +358,8 @@ func TestWorkerInventoryStateMidPassRetainsExactCursor(t *testing.T) {
 	var calls atomic.Int64
 	var mu sync.Mutex
 	var saved []inventoryStateJobEvidence
-	o := Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second,
-		inventoryStateObserve: func(_ context.Context, _ *state.Store, limit int64) (state.InventoryStateBudget, error) {
+	o := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second,
+		inventoryStateObserve: func(_ context.Context, _ state.InventoryStateBudgetSampler, limit int64) (state.InventoryStateBudget, error) {
 			n := calls.Add(1)
 			if n == 3 {
 				rows := inventoryStateSavedJobs(t, dir)
@@ -345,9 +371,12 @@ func TestWorkerInventoryStateMidPassRetainsExactCursor(t *testing.T) {
 				return fixtureInventoryStateReport(limit, limit, time.Now()), nil
 			}
 			return fixtureInventoryStateReport(limit, 1, time.Now()), nil
-		}}
+		}})
 	_, done := start(t, dir, c, o)
-	waitUntil(t, func() bool { return control(t, dir, "status").WaitReason == "inventory_state_source_backoff" })
+	waitUntil(t, func() bool {
+		s := control(t, dir, "status")
+		return s.WaitReason == "inventory_state_source_backoff" && s.InventoryState != nil && s.InventoryState.CallbackReturned && !s.InventoryState.ProcessSlotOccupied && s.InventoryState.LastAttemptFinishedAt != nil && s.InventoryState.Observation != nil && s.InventoryState.Observation.Status == "limit_reached"
+	})
 	mu.Lock()
 	before := saved
 	mu.Unlock()
@@ -359,9 +388,10 @@ func TestWorkerInventoryStateMidPassRetainsExactCursor(t *testing.T) {
 	}
 	control(t, dir, "stop")
 	waitExit(t, done)
-	// Reopening resamples, but refuses without constructing a new scanner.
+	// The same fixture process retains the prior failed-attempt retry.
+	// Reopening cannot resample or reconstruct the old scope report.
 	var sourceCalls atomic.Int64
-	o.inventoryStateObserve = func(_ context.Context, _ *state.Store, limit int64) (state.InventoryStateBudget, error) {
+	o.inventoryStateObserve = func(_ context.Context, _ state.InventoryStateBudgetSampler, limit int64) (state.InventoryStateBudget, error) {
 		return fixtureInventoryStateReport(limit, limit, time.Now()), nil
 	}
 	noRetirementSource(t, &o, &sourceCalls)
@@ -382,14 +412,14 @@ func TestWorkerInventoryStateReturnedCancellationRetainsChargedReceipt(t *testin
 	c.Scan.PauseOnBattery = false
 	var samples, sources atomic.Int64
 	var runCancel context.CancelFunc
-	o := Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second,
-		inventoryStateObserve: func(ctx context.Context, _ *state.Store, limit int64) (state.InventoryStateBudget, error) {
+	o := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second,
+		inventoryStateObserve: func(ctx context.Context, _ state.InventoryStateBudgetSampler, limit int64) (state.InventoryStateBudget, error) {
 			if samples.Add(1) == 2 {
 				runCancel()
 				return state.InventoryStateBudget{}, ctx.Err()
 			}
 			return fixtureInventoryStateReport(limit, 1, time.Now()), nil
-		}}
+		}})
 	noRetirementSource(t, &o, &sources)
 	_, done, _ := startCancelable(t, dir, c, o, func(cancel context.CancelFunc, _ <-chan error) { runCancel = cancel })
 	// Run preserves its canceled lifetime after the routing session finishes.
@@ -433,19 +463,22 @@ func TestWorkerInventoryStateRetryRequiresBothClocks(t *testing.T) {
 			var samples, sourceSteps, wallOffset, elapsedOffset atomic.Int64
 			wall := func() time.Time { return time.Now().Add(time.Duration(wallOffset.Load())).UTC() }
 			elapsed := func() time.Time { return time.Now().Add(time.Duration(elapsedOffset.Load())) }
-			o := Options{ExperimentalScan: true, Interval: 80 * time.Millisecond, WorkDuration: time.Second, wallNow: wall, elapsedNow: elapsed,
-				inventoryStateObserve: func(_ context.Context, _ *state.Store, limit int64) (state.InventoryStateBudget, error) {
+			o := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: 80 * time.Millisecond, WorkDuration: time.Second, wallNow: wall, elapsedNow: elapsed,
+				inventoryStateObserve: func(_ context.Context, _ state.InventoryStateBudgetSampler, limit int64) (state.InventoryStateBudget, error) {
 					if samples.Add(1) == 1 {
 						return fixtureInventoryStateReport(limit, limit, wall()), nil
 					}
 					return fixtureInventoryStateReport(limit, 1, wall()), nil
-				}}
+				}})
 			o.scannerNext = func(ctx context.Context, scanner *inventory.Scanner, job state.Job, permit inventory.APIPermit) (state.ScanBatch, error) {
 				sourceSteps.Add(1)
 				return scanner.NextPermitted(ctx, job, permit)
 			}
 			_, done := start(t, dir, c, o)
-			waitUntil(t, func() bool { return control(t, dir, "status").WaitReason == "inventory_state_source_backoff" })
+			waitUntil(t, func() bool {
+				s := control(t, dir, "status")
+				return s.WaitReason == "inventory_state_source_backoff" && s.InventoryState != nil && s.InventoryState.CallbackReturned && !s.InventoryState.ProcessSlotOccupied && s.InventoryState.LastAttemptFinishedAt != nil && s.InventoryState.RetryAfterAt != nil
+			})
 			before := control(t, dir, "status").InventoryState
 			if first == "wall" {
 				wallOffset.Store(int64(6 * time.Minute))
@@ -495,13 +528,14 @@ func TestWorkerInventoryStateCachedPowerWaitDoesNotResample(t *testing.T) {
 		return powerinfo.Observation{}, ctx.Err()
 	}, nil, nil)
 	var samples, sources, generic atomic.Int64
-	o := Options{ExperimentalScan: true, powerCoordinator: p, Interval: time.Millisecond, WorkDuration: time.Second,
+	o := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, powerCoordinator: p, Interval: time.Millisecond, WorkDuration: time.Second,
 		Handlers: map[string]Handler{"fixture": func(context.Context, state.Job) (Result, error) { generic.Add(1); return Result{Done: true}, nil }},
-		inventoryStateObserve: func(_ context.Context, _ *state.Store, limit int64) (state.InventoryStateBudget, error) {
+		inventoryStateObserve: func(_ context.Context, _ state.InventoryStateBudgetSampler, limit int64) (state.InventoryStateBudget, error) {
 			samples.Add(1)
 			return fixtureInventoryStateReport(limit, 1, time.Now()), nil
-		}}
+		}})
 	noRetirementSource(t, &o, &sources)
+	o.inventoryStatePhaseStarted = returnedInventoryStatePrePhaseForFixture
 	var cancel context.CancelFunc
 	var done <-chan error
 	cleanupWorkerPowerFixture(t, p, release, &cancel, &done)
@@ -526,6 +560,26 @@ func TestWorkerInventoryStateCachedPowerWaitDoesNotResample(t *testing.T) {
 	waitExit(t, done)
 }
 
+// Only explicitly selected finite-observer fixtures install this hook. It is
+// outside coordinator locks and never waits on a deliberately blocked pre call.
+// Its five-second failure bound is separate from production control latency.
+func returnedInventoryStatePrePhaseForFixture(phase string, ticket *inventoryStateTicket) error {
+	if phase != "before_dispatch" {
+		return nil
+	}
+	if ticket == nil {
+		return errors.New("finite pre phase did not receive its exact ticket")
+	}
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-ticket.done:
+		return nil
+	case <-timer.C:
+		return errors.New("finite pre callback did not return within five seconds")
+	}
+}
+
 func TestWorkerInventoryStateClaimUsesValidatedClockReading(t *testing.T) {
 	for _, mode := range []string{"boundary", "rollback"} {
 		t.Run(mode, func(t *testing.T) {
@@ -534,30 +588,20 @@ func TestWorkerInventoryStateClaimUsesValidatedClockReading(t *testing.T) {
 			c := config.Default()
 			c.Roots = []string{root}
 			c.Scan.PauseOnBattery = false
-			var samples, sources, armedReads, stamp atomic.Int64
+			var samples, sources, stamp, fixedClaimWall, jumpedWall atomic.Int64
 			wall := func() time.Time {
-				n := armedReads.Load()
-				if n < 0 {
-					return time.Now().UTC()
+				if jumped := jumpedWall.Load(); jumped != 0 {
+					return time.Unix(0, jumped).UTC()
 				}
-				n = armedReads.Add(1)
-				reserved := time.Unix(0, stamp.Load()).UTC()
-				if n == 1 {
-					return reserved.Add(state.FairInventoryClaimWindow - 2*time.Nanosecond)
+				if fixed := fixedClaimWall.Load(); fixed != 0 {
+					return time.Unix(0, fixed).UTC()
 				}
-				if n == 2 {
-					return reserved.Add(state.FairInventoryClaimWindow - time.Nanosecond)
-				}
-				if mode == "rollback" {
-					return reserved.Add(-time.Nanosecond)
-				}
-				return reserved.Add(state.FairInventoryClaimWindow)
+				return time.Now().UTC()
 			}
-			armedReads.Store(-1)
 			var cancelRun context.CancelFunc
 			var begins atomic.Int64
-			o := Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, wallNow: wall,
-				inventoryStateObserve: func(sampleCtx context.Context, _ *state.Store, limit int64) (state.InventoryStateBudget, error) {
+			o := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, wallNow: wall,
+				inventoryStateObserve: func(sampleCtx context.Context, _ state.InventoryStateBudgetSampler, limit int64) (state.InventoryStateBudget, error) {
 					r := fixtureInventoryStateReport(limit, 1, wall())
 					if samples.Add(1) == 2 {
 						u := url.URL{Scheme: "file", Path: filepath.Join(dir, state.Filename), RawQuery: "mode=ro"}
@@ -572,15 +616,32 @@ func TestWorkerInventoryStateClaimUsesValidatedClockReading(t *testing.T) {
 							t.Fatal(err)
 						}
 						stamp.Store(reserved)
-						armedReads.Store(0)
+						// Freeze one exact post-capture/claim clock, independent of
+						// how many serialized async observations precede the claim.
+						fixedClaimWall.Store(time.Now().UTC().UnixNano())
 					}
 					return r, nil
 				},
-				cpuBegin: func(_ context.Context, _ *state.Store, _ *state.FairInventoryTurn, now time.Time, _ state.CPUWindowStart) (state.CPUWindowMarker, error) {
+				cpuBegin: func(_ context.Context, _ *state.Store, turn *state.FairInventoryTurn, now time.Time, _ state.CPUWindowStart) (state.CPUWindowMarker, error) {
 					begins.Add(1)
+					reserved := time.Unix(0, stamp.Load()).UTC()
+					if turn == nil || turn.Job == nil {
+						t.Error("missing exact source claim")
+						cancelRun()
+						return state.CPUWindowMarker{}, state.ErrCPUFeedbackDeferred
+					}
+					claimed := turn.Job.LeaseUntil.Add(-time.Second - 10*time.Second)
+					if !now.Equal(claimed) || !claimed.Equal(time.Unix(0, fixedClaimWall.Load()).UTC()) || claimed.Before(reserved) || claimed.Sub(reserved) >= state.FairInventoryClaimWindow {
+						t.Error("claim and Begin did not share the validated original-receipt wall", claimed, now, reserved)
+					}
+					if mode == "rollback" {
+						jumpedWall.Store(reserved.Add(-time.Nanosecond).UnixNano())
+					} else {
+						jumpedWall.Store(reserved.Add(state.FairInventoryClaimWindow).UnixNano())
+					}
 					cancelRun()
 					return state.CPUWindowMarker{}, state.ErrCPUFeedbackDeferred
-				}}
+				}})
 			noRetirementSource(t, &o, &sources)
 			_, done, _ := startCancelable(t, dir, c, o, func(cancel context.CancelFunc, _ <-chan error) { cancelRun = cancel })
 			// Run preserves its canceled lifetime after the routing session finishes.
@@ -597,6 +658,14 @@ func TestWorkerInventoryStateClaimUsesValidatedClockReading(t *testing.T) {
 				}
 			case <-time.After(8 * time.Second):
 				t.Fatal("worker did not stop")
+			}
+			if !asyncSavedDispatchStart(t, dir).Equal(time.Unix(0, stamp.Load()).UTC()) {
+				t.Fatal("charged receipt anchor changed")
+			}
+			for _, job := range inventoryStateSavedJobs(t, dir) {
+				if job.Status != "pending" || len(job.Cursor) != 0 {
+					t.Fatal("late clock changed unstarted progress", job)
+				}
 			}
 			if begins.Load() != 1 || samples.Load() != 2 || sources.Load() != 0 {
 				t.Fatal("claim took a new unvalidated clock reading", begins.Load(), samples.Load(), sources.Load())

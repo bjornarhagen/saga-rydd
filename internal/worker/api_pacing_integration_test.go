@@ -79,15 +79,15 @@ func TestWorkerAPIPacingCapacityBlocksSourceWithoutPolling(t *testing.T) {
 		probes.Add(1)
 		return powerinfo.Observation{}, nil
 	}, nil, nil)
-	o := Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, powerCoordinator: power,
-		inventoryStateObserve: func(context.Context, *state.Store, int64) (state.InventoryStateBudget, error) {
+	o := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, powerCoordinator: power,
+		inventoryStateObserve: func(context.Context, state.InventoryStateBudgetSampler, int64) (state.InventoryStateBudget, error) {
 			samples.Add(1)
 			return state.InventoryStateBudget{}, errors.New("unexpected sample")
 		},
 		scannerPacedNew: func(context.Context, []string, []string, []string, inventory.APIPermit, ...inventory.Option) (*inventory.Scanner, error) {
 			sourceCalls.Add(1)
 			return nil, errors.New("unexpected source")
-		}}
+		}})
 	_, done := startPacingWorker(t, dir, c, o)
 	waitUntil(t, func() bool { return control(t, dir, "status").WaitReason == "api_capacity_blocked" })
 	before := control(t, dir, "status")
@@ -132,20 +132,20 @@ func TestWorkerAPIPacingBlockAllowsMaintenanceAndFutureGeneric(t *testing.T) {
 		probes.Add(1)
 		return powerinfo.Observation{}, nil
 	}, nil, nil)
-	o := Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, powerCoordinator: power,
+	o := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, powerCoordinator: power,
 		Handlers: map[string]Handler{"fixture": func(context.Context, state.Job) (Result, error) {
 			generic.Add(1)
 			genericDone <- struct{}{}
 			return Result{Done: true}, nil
 		}},
-		inventoryStateObserve: func(context.Context, *state.Store, int64) (state.InventoryStateBudget, error) {
+		inventoryStateObserve: func(context.Context, state.InventoryStateBudgetSampler, int64) (state.InventoryStateBudget, error) {
 			samples.Add(1)
 			return state.InventoryStateBudget{}, errors.New("unexpected sample")
 		},
 		scannerPacedNew: func(context.Context, []string, []string, []string, inventory.APIPermit, ...inventory.Option) (*inventory.Scanner, error) {
 			sourceCalls.Add(1)
 			return nil, errors.New("unexpected source")
-		}}
+		}})
 	_, done := startPacingWorker(t, dir, c, o)
 	// No control request wakes the worker while the generic future timer is
 	// pending. Its own due timer must survive the permanent source refusal.
@@ -179,14 +179,14 @@ func TestWorkerAPIPacingProfileRefusalSettlesOnceAndPreservesJob(t *testing.T) {
 	c.Scan.APIAttemptsPerSecond = 100000
 	c.Scan.PauseOnBattery = false
 	var calls atomic.Int64
-	o := Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second,
+	o := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second,
 		scannerPacedNew: func(ctx context.Context, _ []string, _ []string, _ []string, permit inventory.APIPermit, _ ...inventory.Option) (*inventory.Scanner, error) {
 			calls.Add(1)
 			if err := permit(ctx, inventory.APIPathResolution); err != nil {
 				return nil, err
 			}
 			return nil, errors.Join(inventory.ErrAPIPermitDenied, inventory.ErrAPIPacingProfile)
-		}}
+		}})
 	_, done := startPacingWorker(t, dir, c, o)
 	waitUntil(t, func() bool { return control(t, dir, "status").WaitReason == "api_profile_blocked" })
 	before := control(t, dir, "status")
@@ -220,7 +220,7 @@ func TestWorkerAPIPacingSavesValidatedPartialThenContinues(t *testing.T) {
 	c.Scan.PauseOnBattery = false
 	c.Scan.MetadataPerSecond = 100000
 	var batches, entries atomic.Int64
-	o := Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second}
+	o := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second})
 	o.scannerPacedNext = func(ctx context.Context, s *inventory.Scanner, j state.Job, permit inventory.APIPermit, capacity inventory.APIEntryCapacity) (state.ScanBatch, error) {
 		checks := 0
 		b, err := s.NextPermittedPaced(ctx, j, permit, func(ctx context.Context, calls int64) (bool, error) {
@@ -264,11 +264,11 @@ func TestWorkerAPIPacingDefaultAndIdleRemainUnpaced(t *testing.T) {
 			c.Scan.APIAttemptsPerSecond = 100000
 		}
 		var paced atomic.Int64
-		o := Options{ExperimentalScan: experimental, Interval: time.Millisecond, WorkDuration: time.Second,
+		o := fixtureInventoryStateOptions(t, Options{ExperimentalScan: experimental, Interval: time.Millisecond, WorkDuration: time.Second,
 			scannerPacedNew: func(context.Context, []string, []string, []string, inventory.APIPermit, ...inventory.Option) (*inventory.Scanner, error) {
 				paced.Add(1)
 				return nil, errors.New("unexpected paced mode")
-			}}
+			}})
 		_, done := startPacingWorker(t, dir, c, o)
 		if s := control(t, dir, "status"); s.APIPacing != nil || paced.Load() != 0 {
 			t.Fatal(experimental, s, paced.Load())

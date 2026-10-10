@@ -142,8 +142,8 @@ func rootAdmissionWorkerFixture(t *testing.T, schema15, legacy bool) (string, co
 
 type rootAdmissionStartupCounts struct{ ready, scanner, power, cpu, session, state, priority atomic.Int32 }
 
-func rootAdmissionWorkerOptions(counts *rootAdmissionStartupCounts, experimental bool) Options {
-	return Options{
+func rootAdmissionWorkerOptions(t *testing.T, counts *rootAdmissionStartupCounts, experimental bool) Options {
+	return fixtureInventoryStateOptions(t, Options{
 		ExperimentalScan: experimental,
 		Ready:            func(Snapshot) { counts.ready.Add(1) },
 		scannerNew: func(context.Context, []string, []string, []string, inventory.APIPermit, ...inventory.Option) (*inventory.Scanner, error) {
@@ -156,7 +156,7 @@ func rootAdmissionWorkerOptions(counts *rootAdmissionStartupCounts, experimental
 		}, nil, nil),
 		cpuObserve:        func() (time.Duration, error) { counts.cpu.Add(1); return 0, nil },
 		cpuSessionObserve: func() (time.Duration, error) { counts.session.Add(1); return 0, nil },
-		inventoryStateObserve: func(context.Context, *state.Store, int64) (state.InventoryStateBudget, error) {
+		inventoryStateObserve: func(context.Context, state.InventoryStateBudgetSampler, int64) (state.InventoryStateBudget, error) {
 			counts.state.Add(1)
 			return state.InventoryStateBudget{}, errors.New("state sample must not start")
 		},
@@ -164,7 +164,7 @@ func rootAdmissionWorkerOptions(counts *rootAdmissionStartupCounts, experimental
 			counts.priority.Add(1)
 			return newThreadPriorityObservation("fixture")
 		},
-	}
+	})
 }
 
 func (c *rootAdmissionStartupCounts) assertNoWork(t *testing.T) {
@@ -192,7 +192,7 @@ func TestWorkerRootAdmissionRefusesBeforeSourceAndAccountingStartup(t *testing.T
 				var counts rootAdmissionStartupCounts
 				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 				defer cancel()
-				err := Run(ctx, dir, c, rootAdmissionWorkerOptions(&counts, experimental))
+				err := Run(ctx, dir, c, rootAdmissionWorkerOptions(t, &counts, experimental))
 				if !errors.Is(err, state.ErrRootAdmissionCapacity) || ctx.Err() != nil {
 					t.Fatal("bounded root refusal lost", err, ctx.Err())
 				}
@@ -225,7 +225,7 @@ func TestWorkerRootAdmissionLegacyExistingStartupPreservesSchemaAndHistory(t *te
 					t.Fatal("legacy setup did not exceed admission bound")
 				}
 				var counts rootAdmissionStartupCounts
-				options := rootAdmissionWorkerOptions(&counts, experimental)
+				options := rootAdmissionWorkerOptions(t, &counts, experimental)
 				ready := make(chan Snapshot, 1)
 				options.Ready = func(s Snapshot) { counts.ready.Add(1); ready <- s }
 				ctx, cancel := context.WithCancel(context.Background())

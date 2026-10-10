@@ -47,18 +47,8 @@ func startCancelable(t *testing.T, dir string, c config.Config, options Options,
 	if options.powerCoordinator == nil {
 		options.powerCoordinator = fixturePowerCoordinator(options.wallNow, options.elapsedNow)
 	}
-	if options.inventoryStateObserve == nil && options.wallNow != nil {
-		// Legacy synthetic-clock fixtures still sample the real generated file
-		// lengths. Put their observation timestamps in that fixture's domain.
-		clock := options.wallNow
-		options.inventoryStateObserve = func(ctx context.Context, w *state.Store, limit int64) (state.InventoryStateBudget, error) {
-			started := clock().Round(0).UTC()
-			report, err := w.InventoryStateBudget(ctx, limit)
-			if err == nil {
-				report.SampleStartedAt, report.SampleFinishedAt = started, clock().Round(0).UTC()
-			}
-			return report, err
-		}
+	if options.ExperimentalScan && options.inventoryStateOwner == nil {
+		t.Fatal("experimental fixture requires its explicit retained state owner")
 	}
 	if options.cpuObserve == nil {
 		options.cpuObserve = func() (time.Duration, error) { return 0, nil }
@@ -195,7 +185,7 @@ func TestChunkCheckpointPauseAndResume(t *testing.T) {
 		}
 		return Result{Done: true}, nil
 	}
-	_, done := start(t, dir, c, Options{Handlers: map[string]Handler{"fixture": h}, Interval: 50 * time.Millisecond, WorkDuration: time.Second})
+	_, done := start(t, dir, c, fixtureInventoryStateOptions(t, Options{Handlers: map[string]Handler{"fixture": h}, Interval: 50 * time.Millisecond, WorkDuration: time.Second}))
 	select {
 	case <-entered:
 	case <-time.After(5 * time.Second):
@@ -246,7 +236,7 @@ func TestFailedChunkPreservesCursorAndBacksOff(t *testing.T) {
 				}
 				return Result{Done: true, Cursor: []byte("uncommitted")}, errors.New("synthetic failure")
 			}
-			_, done := start(t, dir, c, Options{Handlers: map[string]Handler{"fixture": h}, Interval: time.Millisecond})
+			_, done := start(t, dir, c, fixtureInventoryStateOptions(t, Options{Handlers: map[string]Handler{"fixture": h}, Interval: time.Millisecond}))
 			var started time.Time
 			select {
 			case started = <-entered:
@@ -352,7 +342,7 @@ func TestDailyDispatchCapAcrossWorkerRestart(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	options := Options{ExperimentalScan: true, Interval: 10 * time.Millisecond}
+	options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: 10 * time.Millisecond})
 	_, done := start(t, dir, c, options)
 	waitUntil(t, func() bool { return control(t, dir, "status").WaitReason == "daily_chunk_limit" })
 	first := control(t, dir, "status")
@@ -406,7 +396,7 @@ func TestPacedInventoryControlsAndCompletion(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	_, done := start(t, dir, c, Options{ExperimentalScan: true, Interval: 350 * time.Millisecond, WorkDuration: 300 * time.Millisecond})
+	_, done := start(t, dir, c, fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: 350 * time.Millisecond, WorkDuration: 300 * time.Millisecond}))
 	waitUntil(t, func() bool { m := control(t, dir, "status").InventoryMetrics; return m != nil && m.Throttled })
 	control(t, dir, "pause")
 	waitUntil(t, func() bool { return control(t, dir, "status").ActiveJob == 0 })
@@ -455,7 +445,7 @@ func TestWorkerCPUBackoffControlsAndDelayedResume(t *testing.T) {
 		calls.Add(1)
 		return Result{Cursor: []byte("saved progress")}, nil
 	}
-	_, done := start(t, dir, c, Options{Handlers: map[string]Handler{"fixture": handler}, Interval: time.Millisecond, cpuObserve: observe})
+	_, done := start(t, dir, c, fixtureInventoryStateOptions(t, Options{Handlers: map[string]Handler{"fixture": handler}, Interval: time.Millisecond, cpuObserve: observe}))
 	var first Snapshot
 	waitUntil(t, func() bool {
 		first = control(t, dir, "status")
@@ -511,7 +501,7 @@ func TestWorkerCPUUnknownUsesConfiguredCadence(t *testing.T) {
 	handler := func(context.Context, state.Job) (Result, error) {
 		return Result{Done: calls.Add(1) == 2}, nil
 	}
-	_, done := start(t, dir, c, Options{Handlers: map[string]Handler{"fixture": handler}, Interval: 300 * time.Millisecond, cpuObserve: observe})
+	_, done := start(t, dir, c, fixtureInventoryStateOptions(t, Options{Handlers: map[string]Handler{"fixture": handler}, Interval: 300 * time.Millisecond, cpuObserve: observe}))
 	var first Snapshot
 	waitUntil(t, func() bool {
 		first = control(t, dir, "status")
@@ -536,7 +526,7 @@ func TestWorkerCPUWindowIncludesProgressCommit(t *testing.T) {
 	for _, mode := range []string{"finished", "handler error", "canceled", "scan commit"} {
 		t.Run(mode, func(t *testing.T) {
 			dir, c := fixture(t)
-			options := Options{Interval: time.Millisecond}
+			options := fixtureInventoryStateOptions(t, Options{Interval: time.Millisecond})
 			if mode == "scan commit" {
 				c.Roots = []string{t.TempDir()}
 				options.ExperimentalScan = true
@@ -638,4 +628,36 @@ func TestWorkerCPUWindowIncludesProgressCommit(t *testing.T) {
 			waitExit(t, done)
 		})
 	}
+}
+
+// Allocate a fixture process lifetime explicitly where Options is constructed.
+// Repeated Runs retain these Options (and owner); start never resets the slot.
+func fixtureInventoryStateOptions(t *testing.T, options Options) Options {
+	t.Helper()
+	if options.inventoryStateOwner != nil {
+		return options
+	}
+	wall, elapsed := options.wallNow, options.elapsedNow
+	if wall == nil {
+		wall = time.Now
+	}
+	if elapsed == nil {
+		elapsed = time.Now
+	}
+	owner, err := newInventoryStateFixtureOwner(wall, elapsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.inventoryStateOwner = owner
+	if options.inventoryStateObserve == nil && (options.wallNow != nil || options.elapsedNow != nil) {
+		options.inventoryStateObserve = func(ctx context.Context, sampler state.InventoryStateBudgetSampler, limit int64) (state.InventoryStateBudget, error) {
+			started := wall().Round(0).UTC()
+			report, err := sampler.Observe(ctx, limit)
+			if err == nil {
+				report.SampleStartedAt, report.SampleFinishedAt = started, wall().Round(0).UTC()
+			}
+			return report, err
+		}
+	}
+	return options
 }

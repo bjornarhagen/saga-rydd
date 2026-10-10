@@ -205,9 +205,9 @@ func TestMetadataQuotaBlockedControlsWithoutConstruction(t *testing.T) {
 	dir, c := fixture(t)
 	// The Next allowance fits, but construction plus Next does not.
 	c.Scan.MetadataAttemptsPerDay = inventory.MaxAPIAttemptAllowance
-	options := Options{ExperimentalScan: true, scannerNew: func(context.Context, []string, []string, []string, inventory.APIPermit, ...inventory.Option) (*inventory.Scanner, error) {
+	options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, scannerNew: func(context.Context, []string, []string, []string, inventory.APIPermit, ...inventory.Option) (*inventory.Scanner, error) {
 		return nil, errors.New("quota bypassed construction")
-	}}
+	}})
 	initial, done := start(t, dir, c, options)
 	if initial.InventoryMetrics != nil || initial.Metadata == nil || initial.Metadata.Status != "untracked" {
 		t.Fatal(initial)
@@ -241,9 +241,9 @@ func TestMetadataWorkerRollbackKeepsControlsAndSourceBlocked(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	_, done := start(t, dir, c, Options{ExperimentalScan: true, scannerNew: func(context.Context, []string, []string, []string, inventory.APIPermit, ...inventory.Option) (*inventory.Scanner, error) {
+	_, done := start(t, dir, c, fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, scannerNew: func(context.Context, []string, []string, []string, inventory.APIPermit, ...inventory.Option) (*inventory.Scanner, error) {
 		return nil, errors.New("clock rollback admitted source construction")
-	}})
+	}}))
 	waitUntil(t, func() bool { return control(t, dir, "status").WaitReason == "clock_rollback" })
 	control(t, dir, "pause")
 	control(t, dir, "resume")
@@ -262,7 +262,7 @@ func TestMetadataScannerCancellationAndPanicSettlement(t *testing.T) {
 			// One complete construction+Next charge, no room for another.
 			c.Scan.MetadataAttemptsPerDay = inventory.MaxAPIAttemptAllowance + 30
 			entered := make(chan struct{}, 1)
-			options := Options{ExperimentalScan: true, Interval: time.Millisecond}
+			options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond})
 			options.scannerNew = func(ctx context.Context, roots, excludes, private []string, permit inventory.APIPermit, _ ...inventory.Option) (*inventory.Scanner, error) {
 				// Control status must be available before the first source attempt.
 				s, err := Send(ctx, dir, "status")
@@ -386,11 +386,11 @@ func TestMetadataStartupBoundsRefuseBeforeSource(t *testing.T) {
 	for i := range private {
 		private[i] = fmt.Sprintf("/generated/%d", i)
 	}
-	if err := Run(context.Background(), dir, c, Options{ExperimentalScan: true, PrivatePaths: private}); err == nil {
+	if err := Run(context.Background(), dir, c, fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, PrivatePaths: private})); err == nil {
 		t.Fatal("unbounded construction inputs admitted")
 	}
 	c.Scan.MetadataAttemptsPerDay = 0
-	if err := Run(context.Background(), dir, c, Options{ExperimentalScan: true}); !errors.Is(err, state.ErrMetadataInvalid) {
+	if err := Run(context.Background(), dir, c, fixtureInventoryStateOptions(t, Options{ExperimentalScan: true})); !errors.Is(err, state.ErrMetadataInvalid) {
 		t.Fatal("zero cap fell back to a default", err)
 	}
 }

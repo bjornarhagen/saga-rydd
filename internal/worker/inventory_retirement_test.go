@@ -132,7 +132,7 @@ func TestWorkerSavedRetirementWithoutSourceQuotaAndWithPauseRestart(t *testing.T
 	}
 	defer r.Close()
 	var calls atomic.Int64
-	options := Options{ExperimentalScan: true, Interval: 20 * time.Millisecond, WorkDuration: time.Second}
+	options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: 20 * time.Millisecond, WorkDuration: time.Second})
 	noRetirementSource(t, &options, &calls)
 	_, done := start(t, dir, c, options)
 	waitUntil(t, func() bool {
@@ -214,7 +214,7 @@ func TestWorkerSavedRetirementSharesDurableDailyCapAcrossRestart(t *testing.T) {
 	c.Roots = []string{root}
 	c.Scan.MaxScanChunksPerDay = 1
 	var calls atomic.Int64
-	options := Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second}
+	options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second})
 	noRetirementSource(t, &options, &calls)
 	r, err := state.OpenReader(context.Background(), dir)
 	if err != nil {
@@ -317,7 +317,7 @@ func TestWorkerFairMaintenancePrecedesFutureSourceSharesCap(t *testing.T) {
 	var committedObserved atomic.Bool
 	committed := make(chan state.Summary, 1)
 	var calls atomic.Int64
-	options := Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second}
+	options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second})
 	options.cpuObserve = func() (time.Duration, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -380,7 +380,7 @@ func TestWorkerSavedRetirementKeepsDelayedRootAndRevisitsHealthyRoot(t *testing.
 		t.Fatal(err)
 	}
 	var healthyCalls atomic.Int64
-	options := Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, revisitInterval: 150 * time.Millisecond}
+	options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, revisitInterval: 150 * time.Millisecond})
 	options.scannerNext = func(ctx context.Context, s *inventory.Scanner, j state.Job, p inventory.APIPermit) (state.ScanBatch, error) {
 		if string(j.RootPath) != healthy {
 			return state.ScanBatch{}, errors.New("delayed root was reset")

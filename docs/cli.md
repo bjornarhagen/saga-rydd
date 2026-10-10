@@ -160,9 +160,9 @@ Saved views do not grant permission or calculate whether enough quota remains fo
 
 `scan.max_state_bytes` defaults to 1,073,741,824 bytes (1 GiB) and accepts 1,048,576–1,099,511,627,776 bytes (1 MiB–1 TiB). Omitted settings inherit the default; explicit zero is invalid. Only experimental background source admission uses this setting. Manual scans, explicit hashing and other stores have separate contracts.
 
-Live `worker.live.inventory_state` uses `worker_inventory_state_admission_v1`. It exposes the fixed limit/retry, the last attempt phase and decision, historical retry anchors and a cached `inventory_state_budget_v1` observation. The observation covers only logical lengths of the configured inventory DB and WAL. Available samples distinguish `below_limit` and `limit_reached`; unavailable evidence has no invented total. DB, WAL and total lengths are nullable, sequential historical observations. Missing WAL can be known zero; a missing or changed DB cannot establish zero state.
+Live `worker.live.inventory_state` uses `worker_inventory_state_admission_v2`. It exposes the fixed limit/retry, observation-slot status, the last attempt phase and decision, historical retry anchors and a cached `inventory_state_budget_v1` observation. A pending or occupied slot supplies no size decision. Status reads cached evidence without starting or recovering a callback. The observation covers only logical lengths of the configured inventory DB and WAL. Available samples distinguish `below_limit` and `limit_reached`; unavailable evidence has no invented total. DB, WAL and total lengths are nullable, sequential historical observations. Missing WAL can be known zero; a missing or changed DB cannot establish zero state.
 
-The worker samples only otherwise eligible source work, before power sampling and dispatch, and rechecks after a charged receipt before claim. A refusal retains pending work, charge and cadence. Fixed five-minute retry uses independent clocks; cached status starts no metadata call and grants no admission. Eligible database-only maintenance retains the shared resource gates. Calls already entered cannot be forcibly interrupted. Startup/active-write overshoot, other stores, physical allocation, namespace authentication and a hard state-byte ceiling remain outside this contract. See the [worker admission limits](worker.md#configured-inventory-state-admission-p1-08e1e2).
+The worker requests observations only for otherwise eligible source work, before power sampling and dispatch, then uses a distinct post-receipt observation before claim. The selected metadata callback runs outside the control loop. One unfinished callback occupies the process-wide slot; another Run or store cannot replace it or use its result. A failed callback retains pending work, charge, cadence and its original five-minute retry in both independent clock domains. Starting another Run does not reset that retry. A timely successful result that becomes stale before use is refused without creating a new callback-failure retry. Eligible database-only maintenance retains the existing gates and can use only a still-valid original receipt. Status grants no admission. Other entered filesystem or SQLite calls can still delay controls; there is no hard control-latency guarantee. Startup/active-write overshoot, other stores, physical allocation, namespace authentication and a hard state-byte ceiling remain outside this contract. See the [worker admission limits](worker.md#configured-inventory-state-admission-p1-08e1e2).
 
 ## Retained inventory root admission
 
@@ -618,6 +618,56 @@ The default invocation processes up to 128 calculation batches; `--batches` acce
 JSON `measure` includes `directory`, `state_dir`, `batches`, `complete` and `outcome` (`complete`, `batch_limit`, `time_limit` or `wal_backpressure`). Exit 0 means a successful bounded invocation; use `complete` to determine whether more work remains. Cancellation and failures use the standard error envelope.
 
 Directory and candidate measurements add `coverage_source`: `cached_reduction` uses a completed revision-matched scope summary, while `bounded_entry_check` uses the existing synchronous fallback. For cached coverage, `entries_examined` counts all entries covered by the durable calculation and `entry_limit` is 0 because the report does not walk the subtree. `truncated` is false, but exclusions, errors, unknown identities or stale evidence can still qualify size and status. Ancestor checks remain bounded and can make a summary partial or unknown. Caches cover the manual root and outermost `node_modules` trees; arbitrary subfolders still use the bounded fallback. Source metadata and cleanup permissions are unchanged.
+
+## Plans-history export and artifact verification
+
+These two explicit modes export or verify one existing plans store. Neither mode repairs an instance or restores history.
+
+```sh
+rydd --data-dir /absolute/private/state backup --plans --to /absolute/private/exports/plans-export
+rydd backup --verify /absolute/private/exports/plans-export --scratch-dir /absolute/private/scratch
+```
+
+Use exactly one mode. Export requires exactly one explicit global `--data-dir` before `backup`, plus `--plans` and `--to`. The data directory, its `plans` directory, `plans.sqlite3` and stable writer lock must already exist. The destination must be absent and outside the data directory, and its private parent must already exist. A busy writer refuses the export; request stop when appropriate and wait for its exit. No configuration, missing state, lock or schema is initialized or migrated.
+
+Verification requires `--verify` and `--scratch-dir`. It rejects `--data-dir` and `--to`. The artifact and private scratch parent must already exist, and the scratch parent must be outside the artifact. Instance selection does not use a default data directory, configuration or `HOME`. SQLite opens only a new private scratch copy; it never opens the selected artifact as a database.
+
+All supplied paths must be clean absolute UTF-8 paths of at most 4,096 bytes, with no NUL byte. Relative paths, `~/` expansion, path normalization, repeated options (including alternate spellings), positional arguments, unsupported objects and symlink components are refused. Selected data/artifact directories and output parents must be private and owned. Selected regular files must be private, owned and have one link. This supports cooperating local processes; private modes, path checks and digests do not authenticate a mutable same-user namespace.
+
+### What the artifact preserves
+
+The artifact has exactly two files: `plans.sqlite3` and `manifest.json`. The database is a completed logical snapshot of committed history supported by its existing schema, not a byte-for-byte copy of source files. Supported plans-store schemas are 1 through 6. Schema 1 can contain saved plans; later schemas can also contain review approvals and revocations, observations, preparation-journal history, and finding dismissals and undos. Only history actually present in that schema is included. Missing history is not reconstructed, and a successful export does not upgrade the source schema.
+
+Inventory, hashes and read-consent charges, configuration, service artifacts, source-file contents and quarantined file bodies are omitted. Unused database pages can retain private remnants. The artifact and command output can contain private paths and history; keep them outside version control. This is not a full-instance backup or a sanitized report. No import or restore command is available.
+
+Export opens the source through SQLite in read-only mode and requests no application writes there. SQLite can maintain reader sidecars. Sampled metadata checks do not authenticate every storage effect or prove unchanged source bytes. Observed main/WAL metadata changes, unsupported profiles, uncertain engine closure or failed verification refuse publication and can retain the candidate for inspection.
+
+### Fixed limits and verification
+
+| Check | Fixed bound or scope |
+| --- | --- |
+| Accepted database | At most 1 GiB; sampled source main plus WAL must also fit 1 GiB. This is not a hard limit on entered engine writes. |
+| Source sidecars | WAL and shared-memory sidecar each at most 32 MiB when sampled; this is not a hard engine-write limit. A rollback-journal sidecar is refused. |
+| Backup step | Positive page requests of at most 64 KiB, using supported page sizes from 512 bytes through 64 KiB; at most 32,769 step attempts. No busy/error restart loop. |
+| Manifest | At most 64 KiB, with bounded JSON tokens/nesting, exact fixed filenames and canonical identity. |
+| Output parent | At most 255 existing names before creating one exclusive private candidate. |
+| Operation time | 120 seconds, checked independently against wall time and elapsed time between calls; an earlier caller cancellation also refuses further work. Entered filesystem or driver calls can take longer. |
+
+Export checks the supported application/schema identity, bounded schema census and completed backup before closing its engine connections. It verifies a separate scratch copy before publishing the candidate directory without replacing an existing destination. The result separates publication, structural verification, known engine closure and completed sync API calls; these fields do not prove physical durability or create an action permission.
+
+Artifact verification checks the manifest identity, complete database digest, supported schema/profile, SQLite integrity and foreign-key consistency on its separate scratch copy. It checks the artifact again before returning success. It does not validate stored record meanings, present-day project activity, current consent or permission, or consistency with omitted stores. On success it removes only its exact verified scratch file and empty owned child; unfamiliar or changed members cause a refusal and are retained. There is no pruning, repair, import, restore or cleanup authority.
+
+### Interrupted commands and lost replies
+
+1. Preserve the exact destination and any returned candidate or scratch path. A nonzero exit or missing reply does not prove that publication did not occur.
+2. Inspect the exact selected destination before another export. If it is a complete artifact, use the verification mode above with a separate existing private scratch parent. Verification can itself retain its scratch after a failure.
+3. Preserve an incomplete or unfamiliar candidate, destination or scratch for inspection. Do not replace it, prune nearby directories or retry automatically. Another export requires an explicitly chosen absent destination; a new destination does not reconcile the earlier outcome.
+
+When a retained candidate or scratch path has `candidate_identity_observed: false` or `scratch_identity_observed: false`, creation succeeded but the later directory proof did not. The exact reported name is inspection-only; the result does not establish which object now occupies it. A true value records an earlier successful held-directory observation, not current identity, ownership or cleanup permission. A retained path never authorizes automatic removal or reuse.
+
+Add `--json` for the usual API version 1 envelope. The `backup` object uses contract `plans_store_committed_snapshot_v1` and mode `export_plans` or `verify_artifact`. It contains the selected scope, schema-dependent history scope, omitted stores and separate `export` or `verification` result when that operation was entered. Operation failures retain those result fields and include inspection guidance in the top-level `next_action`; inspect `published`, `candidate_retained`, `scratch_retained`, the identity-observation flags, `engine_closure_known` and the exact paths rather than treating `ok: false` as no effect. A complete JSON success or error reply leaves stderr empty. Failed output or cancellation after a success reply can instead produce exact-path guidance on stderr. Failed output can prevent the envelope from reaching the caller. No second JSON object is emitted to repair a failed reply.
+
+The envelope explicitly keeps full-instance backup, import, restore, cleanup authority, current-permission evaluation and hard-latency claims false. Stable failure codes include `backup_clock`, `backup_bounds`, `backup_changed` and `backup_profile_unsupported`, alongside the existing argument, existence, permission and cancellation codes. These codes describe a refusal, not permission to reset or delete history.
 
 ## Read-only cleanup plan previews
 

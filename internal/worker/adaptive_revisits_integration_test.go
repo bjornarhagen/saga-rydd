@@ -37,14 +37,14 @@ func newAdaptiveWorkerFixture(t *testing.T, files int) *adaptiveWorkerFixture {
 			t.Fatal(err)
 		}
 	}
-	f.options = Options{ExperimentalScan: true, Interval: 5 * time.Millisecond, WorkDuration: time.Second, wallNow: f.wall, elapsedNow: f.elapsed,
+	f.options = fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: 5 * time.Millisecond, WorkDuration: time.Second, wallNow: f.wall, elapsedNow: f.elapsed,
 		scannerNext: func(ctx context.Context, scanner *inventory.Scanner, job state.Job, permit inventory.APIPermit) (state.ScanBatch, error) {
 			batch, err := scanner.NextPermitted(ctx, job, permit)
 			if err == nil && batch.Complete && batch.Fault == "" && string(job.Path) == "." {
 				f.listings.Add(1)
 			}
 			return batch, err
-		}}
+		}})
 	return f
 }
 
@@ -204,7 +204,7 @@ func TestWorkerAdaptiveRevisitsResourceGatesKeepUnfinishedPass(t *testing.T) {
 			} else if gate == "metadata" {
 				f.config.Scan.MetadataAttemptsPerDay = 2*inventory.MaxAPIAttemptAllowance + 100
 			} else {
-				f.options.inventoryStateObserve = func(_ context.Context, _ *state.Store, limit int64) (state.InventoryStateBudget, error) {
+				f.options.inventoryStateObserve = func(_ context.Context, _ state.InventoryStateBudgetSampler, limit int64) (state.InventoryStateBudget, error) {
 					total := limit - 1
 					if sourceCalls.Load() >= 2 {
 						total = limit
@@ -214,8 +214,23 @@ func TestWorkerAdaptiveRevisitsResourceGatesKeepUnfinishedPass(t *testing.T) {
 			}
 			_, done := start(t, f.dir, f.config, f.options)
 			want := map[string]string{"dispatch": "daily_chunk_limit", "metadata": "daily_metadata_limit", "state": "inventory_state_source_backoff"}[gate]
-			waitUntil(t, func() bool { return control(t, f.dir, "status").WaitReason == want })
-			before := control(t, f.dir, "status")
+			// Pending async sampling also uses the backoff reason. Wait for the
+			// completed threshold result before checking this unfinished pass.
+			var before Snapshot
+			waitUntil(t, func() bool {
+				before = control(t, f.dir, "status")
+				if before.WaitReason != want {
+					return false
+				}
+				if gate != "state" {
+					return true
+				}
+				observed := before.InventoryState
+				return sourceCalls.Load() == 2 && observed != nil && observed.CallbackReturned && !observed.ProcessSlotOccupied &&
+					observed.SamplingState == "refused" && observed.LastAttemptFinishedAt != nil && observed.LastDecisionReason == "inventory_state_limit" &&
+					observed.LastSourceBackoff != nil && *observed.LastSourceBackoff && observed.Observation != nil && observed.Observation.Available &&
+					observed.Observation.Status == "limit_reached" && observed.Observation.TotalBytes != nil && *observed.Observation.TotalBytes == observed.Limit
+			})
 			if sourceCalls.Load() != 2 || before.AdaptiveRevisits == nil || before.AdaptiveRevisits.ActiveEpochs != 1 || before.AdaptiveRevisits.StableRoots != 0 || before.AdaptiveRevisits.WeeklyRoots != 0 {
 				t.Fatal("partial pass learned stability or bypassed gate", gate, before, sourceCalls.Load())
 			}
@@ -238,7 +253,7 @@ func TestWorkerAdaptiveRevisitsIdleAndCachedStatusDoNotProbe(t *testing.T) {
 			f := newAdaptiveWorkerFixture(t, 1)
 			f.options.ExperimentalScan = experimental
 			var samples, sources atomic.Int64
-			f.options.inventoryStateObserve = func(_ context.Context, _ *state.Store, limit int64) (state.InventoryStateBudget, error) {
+			f.options.inventoryStateObserve = func(_ context.Context, _ state.InventoryStateBudgetSampler, limit int64) (state.InventoryStateBudget, error) {
 				samples.Add(1)
 				return fixtureInventoryStateReport(limit, limit, f.wall()), nil
 			}
@@ -251,8 +266,23 @@ func TestWorkerAdaptiveRevisitsIdleAndCachedStatusDoNotProbe(t *testing.T) {
 			if experimental {
 				want = "inventory_state_source_backoff"
 			}
-			waitUntil(t, func() bool { return control(t, f.dir, "status").WaitReason == want })
-			before := control(t, f.dir, "status")
+			// Controls must follow the completed finite observation, not its
+			// pending backoff projection, when asserting one cached sample.
+			var before Snapshot
+			waitUntil(t, func() bool {
+				before = control(t, f.dir, "status")
+				if before.WaitReason != want {
+					return false
+				}
+				if !experimental {
+					return true
+				}
+				observed := before.InventoryState
+				return samples.Load() == 1 && sources.Load() == 0 && observed != nil && observed.CallbackReturned && !observed.ProcessSlotOccupied &&
+					observed.SamplingState == "refused" && observed.LastAttemptFinishedAt != nil && observed.LastDecisionReason == "inventory_state_limit" &&
+					observed.LastSourceBackoff != nil && *observed.LastSourceBackoff && observed.Observation != nil && observed.Observation.Available &&
+					observed.Observation.Status == "limit_reached" && observed.Observation.TotalBytes != nil && *observed.Observation.TotalBytes == observed.Limit
+			})
 			for _, command := range []string{"status", "pause", "status", "resume", "status"} {
 				control(t, f.dir, command)
 			}

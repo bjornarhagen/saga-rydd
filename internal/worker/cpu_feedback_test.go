@@ -67,7 +67,7 @@ func TestWorkerCPUFeedbackDefiniteBeginDenialReleasesUnstartedJob(t *testing.T) 
 	c := config.Default()
 	c.Roots = []string{root}
 	var calls atomic.Int64
-	options := Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second}
+	options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second})
 	options.scannerNew = func(context.Context, []string, []string, []string, inventory.APIPermit, ...inventory.Option) (*inventory.Scanner, error) {
 		calls.Add(1)
 		return nil, errors.New("source constructor must not run")
@@ -111,7 +111,10 @@ func TestWorkerCPUFeedbackLostSettlementPreservesProgressAndRecovery(t *testing.
 	c.Scan.MetadataPerSecond = 100000
 	failure := errors.New("generated feedback write failure")
 	var firstToken string
-	options := Options{ExperimentalScan: true, Interval: time.Second, WorkDuration: time.Second}
+	var offset atomic.Int64
+	fixtureWall := func() time.Time { return time.Now().Add(time.Duration(offset.Load())) }
+	fixtureElapsed := func() time.Time { return time.Now().Add(time.Duration(offset.Load())) }
+	options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Second, WorkDuration: time.Second, wallNow: fixtureWall, elapsedNow: fixtureElapsed})
 	options.cpuSettle = func(ctx context.Context, store *state.Store, marker state.CPUWindowMarker, _ time.Time, _ state.CPUWindowMeasurement) (state.CPUFeedbackState, error) {
 		firstToken = marker.Token()
 		summary, err := store.Summary(ctx)
@@ -138,7 +141,9 @@ func TestWorkerCPUFeedbackLostSettlementPreservesProgressAndRecovery(t *testing.
 	if err != nil || before.Status != "pending" || before.Window == nil || before.Window.Token != firstToken || before.Window.CPUTimeNS != nil {
 		t.Fatal(before, err)
 	}
-	restarted, done := start(t, dir, c, Options{ExperimentalScan: true, Interval: time.Second, WorkDuration: time.Second})
+	restartOptions := options
+	restartOptions.cpuSettle = nil
+	restarted, done := start(t, dir, c, restartOptions)
 	if restarted.CPUFeedback == nil || restarted.CPUFeedback.Status != "recovered_unknown" || restarted.CPUFeedback.RecoveredUnknownWindows != 1 || restarted.CPUFeedback.Window == nil || restarted.CPUFeedback.Window.Token != firstToken || restarted.CPUFeedback.Window.CPUTimeNS != nil || restarted.CPUFeedback.Window.SettledAt == nil || restarted.CPUFeedback.NextAllowedAt == nil || restarted.CPU == nil || restarted.CPU.Status != "not_recorded" || restarted.CPU.WindowCPUNS != nil {
 		t.Fatal("restart reused a process CPU baseline", restarted)
 	}
@@ -159,10 +164,7 @@ func TestWorkerCPUFeedbackLostSettlementPreservesProgressAndRecovery(t *testing.
 	waitExit(t, done)
 	// Advance private fixture clocks, not the product's one-hour policy. The
 	// saved evidence remains unknown and each new native observation starts fresh.
-	var offset atomic.Int64
-	options = Options{ExperimentalScan: true, Interval: time.Second, WorkDuration: time.Second,
-		wallNow:    func() time.Time { return time.Now().Add(time.Duration(offset.Load())) },
-		elapsedNow: func() time.Time { return time.Now().Add(time.Duration(offset.Load())) }}
+	options = restartOptions
 	_, done = start(t, dir, c, options)
 	var beforeAdvance Snapshot
 	waitUntil(t, func() bool {
@@ -211,7 +213,7 @@ func TestWorkerCPUFeedbackAccountsFailedProgressCommit(t *testing.T) {
 	c := config.Default()
 	c.Roots = []string{root}
 	c.Scan.MetadataPerSecond = 100000
-	options := Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second}
+	options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second})
 	options.scannerNext = func(ctx context.Context, scanner *inventory.Scanner, job state.Job, permit inventory.APIPermit) (state.ScanBatch, error) {
 		batch, err := scanner.NextPermitted(ctx, job, permit)
 		batch.Generation = -1 // The owner must refuse this generated invalid batch.
@@ -323,13 +325,13 @@ func TestWorkerCPUFeedbackRollbackTimerRecoversBeforeAnotherDispatch(t *testing.
 			at := *before.ClockHighWater
 			var advanced atomic.Bool
 			var recoveryCalls atomic.Int64
-			options := Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second,
+			options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second,
 				wallNow: func() time.Time {
 					if advanced.Load() {
 						return at.Add(time.Millisecond)
 					}
 					return at.Add(-50 * time.Millisecond)
-				}}
+				}})
 			options.cpuRecover = func(ctx context.Context, w *state.Store, now time.Time) (state.CPUFeedbackState, error) {
 				recoveryCalls.Add(1)
 				return w.RecoverCPUWindow(ctx, now)
@@ -370,8 +372,8 @@ func TestWorkerCPUFeedbackRollbackTimerRecoversBeforeAnotherDispatch(t *testing.
 func TestWorkerCPUFeedbackRecoveryPublicationWallJumpPreservesElapsedHour(t *testing.T) {
 	dir, c, token := pendingCPUWorkerFixture(t, time.Now())
 	var offset atomic.Int64
-	options := Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second,
-		wallNow: func() time.Time { return time.Now().Add(time.Duration(offset.Load())) }}
+	options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second,
+		wallNow: func() time.Time { return time.Now().Add(time.Duration(offset.Load())) }})
 	options.cpuRecover = func(ctx context.Context, w *state.Store, now time.Time) (state.CPUFeedbackState, error) {
 		feedback, err := w.RecoverCPUWindow(ctx, now)
 		if err == nil {
@@ -420,7 +422,7 @@ func TestWorkerCPUFeedbackReturnedSourceCancellationSettles(t *testing.T) {
 	c := config.Default()
 	c.Roots = []string{root}
 	entered := make(chan struct{})
-	options := Options{ExperimentalScan: true, Interval: time.Second, WorkDuration: time.Second}
+	options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Second, WorkDuration: time.Second})
 	options.scannerNext = func(ctx context.Context, _ *inventory.Scanner, _ state.Job, _ inventory.APIPermit) (state.ScanBatch, error) {
 		close(entered)
 		<-ctx.Done()
@@ -455,8 +457,8 @@ func TestWorkerCPUFeedbackUnknownReturnedObservationRetainsCadence(t *testing.T)
 	c := config.Default()
 	c.Roots = []string{root}
 	c.Scan.MetadataPerSecond = 100000
-	options := Options{ExperimentalScan: true, Interval: time.Second, WorkDuration: time.Second,
-		cpuObserve: func() (time.Duration, error) { return 0, errors.New("generated unavailable native CPU observation") }}
+	options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Second, WorkDuration: time.Second,
+		cpuObserve: func() (time.Duration, error) { return 0, errors.New("generated unavailable native CPU observation") }})
 	_, done := start(t, dir, c, options)
 	var status Snapshot
 	waitUntil(t, func() bool {

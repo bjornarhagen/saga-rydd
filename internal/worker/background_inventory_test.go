@@ -96,7 +96,7 @@ func TestWorkerCompactBackgroundBeyondReportLimit(t *testing.T) {
 	// This fixture checks compact inventory and accounting endpoints, not native
 	// CPU behavior. Race instrumentation must not add production CPU cooldowns
 	// to its finite completion assertion; resource profiles use native SELF CPU.
-	options := Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, cpuObserve: func() (time.Duration, error) { return 0, nil }}
+	options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, cpuObserve: func() (time.Duration, error) { return 0, nil }})
 	options.scannerNew = func(ctx context.Context, roots, excludes, private []string, permit inventory.APIPermit, opts ...inventory.Option) (*inventory.Scanner, error) {
 		return inventory.NewPermitted(ctx, roots, excludes, private, func(ctx context.Context, kind inventory.APICallKind) error {
 			if err := permit(ctx, kind); err != nil {
@@ -240,7 +240,7 @@ func TestWorkerCompactModeRefusesStartedDetailedPassAndResumesPreviousMode(t *te
 	r.Close()
 	c.Scan.CompactInventory = true
 	var calls atomic.Int64
-	options := Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, powerCoordinator: fixturePowerCoordinator(nil, nil), cpuObserve: func() (time.Duration, error) { return 0, nil }}
+	options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, powerCoordinator: fixturePowerCoordinator(nil, nil), cpuObserve: func() (time.Duration, error) { return 0, nil }})
 	options.scannerNew = func(context.Context, []string, []string, []string, inventory.APIPermit, ...inventory.Option) (*inventory.Scanner, error) {
 		calls.Add(1)
 		return nil, errors.New("unexpected source")
@@ -264,7 +264,7 @@ func TestWorkerCompactModeRefusesStartedDetailedPassAndResumesPreviousMode(t *te
 	}
 	r.Close()
 	c.Scan.CompactInventory = false
-	_, done := startPacingWorker(t, dir, c, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second})
+	_, done := startPacingWorker(t, dir, c, fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second}))
 	r, err = state.OpenReader(ctx, dir)
 	if err != nil {
 		t.Fatal(err)
@@ -297,7 +297,7 @@ func TestWorkerCompactFixedRevisitReplacesSavedGeneration(t *testing.T) {
 	c.Scan.MetadataPerSecond = 100000
 	c.Scan.PauseOnBattery = false
 	var passes atomic.Int64
-	options := Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, revisitInterval: 2 * time.Second}
+	options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, revisitInterval: 2 * time.Second})
 	options.scannerNext = func(ctx context.Context, s *inventory.Scanner, j state.Job, p inventory.APIPermit) (state.ScanBatch, error) {
 		b, e := s.NextPermitted(ctx, j, p)
 		if e == nil && b.Complete {
@@ -347,7 +347,7 @@ func TestWorkerCompactFixedRevisitReplacesSavedGeneration(t *testing.T) {
 func TestWorkerCompactConfigIdleAndMutualExclusion(t *testing.T) {
 	dir, c := fixture(t)
 	c.Scan.CompactInventory = true
-	ready, done := startPacingWorker(t, dir, c, Options{})
+	ready, done := startPacingWorker(t, dir, c, fixtureInventoryStateOptions(t, Options{}))
 	if ready.InventoryMode != nil || ready.InventoryMetrics != nil || ready.AdaptiveRevisits != nil {
 		t.Fatal("idle worker applied source policy", ready)
 	}
@@ -355,7 +355,7 @@ func TestWorkerCompactConfigIdleAndMutualExclusion(t *testing.T) {
 	waitExit(t, done)
 	c.Scan.AdaptiveRevisits = true
 	missing := filepath.Join(t.TempDir(), "uninitialized")
-	if err := Run(context.Background(), missing, c, Options{ExperimentalScan: true}); !errors.Is(err, state.ErrBackgroundInventoryInput) {
+	if err := Run(context.Background(), missing, c, fixtureInventoryStateOptions(t, Options{ExperimentalScan: true})); !errors.Is(err, state.ErrBackgroundInventoryInput) {
 		t.Fatal(err)
 	}
 	if _, err := os.Lstat(missing); !errors.Is(err, os.ErrNotExist) {
@@ -450,11 +450,11 @@ func TestWorkerCompactQuotaKeepsMaintenanceAndFutureGeneric(t *testing.T) {
 	w.Close()
 	var sourceCalls, observations atomic.Int64
 	generic := make(chan struct{}, 1)
-	options := Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, Handlers: map[string]Handler{"fixture": func(context.Context, state.Job) (Result, error) {
+	options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second, Handlers: map[string]Handler{"fixture": func(context.Context, state.Job) (Result, error) {
 		generic <- struct{}{}
 		return Result{Done: true}, nil
-	}}}
-	options.inventoryStateObserve = func(context.Context, *state.Store, int64) (state.InventoryStateBudget, error) {
+	}}})
+	options.inventoryStateObserve = func(context.Context, state.InventoryStateBudgetSampler, int64) (state.InventoryStateBudget, error) {
 		observations.Add(1)
 		return state.InventoryStateBudget{}, errors.New("unexpected source observation")
 	}

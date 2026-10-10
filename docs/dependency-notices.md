@@ -72,6 +72,34 @@ These are dated source observations for the declared commit. Later source change
 
 ## Final CPU candidate package comparison
 
-The four-target comparison for the 482-file CPU candidate preserved dependency versions, sums and complete import/module/selection closures. The selected union has 2,194 files. Of these, 1,825 have earlier complete-small observations, 325 cache files and thirty project files have dated complete hashes, and fourteen changed/new project files total 251,492 bytes. The fourteen project files need a separate marker review. No current cache-body refresh was performed.
+The four-target comparison for the 482-file CPU candidate preserved dependency versions, sums and complete import/module/selection closures. The selected union has 2,194 files. Of these, 1,825 have earlier complete-small observations, 325 cache files and thirty project files have dated complete hashes, and fourteen changed/new project files total 251,492 bytes. A separate complete review of those fourteen project files passed with zero matching lines for the fixed fourteen ASCII terms. The package comparison itself refreshed no cache bodies; the separate two-file review below has its own exact scope.
 
 This comparison checks metadata selection and current project fingerprints. It does not refresh historical dependency contents or close the omitted-context, provenance, retained-code, legal-compatibility or notice-packaging gates.
+
+## Selected Darwin FTS matching-line review
+
+A separate finite reader checked both `modernc.org/libc` Darwin FTS files associated with the published CPU source. It read 527,117 source bytes and retained all 3,469 matching lines in a 698,651-byte payload. This selection covers the 2,445 locations previously omitted at the per-file limit. The other 28,381 omitted locations remain outside this review.
+
+Root and independent review read the 46 distinct complete matching-line bodies, totaling 3,147 bytes, and verified every location's mapping to those bodies. All observed bodies begin with `//`. This describes the retained text; surrounding Go syntax was not retained or verified.
+
+| Observed text | Distinct line bodies |
+| --- | ---: |
+| Generator commands | 2 |
+| Apple license boundary markers | 4 |
+| Copyright dates or entities | 23 |
+| UC Regents rights and entity | 1 |
+| Berkeley contributor attribution fragment | 1 |
+| Other license or clause fragments | 15 |
+| Total | 46 |
+
+The full-file hashes and offsets remain observations from the reviewed reader. Filtered matching lines cannot reconstruct the 318,924 nonmatching source bytes or supply missing neighboring clauses. This closes only the declared matching-line assessment. Complete multiline notices, original-input provenance, applicable licenses, code retained by the linker, legal compatibility and the distribution notice bundle remain open.
+
+## Selected asynchronous-state and plans-export project review
+
+The separate 2026-10-10 project review selected exactly fifty integration changes before the adaptive-revisit readiness correction. Complete selected bodies total 693,041 bytes: thirty test files contain 417,699 bytes and twenty other files contain 275,342 bytes. The held reader checked exact source identities and retained a complete 29,176-byte fixed-term report. Root and independent review reproduced every selected hash and the complete report; no matching line was truncated or omitted.
+
+The fourteen ASCII terms matched one complete 71-byte line after the initial 16 KiB prefix. It is an operational comment in `internal/worker/worker.go` about stale “original source” selection and claim authority. The other thirteen terms had no matches. This classifies that exact comment; it does not establish the absence of other notices or legal obligations.
+
+The later adaptive-readiness correction received a separate incremental review after formatting passed without changes. That invocation read only the changed 15,367-byte fixture and found no matching lines. It inherited the other forty-nine exact source associations and retained observations from the accepted report above. Both reviews reproduced the complete 30,708-byte incremental report. Its current fifty-file association totals 694,668 bytes: 419,326 test bytes and 275,342 other bytes. No matching line was omitted or truncated.
+
+This is an incremental association, not a new read of all fifty bodies. The one inherited operational-comment match and the broader dated qualifications remain. Test inclusion does not establish production linkage. Dependency contexts, provenance, linker retention, project-license choice, a complete notice bundle and distribution acceptance remain open.

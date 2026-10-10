@@ -39,7 +39,10 @@ func TestWorkerFairRootsInterleaveSourceMaintenanceAndRevisit(t *testing.T) {
 	seen := map[string]bool{}
 	wideDone, smallDone := false, 0
 	var failure error
-	options := Options{ExperimentalScan: true, Interval: 20 * time.Millisecond, WorkDuration: time.Second, revisitInterval: 60 * time.Millisecond}
+	options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: 20 * time.Millisecond, WorkDuration: time.Second, revisitInterval: 60 * time.Millisecond})
+	// Join genuine finite state phases before competing writer work can revoke
+	// the SOURCE intent; this fixture tests fairness/revisit ordering.
+	options.inventoryStatePhaseStarted = returnedInventoryStateFinitePhaseForFixture
 	options.scannerNext = func(ctx context.Context, s *inventory.Scanner, j state.Job, p inventory.APIPermit) (state.ScanBatch, error) {
 		b, err := s.NextPermitted(ctx, j, p)
 		mu.Lock()
@@ -83,6 +86,30 @@ func TestWorkerFairRootsInterleaveSourceMaintenanceAndRevisit(t *testing.T) {
 	waitExit(t, done)
 }
 
+// These selected finite-observer fixtures exercise fairness/revisits after
+// genuine pre and post metadata have returned. The hook runs outside coordinator
+// locks; its five-second join is fixture ordering, not production control latency.
+func returnedInventoryStateFinitePhaseForFixture(phase string, ticket *inventoryStateTicket) error {
+	if phase != "before_dispatch" && phase != "after_receipt" {
+		return errors.New("unexpected finite inventory state phase")
+	}
+	if ticket == nil || ticket.request.phase != phase {
+		return errors.New("finite state phase did not receive its exact request ticket")
+	}
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-ticket.done:
+		result, completed := ticket.completed()
+		if !completed || result.ID != ticket.ID || result.Phase != phase {
+			return errors.New("finite state callback returned mismatched completion")
+		}
+		return nil
+	case <-timer.C:
+		return errors.New("finite state callback did not return within five seconds")
+	}
+}
+
 func TestWorkerFairSourceQuotaAllowsOtherRootMaintenanceWithoutSpin(t *testing.T) {
 	dir, historical, _ := workerRetirementFixture(t, 300)
 	source := fairWorkerFiles(t, 1)
@@ -104,7 +131,7 @@ func TestWorkerFairSourceQuotaAllowsOtherRootMaintenanceWithoutSpin(t *testing.T
 		t.Fatal(err)
 	}
 	var calls, cpuSamples atomic.Int64
-	options := Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second}
+	options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second})
 	noRetirementSource(t, &options, &calls)
 	options.cpuObserve = func() (time.Duration, error) {
 		cpuSamples.Add(1)
@@ -160,7 +187,7 @@ func TestWorkerFairRechecksRootEligibilityAfterCPUWait(t *testing.T) {
 	}
 	var sourceEntered atomic.Bool
 	starts := make(chan string, 8)
-	options := Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second}
+	options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second})
 	options.cpuObserve = func() (time.Duration, error) {
 		// Staged setup is separately accounted. Attribute this synthetic CPU
 		// jump to the first actual source window rather than an observation index.
@@ -224,7 +251,7 @@ func TestWorkerFairAdmissionBeforeSavedRootsOrSource(t *testing.T) {
 		c.Roots[i] = fmt.Sprintf("/bounded-fixture-%d", i)
 	}
 	var calls atomic.Int64
-	options := Options{ExperimentalScan: true}
+	options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true})
 	noRetirementSource(t, &options, &calls)
 	options.StartupCheck = func(context.Context) error { calls.Add(1); return nil }
 	options.Ready = func(Snapshot) { calls.Add(1) }
@@ -241,7 +268,7 @@ func TestWorkerFairAdmissionBeforeSavedRootsOrSource(t *testing.T) {
 		t.Fatal("refused roots changed saved state", summary, err)
 	}
 	// The experimental admission bound must not change idle worker contracts.
-	_, done := start(t, dir, c, Options{})
+	_, done := start(t, dir, c, fixtureInventoryStateOptions(t, Options{}))
 	control(t, dir, "stop")
 	waitExit(t, done)
 }

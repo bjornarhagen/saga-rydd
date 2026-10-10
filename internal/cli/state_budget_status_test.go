@@ -81,3 +81,43 @@ func TestInventoryStateCapabilitiesQualifyAdmissionThreshold(t *testing.T) {
 		}
 	}
 }
+
+func TestInventoryStateStatusPendingAndForeignSlotsStayQualified(t *testing.T) {
+	for _, sampling := range []string{"pending", "foreign_slot", "returned", "refused", "not_requested"} {
+		t.Run(sampling, func(t *testing.T) {
+			policy := worker.InventoryStatePolicySnapshot{Contract: worker.InventoryStatePolicyContract, PolicyEnabled: true, SourceOnly: true, Limit: config.DefaultMaxStateBytes, LastDecisionStatus: "source_deferred", SamplingState: sampling, ProcessSlotOccupied: sampling == "pending" || sampling == "foreign_slot", CallbackReturned: sampling == "returned"}
+			var out bytes.Buffer
+			printWorkerInventoryState(&out, &policy)
+			text := strings.Join(strings.Fields(out.String()), " ")
+			for _, want := range []string{inventoryStateSamplingText(sampling), "State-length sample: NOT RECORDED", "does not reset failed retry", "Other entered filesystem or SQLite work can still delay controls"} {
+				if !strings.Contains(text, want) {
+					t.Fatal(want, text)
+				}
+			}
+			if strings.Contains(text, "WAL logical length: 0 bytes") {
+				t.Fatal(text)
+			}
+			encoded, err := json.Marshal(policy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Contains(encoded, []byte(`"observation":null`)) {
+				t.Fatal(string(encoded))
+			}
+		})
+	}
+	contract := capabilities()["inventory_state_admission_contract"].(map[string]any)
+	for _, key := range []string{"asynchronous_selected_metadata_callback", "retry_retained_across_in_process_runs"} {
+		if contract[key] != true {
+			t.Fatal(key, contract)
+		}
+	}
+	for _, key := range []string{"stalled_callback_replaced", "current_source_permission_from_status", "hard_control_latency"} {
+		if contract[key] != false {
+			t.Fatal(key, contract)
+		}
+	}
+	if contract["unfinished_production_process_slots"] != 1 {
+		t.Fatal(contract)
+	}
+}

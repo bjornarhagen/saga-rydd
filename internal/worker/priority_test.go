@@ -128,7 +128,7 @@ func TestPriorityWorkerControlsAndLiveHistoricalObservation(t *testing.T) {
 	cfg.Roots = []string{t.TempDir()}
 	entered := make(chan struct{}, 1)
 	var sourceCalls atomic.Int32
-	options := Options{ExperimentalScan: true, WorkDuration: time.Second, Interval: time.Second}
+	options := fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, WorkDuration: time.Second, Interval: time.Second})
 	options.priorityRequest = func(context.Context) ThreadPriorityObservation {
 		r := newThreadPriorityObservation("fixture")
 		accepted := false
@@ -168,10 +168,10 @@ func TestPriorityWorkerControlsAndLiveHistoricalObservation(t *testing.T) {
 
 	idleDir, idleCfg := fixture(t)
 	var idleRequests atomic.Int32
-	initial, done = start(t, idleDir, idleCfg, Options{priorityRequest: func(context.Context) ThreadPriorityObservation {
+	initial, done = start(t, idleDir, idleCfg, fixtureInventoryStateOptions(t, Options{priorityRequest: func(context.Context) ThreadPriorityObservation {
 		idleRequests.Add(1)
 		return newThreadPriorityObservation("fixture")
-	}})
+	}}))
 	if initial.Priority != nil || control(t, idleDir, "status").Priority != nil || idleRequests.Load() != 0 {
 		t.Fatal("idle mode requested native scheduling")
 	}

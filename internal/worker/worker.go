@@ -72,7 +72,13 @@ type Options struct {
 	// Private fixture coordinator; production retains one process-wide slot.
 	powerCoordinator *powerCoordinator
 	// Metadata-only admission fixture seam; production samples the fixed DB/WAL.
-	inventoryStateObserve func(context.Context, *state.Store, int64) (state.InventoryStateBudget, error)
+	inventoryStateObserve inventoryStateObserver
+	inventoryStateOwner   *inventoryStateFixtureOwner
+	// Private bounded phase-order fixture seam, called outside coordinator locks.
+	// Production never waits here and retains nonblocking callback scheduling.
+	inventoryStatePhaseStarted func(string, *inventoryStateTicket) error
+	// Private control-write fixture seam; production always calls SetPaused.
+	pauseStateWrite func(context.Context, *state.Store, bool) error
 	// Clock and accounting hooks are private. Production uses the native clocks
 	// and exact writer APIs; fixtures cannot change the recovery-delay policy.
 	wallNow, elapsedNow func() time.Time
@@ -98,6 +104,15 @@ type outcome struct {
 
 func Run(ctx context.Context, dir string, cfg config.Config, options Options) error {
 	wallClock, elapsedNow := options.wallNow, options.elapsedNow
+	if options.inventoryStateOwner != nil {
+		c := options.inventoryStateOwner.coordinator
+		if c == nil || c.domain == nil {
+			return errInventoryStateAsyncInput
+		}
+		wallClock, elapsedNow = c.domain.wallNow, c.domain.elapsedNow
+	} else if options.ExperimentalScan && (options.inventoryStateObserve != nil || options.inventoryStatePhaseStarted != nil || options.wallNow != nil || options.elapsedNow != nil) {
+		return errInventoryStateAsyncInput // Hooks do not substitute the production lifetime.
+	}
 	if wallClock == nil {
 		wallClock = time.Now
 	}
@@ -118,6 +133,11 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 	defer powerLifetime.cancelCurrent()
 	powerState := sourcePowerState{enabled: options.ExperimentalScan && cfg.Scan.PauseOnBattery}
 	inventoryState := sourceInventoryState{enabled: options.ExperimentalScan, limit: cfg.Scan.MaxStateBytes}
+	stateCoordinator := selectedInventoryStateCoordinator(options.inventoryStateOwner)
+	var stateScope *inventoryStateRunScope
+	var stateTurn *inventoryStateTurn
+	var stateWake <-chan struct{}
+	var stateWakeTicket *inventoryStateTicket
 	observeCPU := options.cpuObserve
 	if observeCPU == nil {
 		observeCPU = processCPUTime
@@ -258,6 +278,16 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 		return err
 	}
 	live := Snapshot{PID: os.Getpid(), Instance: hex.EncodeToString(id[:]), StartedAt: wallNow().UTC(), Paused: paused, RecoveredJobs: recovered, Handlers: len(handlers)}
+	if options.ExperimentalScan {
+		sampler, sampleErr := w.InventoryStateBudgetSampler()
+		if sampleErr != nil {
+			return sampleErr
+		}
+		stateScope, sampleErr = newInventoryStateRunScope(stateCoordinator, sampler, live.Instance, cfg.Scan.MaxStateBytes, newInventoryStateFairScopeIdentity(), options.inventoryStateObserve)
+		if sampleErr != nil {
+			return sampleErr
+		}
+	}
 	var session *cpuSessionPolicy
 	if options.ExperimentalScan {
 		sessionObserve := options.cpuSessionObserve
@@ -317,7 +347,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 	refreshMetrics := func() {
 		if options.ExperimentalScan {
 			live.Power = powerState.snapshot()
-			live.InventoryState = inventoryState.snapshot()
+			live.InventoryState = inventoryState.asyncSnapshot(stateCoordinator.cachedStatus(stateScope))
 			live.AdaptiveRevisits = adaptive.snapshot()
 			if inventorySetupStage > 0 {
 				live.InventoryMode = &InventoryModeSnapshot{Compact: adaptive.background.Compact()}
@@ -367,15 +397,23 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 		}
 		return err
 	}
-	observeInventoryState := func(sampleCtx context.Context, phase string) bool {
-		allowed := inventoryState.observe(sampleCtx, phase, wallNow, elapsedNow, func(sampleCtx context.Context) (state.InventoryStateBudget, error) {
-			if options.inventoryStateObserve == nil {
-				return w.InventoryStateBudget(sampleCtx, cfg.Scan.MaxStateBytes)
-			}
-			return options.inventoryStateObserve(sampleCtx, w, cfg.Scan.MaxStateBytes)
-		})
+	abandonStateTurn := func() {
+		if stateTurn != nil {
+			stateTurn.abandon(finishCPU)
+			stateTurn = nil
+		}
+	}
+	defer abandonStateTurn()
+	applyStateDecision := func(d inventoryStateAsyncDecision) {
+		if d.Ticket != nil && d.Ticket != stateWakeTicket {
+			stateWake, stateWakeTicket = d.Ticket.done, d.Ticket
+		}
+		inventoryState.asyncDecision(d)
 		refreshMetrics()
-		return allowed
+	}
+	applyStateCompletion := func(r inventoryStateCompletion, allowed bool) {
+		inventoryState.asyncCompletion(r, allowed)
+		refreshMetrics()
 	}
 	if err := refreshMetadata(ctx, wallNow()); err != nil {
 		return err
@@ -420,6 +458,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 	var activeCPUMarker *state.CPUWindowMarker
 	var activeMetadata []*metadataWindow
 	stop := func() {
+		abandonStateTurn()
 		powerLifetime.cancelCurrent()
 		live.Stopping = true
 		live.WaitReason = "stopping"
@@ -470,6 +509,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 					return err
 				}
 				if feedback := live.CPUFeedback; feedback != nil && feedback.Status == "pending" && feedback.ClockHighWater != nil && !wallNow().Before(*feedback.ClockHighWater) {
+					abandonStateTurn() // Recovery is an unrelated writer unit.
 					recoveryCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 					err := recoverCPUFeedback(recoveryCtx)
 					cancel()
@@ -510,11 +550,47 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						if source.value.Load() == nil {
 							neededStartup = startupAllowance
 						}
+						stateWait, stateOccupied := inventoryStateScheduling(stateScope, now, elapsed)
+						sourceReason := ""
+						if stateTurn != nil || stateOccupied || stateWait > 0 {
+							sourceReason = "inventory_state_source_backoff"
+						}
 						planCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 						apiReady := apiPacer.capacity(source.value.Load() == nil)
-						plan, err = nextFairInventoryPlan(planCtx, w, fairRoots, genericKinds, now, *live.Metadata, neededStartup, apiReady && powerState.remaining(now, elapsed) == 0 && inventoryState.remaining(now, elapsed) == 0, apiPacer.blockedReason(apiReady))
+						if pacingReason := apiPacer.blockedReason(apiReady); pacingReason != "" {
+							sourceReason = pacingReason
+						}
+						plan, err = nextFairInventoryPlan(planCtx, w, fairRoots, genericKinds, now, *live.Metadata, neededStartup, apiReady && powerState.remaining(now, elapsed) == 0 && stateTurn == nil && stateWait == 0 && !stateOccupied, sourceReason)
 						cancel()
 						due, live.WaitReason = plan.due, plan.waitReason
+						if err == nil && stateTurn != nil {
+							_, completed := stateTurn.ticket.completed()
+							// Other writer work irrevocably revokes a pre intent. A post
+							// receipt can fund only maintenance under its original context.
+							// A returned ticket first gets one owning-loop consumption
+							// turn, even when its frozen verdict is a refusal. This reads
+							// no new metadata and grants no claim or writer authority.
+							if !completed && !plan.due.IsZero() && !plan.due.After(now) && (plan.generic || plan.schedule.Turn != nil) {
+								if stateTurn.receipt == nil || plan.generic {
+									abandonStateTurn()
+								} else if inventoryStateReceiptCurrent(stateTurn.turnCtx, stateTurn.reservedWall, stateTurn.reservedElapsed, now, elapsed) {
+									stateCoordinator.abandon(stateScope, stateTurn.intent)
+									stateTurn.sourceRevoked, stateTurn.plan.allowSource = true, false
+								} else {
+									abandonStateTurn()
+								}
+							}
+							if stateTurn != nil {
+								if delay, wake := stateTurn.expiryWait(now, elapsed); wake && (due.IsZero() || now.Add(delay).Before(due)) {
+									due = now.Add(delay)
+								}
+							}
+						}
+						if err == nil && stateTurn == nil && !stateOccupied && stateWait > 0 && !plan.schedule.NextSourceDue.IsZero() {
+							if retry := now.Add(stateWait); due.IsZero() || retry.Before(due) {
+								due = retry
+							}
+						}
 						if err == nil {
 							releaseDormantRootStreams(&source, plan.schedule)
 						}
@@ -552,9 +628,10 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						wait.wall(due, now, live.WaitReason)
 						if options.ExperimentalScan && inventorySetupStage >= 3 && !revisitMore && !adaptive.startupPending() && !plan.generic && plan.schedule.Turn == nil && !plan.schedule.NextSourceDue.IsZero() {
 							wait.add(powerState.remaining(now, elapsed), "power_source_backoff")
-							wait.add(inventoryState.remaining(now, elapsed), "inventory_state_source_backoff")
+							stateWait, _ := inventoryStateScheduling(stateScope, now, elapsed)
+							wait.add(stateWait, "inventory_state_source_backoff")
 						}
-						if options.ExperimentalScan && inventorySetupStage >= 3 && !revisitMore && !adaptive.startupPending() {
+						if options.ExperimentalScan && inventorySetupStage >= 3 && !revisitMore && !adaptive.startupPending() && (stateTurn == nil || stateTurn.receipt == nil) {
 							budget, err := w.DispatchBudget(ctx, now, cfg.Scan.MaxScanChunksPerDay)
 							if err != nil {
 								if ctx.Err() != nil {
@@ -568,7 +645,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 								wait.duration, wait.reason = max(remaining, 0), budget.Reason
 							}
 						}
-						if !revisitMore {
+						if !revisitMore && (stateTurn == nil || stateTurn.receipt == nil) {
 							wait.elapsed(nextAllowed, elapsed, "cadence")
 						}
 						wait.elapsed(cpu.nextAllowed, elapsed, "cpu_backoff")
@@ -577,8 +654,14 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						}
 						wait.elapsed(walNextAllowed, elapsed, "wal_backpressure")
 						if !session.selectionWait(&wait) && session != nil && session.refused != nil {
+							abandonStateTurn()
 							live.WaitReason = wait.reason
 							continue
+						}
+						if stateTurn != nil {
+							if delay, wake := stateTurn.expiryWait(now, elapsed); wake && delay < wait.duration {
+								wait.duration = delay
+							}
 						}
 						live.WaitReason = wait.reason
 						timer = time.NewTimer(wait.duration)
@@ -594,6 +677,10 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 		}
 
 		select {
+		case <-stateWake:
+			stateWake = nil
+			refreshMetrics()
+			reschedule = true
 		case <-powerState.wake:
 			powerState.wake = nil
 			powerState.refreshCompletion()
@@ -619,7 +706,13 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 					break
 				}
 				value := call.request.Command == "pause"
-				if err := w.SetPaused(call.ctx, value); err != nil {
+				abandonStateTurn() // Revoke before every UPDATE, including failed/redundant resume.
+				reschedule = true
+				writePaused := w.SetPaused
+				if options.pauseStateWrite != nil {
+					writePaused = func(ctx context.Context, value bool) error { return options.pauseStateWrite(ctx, w, value) }
+				}
+				if err := writePaused(call.ctx, value); err != nil {
 					response.OK = false
 					response.Error = err.Error()
 					break
@@ -651,12 +744,49 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 			call.reply <- response
 		case <-tick:
 			tick = nil
+			var resumed *inventoryStateTurn
+			if stateTurn != nil {
+				if stateTurn.sourceRevoked {
+					resumed = stateTurn
+				} else {
+					parent := ctx
+					if stateTurn.turnCtx != nil {
+						parent = stateTurn.turnCtx
+					}
+					d := stateCoordinator.startEligible(parent, stateTurn.request)
+					applyStateDecision(d)
+					if stateTurn.ticket != nil {
+						if result, completed := stateTurn.ticket.completed(); completed {
+							_, allowed := stateCoordinator.takeCompletion(parent, stateTurn.request, stateTurn.ticket)
+							applyStateCompletion(result, allowed)
+							if allowed {
+								resumed = stateTurn
+							} else if stateTurn.receipt != nil && inventoryStateMaintenanceResult(result) && inventoryStateClocksCurrent(stateScope, wallNow(), elapsedNow()) && inventoryStateReceiptCurrent(parent, stateTurn.reservedWall, stateTurn.reservedElapsed, wallNow(), elapsedNow()) {
+								// A rejected post result can only fund saved-only maintenance.
+								stateCoordinator.abandon(stateScope, stateTurn.intent)
+								stateTurn.plan.allowSource, stateTurn.sourceRevoked = false, true
+								resumed = stateTurn
+							} else {
+								abandonStateTurn()
+							}
+						} else if d.SamplingState == "refused" || parent.Err() != nil {
+							abandonStateTurn()
+						}
+					}
+					if resumed == nil {
+						reschedule = true
+						continue
+					}
+				}
+			}
 			if session != nil && session.stage < 3 {
+				abandonStateTurn()
 				session.startup(ctx)
 				reschedule = true
 				continue
 			}
 			if live.CPUFeedback != nil && live.CPUFeedback.Status == "pending" {
+				abandonStateTurn()
 				// A rollback timer may reach the saved high-water without any
 				// control request. Recover before reserving another root turn.
 				reschedule = true
@@ -665,40 +795,55 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 			// A timer is only a wakeup. Recheck independent clock domains before
 			// a reservation, so forward wall changes cannot erase live waits.
 			wait := dispatchWait{}
-			wait.elapsed(nextAllowed, elapsedNow(), "cadence")
+			if resumed == nil || resumed.receipt == nil {
+				wait.elapsed(nextAllowed, elapsedNow(), "cadence")
+			}
 			wait.elapsed(cpu.nextAllowed, elapsedNow(), "cpu_backoff")
 			if live.CPUFeedback != nil {
 				savedCPU.add(&wait, *live.CPUFeedback, wallNow(), elapsedNow())
 			}
 			wait.elapsed(walNextAllowed, elapsedNow(), "wal_backpressure")
 			if !session.selectionWait(&wait) && session != nil && session.refused != nil {
+				abandonStateTurn()
 				reschedule = true
 				continue
 			}
 			if wait.duration > 0 {
+				abandonStateTurn()
 				reschedule = true
 				continue
 			}
 			windowWall := wallNow()
-			window := beginCPUWindowAt(observeCPU, elapsedNow())
+			var window cpuWindow
+			if resumed == nil {
+				window = beginCPUWindowAt(observeCPU, elapsedNow())
+			} else {
+				window, windowWall = resumed.window, resumed.windowWall
+			}
+			// Any early branch below closes the retained prefix unless this tick
+			// leaves an async request or transfers it to admitted work.
+
 			var marker *state.CPUWindowMarker
 			if options.ExperimentalScan {
-				blocked, err := w.WALBlocked(ctx, state.WALBackpressureBytes)
-				if err != nil {
-					if ctx.Err() != nil {
-						stop()
+				if resumed == nil {
+					blocked, err := w.WALBlocked(ctx, state.WALBackpressureBytes)
+					if err != nil {
+						if ctx.Err() != nil {
+							stop()
+							continue
+						}
+						return err
+					}
+					if blocked {
+						live.WaitReason = "wal_backpressure"
+						walNextAllowed = elapsedNow().Add(time.Minute)
+						reschedule = true
 						continue
 					}
-					return err
-				}
-				if blocked {
-					live.WaitReason = "wal_backpressure"
-					walNextAllowed = elapsedNow().Add(time.Minute)
-					reschedule = true
-					continue
 				}
 				if inventorySetupStage < 3 || revisitMore || adaptive.startupPending() {
 					if !session.sampleAtBoundary(ctx, false) {
+						abandonStateTurn()
 						reschedule = true
 						continue
 					}
@@ -711,6 +856,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 					}
 					admission.elapsed(walNextAllowed, elapsedNow(), "wal_backpressure")
 					if !session.wait(&admission) || admission.duration > 0 {
+						abandonStateTurn()
 						reschedule = true
 						continue
 					}
@@ -817,32 +963,49 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 				// No observation starts on a quota-gated timer or before source
 				// metadata readiness. A maintenance-selected turn may still have
 				// another eligible due source, which must be screened before claim.
-				budget, budgetErr := w.DispatchBudget(ctx, wallNow(), cfg.Scan.MaxScanChunksPerDay)
-				if budgetErr != nil {
-					if ctx.Err() != nil {
-						stop()
+				if resumed == nil || resumed.receipt == nil {
+					budget, budgetErr := w.DispatchBudget(ctx, wallNow(), cfg.Scan.MaxScanChunksPerDay)
+					if budgetErr != nil {
+						if ctx.Err() != nil {
+							stop()
+							continue
+						}
+						return budgetErr
+					}
+					live.Dispatch = &budget
+					if budget.Reason != "" {
+						abandonStateTurn()
+						reschedule = true
 						continue
 					}
-					return budgetErr
 				}
-				live.Dispatch = &budget
-				if budget.Reason != "" {
+				sourceScreened := plan.allowSource && !plan.schedule.NextSourceDue.IsZero() && !plan.schedule.NextSourceDue.After(now)
+				stateWait, stateOccupied := inventoryStateScheduling(stateScope, wallNow(), elapsedNow())
+				allowSource := sourceScreened && stateWait == 0 && !stateOccupied && powerState.remaining(wallNow(), elapsedNow()) == 0
+				if resumed != nil {
+					allowSource = resumed.receipt == nil || resumed.plan.allowSource
+				}
+				if allowSource && resumed == nil {
+					stateTurn, err = newInventoryStateTurn(stateScope, window, windowWall)
+					if err != nil {
+						return err
+					}
+					d := stateCoordinator.startEligible(ctx, stateTurn.request)
+					stateTurn.ticket = d.Ticket
+					applyStateDecision(d)
+					if d.Started && options.inventoryStatePhaseStarted != nil {
+						if err := options.inventoryStatePhaseStarted(stateTurn.request.phase, d.Ticket); err != nil {
+							return err
+						}
+					}
+					if !d.Started {
+						abandonStateTurn()
+					}
 					reschedule = true
 					continue
 				}
-				sourceScreened := plan.allowSource && !plan.schedule.NextSourceDue.IsZero() && !plan.schedule.NextSourceDue.After(now)
-				allowSource := sourceScreened && inventoryState.remaining(wallNow(), elapsedNow()) == 0 && powerState.remaining(wallNow(), elapsedNow()) == 0
-				if allowSource {
-					sampleCtx, sampleCancel := context.WithTimeout(ctx, inventoryStateSampleWindow)
-					allowSource = observeInventoryState(sampleCtx, "before_dispatch")
-					sampleCancel()
-					if ctx.Err() != nil {
-						stop()
-						continue
-					}
-				}
-				stateScreened := allowSource
-				if stateScreened && cfg.Scan.PauseOnBattery {
+				stateScreened := resumed != nil && (resumed.receipt == nil || resumed.plan.allowSource)
+				if stateScreened && resumed.receipt == nil && cfg.Scan.PauseOnBattery {
 					decision := power.sourcePolicy(powerLifetime.ctx)
 					powerState.update(decision, wallNow())
 					if decision.Started {
@@ -862,18 +1025,36 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 					return planErr
 				}
 				releaseDormantRootStreams(&source, plan.schedule)
+				if resumed != nil && resumed.receipt != nil {
+					plan.allowSource = plan.allowSource && resumed.plan.allowSource
+					plan.generic = false // Generic writes require a new independent turn.
+					plan.due = now
+					// Claim decides current saved-only eligibility using this receipt;
+					// a stale original source selection supplies no claim authority.
+					if plan.schedule.Turn == nil {
+						plan.schedule.Turn = resumed.plan.schedule.Turn
+					}
+				}
 				if !plan.generic && plan.schedule.Turn == nil {
+					abandonStateTurn()
 					reschedule = true
 					continue
 				}
 				if plan.due.IsZero() || plan.due.After(wallNow()) {
+					abandonStateTurn()
+					reschedule = true
+					continue
+				}
+				if resumed != nil && resumed.receipt == nil && !plan.allowSource {
+					abandonStateTurn()
 					reschedule = true
 					continue
 				}
 				// Only a genuinely due, otherwise-admissible selection samples
 				// native session CPU. New debt or uncertainty precedes receipts.
-				if session != nil {
+				if session != nil && (resumed == nil || resumed.receipt == nil) {
 					if !session.sampleAtBoundary(ctx, false) {
+						abandonStateTurn()
 						reschedule = true
 						continue
 					}
@@ -884,6 +1065,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						savedCPU.add(&admission, *live.CPUFeedback, wallNow(), elapsedNow())
 					}
 					if !session.wait(&admission) || admission.duration > 0 {
+						abandonStateTurn()
 						reschedule = true
 						continue
 					}
@@ -892,12 +1074,18 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						return checkErr
 					}
 					if blocked {
+						abandonStateTurn()
 						walNextAllowed = elapsedNow().Add(time.Minute)
 						reschedule = true
 						continue
 					}
 				}
 				if plan.generic {
+					abandonStateTurn()
+					if resumed != nil {
+						reschedule = true
+						continue
+					}
 					budget, budgetErr := w.DispatchBudget(ctx, wallNow(), cfg.Scan.MaxScanChunksPerDay)
 					if budgetErr != nil {
 						if ctx.Err() != nil {
@@ -913,34 +1101,61 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 					}
 					job, err = w.ClaimJob(ctx, genericKinds, now, work+10*time.Second)
 				} else {
-					// One committed dispatch receipt funds one fair root turn.
-					reservedAt := wallNow()
-					reservedElapsed := elapsedNow()
-					turnCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-					budget, reserveErr := w.ReserveScanChunk(turnCtx, reservedAt, interval, cfg.Scan.MaxScanChunksPerDay)
-					live.Dispatch = &budget
-					if errors.Is(reserveErr, state.ErrDispatchDeferred) {
-						cancel()
-						reschedule = true
-						continue
-					}
-					if reserveErr != nil {
-						cancel()
-						if ctx.Err() != nil {
-							stop()
+					// A resumed post phase owns this original context and receipt.
+					var reservedAt, reservedElapsed time.Time
+					var turnCtx context.Context
+					var cancel context.CancelFunc
+					if resumed != nil && resumed.receipt != nil {
+						reservedAt, reservedElapsed, turnCtx, cancel = resumed.reservedWall, resumed.reservedElapsed, resumed.turnCtx, resumed.cancel
+						sourceScreened = resumed.sourceScreened
+					} else {
+						// Refuse known foreign post capacity before charging. A race
+						// after this check remains a charged post refusal.
+						if stateScreened && stateCoordinator.cachedStatus(stateScope).ProcessSlotOccupied {
+							abandonStateTurn()
+							reschedule = true
 							continue
 						}
-						return fmt.Errorf("reserve inventory root turn: %w", reserveErr)
-					}
-					nextAllowed = reservedElapsed.Add(interval)
-					// The receipt stays charged if the second sample refuses.
-					// No source claim or CPU marker exists at this boundary.
-					if stateScreened && plan.allowSource {
-						plan.allowSource = observeInventoryState(turnCtx, "after_receipt")
-						if ctx.Err() != nil {
+						reservedAt, reservedElapsed = wallNow(), elapsedNow()
+						turnCtx, cancel = context.WithTimeout(ctx, 2*time.Second)
+						budget, reserveErr := w.ReserveScanChunk(turnCtx, reservedAt, interval, cfg.Scan.MaxScanChunksPerDay)
+						live.Dispatch = &budget
+						if errors.Is(reserveErr, state.ErrDispatchDeferred) {
 							cancel()
-							stop()
+							abandonStateTurn()
+							reschedule = true
 							continue
+						}
+						if reserveErr != nil {
+							cancel()
+							abandonStateTurn()
+							if ctx.Err() != nil {
+								stop()
+								continue
+							}
+							return fmt.Errorf("reserve inventory root turn: %w", reserveErr)
+						}
+						nextAllowed = reservedElapsed.Add(interval)
+						if stateScreened && plan.allowSource {
+							d, postErr := stateTurn.startPost(turnCtx, cancel, budget, reservedAt, reservedElapsed, plan, sourceScreened)
+							if postErr != nil {
+								abandonStateTurn()
+								return postErr
+							}
+							applyStateDecision(d)
+							if d.Started && options.inventoryStatePhaseStarted != nil {
+								if err := options.inventoryStatePhaseStarted(stateTurn.request.phase, d.Ticket); err != nil {
+									return err
+								}
+							}
+							if d.Started {
+								reschedule = true
+								continue
+							}
+							// No post observation began: abandon sample authority and
+							// retain only this receipt for source-disabled maintenance.
+							stateCoordinator.abandon(stateScope, stateTurn.intent)
+							plan.allowSource = false
 						}
 					}
 					// The receipt remains charged if freshness changed. This
@@ -950,6 +1165,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						powerState.update(decision, wallNow())
 						refreshMetrics()
 						if decision.Status == "sample_required" {
+							abandonStateTurn()
 							cancel()
 							reschedule = true
 							continue
@@ -957,19 +1173,22 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						plan.allowSource = !decision.SourceBackoff
 					}
 					claimWall, claimElapsed := wallNow(), elapsedNow()
-					if !inventoryStateReceiptCurrent(turnCtx, reservedAt, reservedElapsed, claimWall, claimElapsed) {
+					if !inventoryStateReceiptCurrent(turnCtx, reservedAt, reservedElapsed, claimWall, claimElapsed) || stateTurn != nil && !inventoryStateClocksCurrent(stateScope, claimWall, claimElapsed) {
+						abandonStateTurn()
 						cancel()
 						reschedule = true
 						continue
 					}
 					admission := dispatchWait{}
 					if !session.wait(&admission) {
+						abandonStateTurn()
 						cancel()
 						reschedule = true
 						continue // The committed receipt is never refunded.
 					}
 					turn, claimErr := w.ClaimFairInventoryTurn(turnCtx, fairRoots, claimWall, work+10*time.Second, plan.allowSource, reservedAt)
 					if claimErr != nil {
+						abandonStateTurn()
 						cancel()
 						if ctx.Err() != nil {
 							stop()
@@ -978,9 +1197,17 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						return fmt.Errorf("claim inventory root turn: %w", claimErr)
 					}
 					if turn == nil {
+						abandonStateTurn()
 						cancel()
 						reschedule = true
 						continue
+					}
+					if stateTurn != nil {
+						_, inheritedCancel := stateTurn.transfer()
+						if inheritedCancel != nil {
+							cancel = inheritedCancel
+						}
+						stateTurn = nil
 					}
 					start := state.CPUWindowStart{Instance: live.Instance, WindowStartedAt: windowWall}
 					var begun state.CPUWindowMarker

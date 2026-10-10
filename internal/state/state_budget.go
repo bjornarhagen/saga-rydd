@@ -114,6 +114,14 @@ func (s *Store) InventoryStateBudget(ctx context.Context, limit int64) (Inventor
 }
 
 func (s *Store) inventoryStateBudget(parent context.Context, limit int64, hooks inventoryStateBudgetHooks) (InventoryStateBudget, error) {
+	path := ""
+	if s != nil {
+		path = s.path
+	}
+	return inventoryStateBudgetAtPath(parent, path, limit, hooks)
+}
+
+func inventoryStateBudgetAtPath(parent context.Context, path string, limit int64, hooks inventoryStateBudgetHooks) (InventoryStateBudget, error) {
 	if parent == nil || limit < MinInventoryStateBytes || limit > MaxInventoryStateBytes {
 		return InventoryStateBudget{}, ErrInventoryStateBudgetInput
 	}
@@ -146,10 +154,10 @@ func (s *Store) inventoryStateBudget(parent context.Context, limit int64, hooks 
 		}
 		return report, nil
 	}
-	if s == nil || s.path == "" {
+	if path == "" {
 		return finish()
 	}
-	paths := [2]string{s.path, s.path + "-wal"}
+	paths := [2]string{path, path + "-wal"}
 	var before [2]inventoryStateStamp
 	for round := 0; round < 2; round++ {
 		for i, path := range paths {
