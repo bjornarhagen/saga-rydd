@@ -87,6 +87,8 @@ rydd --data-dir /path/to/private/state status --cpu-charges --json
 
 The command opens only existing saved state. It loads no configuration, samples no current CPU or admission clock and evaluates no current permission. Unknown or uncertain tracking blocks new work for that Run while controls remain available. Preserve the exact error and inspect saved history before an explicit restart. See [CPU session scope and recovery](cli.md#optional-conservative-cpu-session-charges).
 
+Optional hour/day CPU charge settings default to zero and require tracking for positive limits. Activation upgrades the private inventory to schema 16. Partial initial slots can delay setup until the next applicable UTC boundary. Stop before editing configuration, and inspect historical slots with `status --cpu-period-charges --json`. Turning tracking off requires zero limits and saves a tracking gap before setup; it does not remove history or restore older-binary compatibility. See [UTC charge settings and saved history](cli.md#optional-utc-cpu-charge-limits) before enabling them.
+
 Service descriptors are a separate workflow. `service status` inspects the selected artifact; `service runtime-status` makes qualified Linux observations of an existing loaded unit. Artifact presence, a start reply and a declared manager PID do not prove readiness. macOS runtime observation is currently unsupported. Installing a macOS descriptor can affect future logins. See [service commands](cli.md#user-service-descriptor-preview) before taking a lifecycle action.
 
 ## Resolve common waits and failures
@@ -104,6 +106,7 @@ Start with the same data directory, folder and IDs used by the original command.
 | Daily allowance or cadence delays source work | Inspect saved dispatch and metadata accounting. Reservations stay charged after interruption. Wait for the legitimate allowance/due time; restart does not refund it. |
 | CPU recovery or backoff delays work | Inspect saved CPU feedback. Writer recovery retains uncertain charges and a cooldown. Status does not recover work. |
 | Optional CPU session backoff delays work | Inspect `status --cpu-charges` and the live wait reason. Saved deadlines do not calculate current remaining wait. Restart can add a fresh overlapping prefix and retains prior debt. |
+| Optional hour/day charge gate delays setup or work | Inspect `status --cpu-period-charges` and the live wait reason. Partial/unknown slots or saved charges at the limit can delay work until a legitimate boundary and fresh sample. The saved view calculates no remaining quota or wait. |
 | CPU session accounting is unknown or uncertain | Keep the exact error and saved history. Request stop and wait for exit before resolving the error or explicitly restarting. The current Run will not silently fall back to untracked work. |
 | WAL backpressure delays work | Finish long-lived readers when appropriate. The worker retries under its existing gates. A large reusable WAL is not evidence that history must be deleted. |
 | State threshold delays work | Inspect cached DB/WAL lengths and availability. Pending work remains saved. Restart is not a remedy for the threshold; freed SQLite pages may not shrink file lengths. |

@@ -99,9 +99,9 @@ func TestCPUSessionWorkerFiniteBoundariesAndCachedControls(t *testing.T) {
 	}
 	_, done := start(t, dir, fixtureCfg, options)
 	waitUntil(t, func() bool {
-		return sessionSaved(t, dir).Session != nil && sessionSaved(t, dir).Session.LastOrdinal >= 2
+		return sessionSaved(t, dir).Session != nil && sessionSaved(t, dir).Session.LastOrdinal >= 8
 	})
-	if observations.Load() != 3 || handled.Load() != 1 {
+	if observations.Load() != 9 || handled.Load() != 1 {
 		t.Fatal("unexpected native sample/handler count", observations.Load(), handled.Load())
 	}
 	for i := 0; i < 4; i++ {
@@ -109,13 +109,13 @@ func TestCPUSessionWorkerFiniteBoundariesAndCachedControls(t *testing.T) {
 		control(t, dir, "status")
 		control(t, dir, "resume")
 	}
-	if observations.Load() != 3 {
+	if observations.Load() != 9 {
 		t.Fatal("idle controls polled native CPU", observations.Load())
 	}
 	control(t, dir, "stop")
 	waitExit(t, done)
 	saved := sessionSaved(t, dir)
-	if observations.Load() != 4 || saved.Status != "finished" || saved.UnknownTailSessions != 1 || saved.Session.LastOrdinal != 3 {
+	if observations.Load() != 10 || saved.Status != "finished" || saved.UnknownTailSessions != 1 || saved.Session.LastOrdinal != 9 {
 		t.Fatal(observations.Load(), saved)
 	}
 }
@@ -208,7 +208,7 @@ func TestCPUSessionWorkerUncertainAdmissionKeepsFrozenRequestAndNoReceipt(t *tes
 		control(t, dir, "status")
 	}
 	status := control(t, dir, "status")
-	if samples.Load() != 1 || handled.Load() != 0 || status.Dispatch == nil || status.Dispatch.Used != 0 {
+	if samples.Load() != 1 || handled.Load() != 0 || status.Dispatch != nil && status.Dispatch.Used != 0 {
 		t.Fatal(samples.Load(), handled.Load(), status)
 	}
 	control(t, dir, "stop")
@@ -223,6 +223,10 @@ func TestCPUSessionWorkerUncertainAdmissionKeepsFrozenRequestAndNoReceipt(t *tes
 	summary, err := r.Summary(context.Background())
 	if err != nil || summary.RunningJobs != 0 || summary.PendingJobs < 1 {
 		t.Fatal(summary, err)
+	}
+	budget, err := r.DispatchBudget(context.Background(), time.Now(), fixtureCfg.Scan.MaxScanChunksPerDay)
+	if err != nil || budget.Used != 0 {
+		t.Fatal("uncertain setup invented a dispatch receipt", budget, err)
 	}
 }
 
@@ -259,7 +263,7 @@ func TestCPUSessionWorkerCancelSettlesHandlerThenFinishes(t *testing.T) {
 		t.Fatal("cancel did not join")
 	}
 	saved := sessionSaved(t, dir)
-	if saved.Status != "finished" || saved.Session.LastOrdinal != 3 {
+	if saved.Status != "finished" || saved.Session.LastOrdinal != 9 {
 		t.Fatal("missing completion/final accounting", saved)
 	}
 	r, err := state.OpenReader(context.Background(), dir)
@@ -335,7 +339,7 @@ func TestCPUSessionWorkerUncooperativeHandlerLeavesOpenRecoveryEvidence(t *testi
 		t.Fatal("uncooperative stop was unbounded")
 	}
 	saved := sessionSaved(t, dir)
-	if observations.Load() != 2 || saved.Status != "active" || !saved.OpenTailUnobserved || saved.Session.LastOrdinal != 1 {
+	if observations.Load() != 8 || saved.Status != "active" || !saved.OpenTailUnobserved || saved.Session.LastOrdinal != 7 {
 		t.Fatal("fabricated graceful finish", observations.Load(), saved)
 	}
 }
@@ -381,15 +385,26 @@ func TestCPUSessionWorkerDoesNotSampleIneligibleSourceOrFutureWork(t *testing.T)
 			}
 			_, done := start(t, dir, cfg, options)
 			waitUntil(t, func() bool { return sessionSaved(t, dir).Status == "active" })
-			// A status request barriers behind the completed startup stage. For
+			// Each eligible staged setup unit has a pre/post observation. Paused
+			// startup retains just the prefix; no setup turn is admitted. For
 			// state gating, wait for its finite fixed-backoff observation.
+			if gate != "paused" {
+				waitUntil(t, func() bool {
+					saved := sessionSaved(t, dir)
+					return saved.Session != nil && saved.Session.LastOrdinal >= 6
+				})
+			}
 			if gate == "state" {
 				waitUntil(t, func() bool { return control(t, dir, "status").WaitReason == "inventory_state_source_backoff" })
 			}
 			for i := 0; i < 3; i++ {
 				control(t, dir, "status")
 			}
-			if observations.Load() != 1 || sourceCalls.Load() != 0 {
+			expected := int64(7)
+			if gate == "paused" {
+				expected = 1
+			}
+			if observations.Load() != expected || sourceCalls.Load() != 0 {
 				t.Fatal("ineligible work sampled/admitted", observations.Load(), sourceCalls.Load())
 			}
 			control(t, dir, "stop")
@@ -423,7 +438,7 @@ func TestCPUSessionLateElapsedRefusalRetainsReceiptAndUnstartedCursor(t *testing
 	_, done := start(t, dir, cfg, options)
 	waitUntil(t, func() bool { return control(t, dir, "status").WaitReason == "cpu_session_unknown" })
 	status := control(t, dir, "status")
-	if sourceCalls.Load() != 0 || observations.Load() != 2 || status.Dispatch == nil || status.Dispatch.Used != 1 {
+	if sourceCalls.Load() != 0 || observations.Load() != 8 || status.Dispatch == nil || status.Dispatch.Used != 1 {
 		t.Fatal("late refusal lost receipt/source scope", sourceCalls.Load(), observations.Load(), status)
 	}
 	control(t, dir, "stop")
@@ -509,7 +524,7 @@ func TestCPUSessionLateMaintenanceRefusalLeavesExactRetirementProgress(t *testin
 	waitUntil(t, func() bool { return control(t, dir, "status").WaitReason == "cpu_session_unknown" })
 	after := sessionRetirementControls(t, dir)
 	status := control(t, dir, "status")
-	if !reflect.DeepEqual(before, after) || observations.Load() != 2 || sourceCalls.Load() != 0 || status.Dispatch == nil || status.Dispatch.Used != 1 {
+	if !reflect.DeepEqual(before, after) || observations.Load() != 8 || sourceCalls.Load() != 0 || status.Dispatch == nil || status.Dispatch.Used != 1 {
 		t.Fatal("late maintenance mutated progress/lost receipt", before, after, observations.Load(), sourceCalls.Load(), status)
 	}
 	control(t, dir, "stop")

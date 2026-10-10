@@ -6,6 +6,7 @@ Human-readable output is the default. Add `--json` to finite noninteractive comm
 rydd capabilities --json
 rydd status --json
 rydd status --cpu-charges --json
+rydd status --cpu-period-charges --json
 rydd pause --json
 rydd resume --json
 rydd stop --json
@@ -81,6 +82,36 @@ This exclusive mode takes no other command arguments. One existing-only reader a
 JSON keeps the standard API 1 envelope and adds `cpu_charges.saved_state` with contract `worker_self_cpu_charges_v1`, scope `one_private_state_store_run_sessions`. It preserves permanent generation, charges, saved clock/deadline, unknown/recovered counts and the latest session. `current_permission_evaluated`, `hourly_limit_enforced`, `daily_limit_enforced` and `physical_power_measured` remain false. Saved deadlines are historical; they do not establish current permission or remaining wait. Stable accounting error codes are `cpu_charges_invalid` and `cpu_charges_unavailable`; cancellation takes precedence. Failed or canceled output produces no second JSON reply and changes no saved record.
 
 Each Run can charge the cumulative SELF prefix again. Prefixes can overlap; SELF includes process threads and excludes children. Pre-first-publication and final publication/exit tails can remain unobserved, including after a graceful finish. These charges are neither unique lifetime CPU nor a complete upper bound, hourly/daily/global quota or cleanup permission. Capabilities expose `saved_cpu_session_charges` and the `cpu_charges_contract` qualifications. The separate `configured_cpu_session_charges` capability discloses the configuration key, default-off experimental scope, schema activation, opt-out history retention and unknown/uncertain refusal. It preserves false lifetime and hour/day quota claims. See [worker session accounting](worker.md#optional-conservative-cpu-sessions-p1-06b13).
+
+## Optional UTC CPU charge limits
+
+Two additional settings limit later experimental work using saved CPU charges in one private state store. Both default to zero. A positive value requires `scan.cpu_session_charges = true`.
+
+| Setting | Accepted integer values | Meaning of zero |
+| --- | --- | --- |
+| `scan.cpu_charge_seconds_per_hour` | 0–3600 seconds | Hour charge gate disabled |
+| `scan.cpu_charge_seconds_per_day` | 0–86400 seconds | Day charge gate disabled |
+
+Stop the worker before editing these settings. They take effect on the next explicit `daemon --experimental-scan` start. For example, an hour value of `60` permits later admission only while the saved assigned charge is below 60 seconds and the other gates permit work. This example is not a tested default or a physical CPU limit.
+
+The slots use UTC clock hours and days. The whole known prefix or delta is assigned to the slot containing its observation endpoint. A measurement spanning a boundary can therefore charge a later slot. Repeated process prefixes can overlap. A charge at or above the limit is retained in full; the limit delays later work and cannot interrupt a running operation.
+
+Initial slots are partially tracked. A positive gate waits through its partial slot. An hour rollover does not clear the day's charge or partial/unknown evidence. Unknown usage also blocks a positive gate for its affected slot. Independent live elapsed waits survive forward wall-clock changes and slot updates. A timer only triggers fresh checks; an expired saved slot requires a fresh accounting sample before dispatch. Pause, status and replanning do not shorten or restart established waits.
+
+Positive activation upgrades this inventory to schema 16. Binaries supporting at most schema 15 refuse it. Once activated, tracked starts use the joint period/session protocol even when both new limits are zero. Setting tracking to false requires zero new limits and records a durable tracking gap before experimental inventory setup. It retains the earlier limits as history and disables these optional gates; it does not erase charges or restore older-binary compatibility. Re-enabling tracking closes the gap without claiming complete coverage for the current slots.
+
+The worker exposes hour/day reasons ending in `_partial`, `_unknown`, `_backoff` or `_sample_required`, prefixed by `cpu_hour_charge` or `cpu_day_charge`. Existing session, cadence, dispatch, scanner, CPU-feedback, WAL, state and source-power checks remain applicable. Accounting failure or uncertain publication refuses new work while controls remain available. This is cooperative admission for saved endpoint-assigned charges, not a hard physical, shared-instance or global CPU ceiling. Manual scans, explicit hashing, child processes and full process-lifetime coverage remain outside this contract.
+
+### Read saved period accounting
+
+```sh
+rydd --data-dir /path/to/private/state status --cpu-period-charges
+rydd --data-dir /path/to/private/state status --cpu-period-charges --json
+```
+
+This exclusive command reads existing joint accounting and closes the reader before output. It uses a cooperative five-second deadline. It loads no configuration, contacts no worker, samples no current CPU or admission clock, activates nothing and performs no recovery. Missing state is not created. Supported schema-14/15 state reports `available: false` without migration. An entered filesystem/SQLite call or a blocked output writer can outlast cancellation.
+
+API 1 adds `cpu_period_charges.saved_state`, using `worker_cpu_charge_admission_v1` and scope `one_private_state_store_utc_endpoint_assigned_charges`. It shows the latest fixed UTC hour/day slots, assigned and retired charges, activation baseline, frozen limits, policy revision, partial/unknown evidence and tracking gaps. Retired totals are earlier slot assignments, not a list of every historical slot. It calculates no remaining quota, current permission or time until work. Permission, physical-period, global-quota and full-process verification flags remain false. Joint accounting corruption uses `cpu_period_charges_invalid`; unavailable accounting uses `cpu_period_charges_unavailable`. Cancellation takes precedence, and failed output adds no second JSON reply. The earlier `--cpu-charges` output stays separate and compatible.
 
 ## Cached experimental power policy
 

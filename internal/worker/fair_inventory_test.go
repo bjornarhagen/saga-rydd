@@ -151,36 +151,56 @@ func TestWorkerFairRechecksRootEligibilityAfterCPUWait(t *testing.T) {
 	if err = w.SyncRoots(context.Background(), c.Roots); err != nil {
 		t.Fatal(err)
 	}
-	if err = w.EnqueueJob(context.Background(), 2, state.ScanKind, []byte("."), time.Now().Add(300*time.Millisecond)); err != nil {
+	healthyDue := time.Now().Add(300 * time.Millisecond)
+	if err = w.EnqueueJob(context.Background(), 2, state.ScanKind, []byte("."), healthyDue); err != nil {
 		t.Fatal(err)
 	}
 	if err = w.Close(); err != nil {
 		t.Fatal(err)
 	}
-	var samples int
+	var sourceEntered atomic.Bool
 	starts := make(chan string, 8)
 	options := Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second}
 	options.cpuObserve = func() (time.Duration, error) {
-		samples++
-		if samples < 2 {
+		// Staged setup is separately accounted. Attribute this synthetic CPU
+		// jump to the first actual source window rather than an observation index.
+		if !sourceEntered.Load() {
 			return 0, nil
 		}
 		return 10 * time.Millisecond, nil
 	}
 	options.scannerNext = func(ctx context.Context, s *inventory.Scanner, j state.Job, p inventory.APIPermit) (state.ScanBatch, error) {
+		sourceEntered.Store(true)
 		starts <- string(j.RootPath)
 		return s.NextPermitted(ctx, j, p)
 	}
 	_, done := start(t, dir, c, options)
+	select {
+	case root := <-starts:
+		if root != wide {
+			t.Fatal("first source root differs", root)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("first source window did not start")
+	}
 	waitUntil(t, func() bool {
 		// The experimental worker enforces both live elapsed and saved wall
 		// restrictions. Either clock domain can be the longer CPU gate.
-		reason := control(t, dir, "status").WaitReason
-		return reason == "cpu_backoff" || reason == "durable_cpu_backoff"
+		s := control(t, dir, "status")
+		return (s.WaitReason == "cpu_backoff" || s.WaitReason == "durable_cpu_backoff") && s.Dispatch != nil && s.CPUFeedback != nil && s.CPUFeedback.Status == "observed" && s.CPUFeedback.Window != nil && s.CPUFeedback.Window.Kind == state.FairInventorySource && s.CPUFeedback.Window.CPUTimeNS != nil && *s.CPUFeedback.Window.CPUTimeNS == int64(10*time.Millisecond) && s.InventoryMetrics != nil && s.ActiveJob == 0
 	})
 	before := control(t, dir, "status")
-	if before.Dispatch.Used != 1 || <-starts != wide {
+	if before.Dispatch == nil || before.Dispatch.Used != 1 || before.CPUFeedback == nil || before.CPUFeedback.Window == nil || before.CPUFeedback.Window.Kind != state.FairInventorySource || before.CPUFeedback.Window.CPUTimeNS == nil || *before.CPUFeedback.Window.CPUTimeNS != int64(10*time.Millisecond) || before.InventoryMetrics == nil || before.ActiveJob != 0 || !before.CPUFeedback.Window.DispatchReservedAt.Before(healthyDue) {
 		t.Fatal("first source turn differs", before)
+	}
+	r, err := state.OpenReader(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	budget := savedWorkerDispatchBudget(t, r, before.CPUFeedback.Window.DispatchReservedAt, c.Scan.MaxScanChunksPerDay)
+	if budget.Used != 1 {
+		t.Fatal("first source turn did not retain exactly one saved dispatch", budget)
 	}
 	if !control(t, dir, "pause").Paused || control(t, dir, "resume").Paused {
 		t.Fatal("CPU wait blocked controls")

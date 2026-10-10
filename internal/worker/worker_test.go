@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bjornarhagen/saga-rydd/internal/config"
+	"github.com/bjornarhagen/saga-rydd/internal/inventory"
 	"github.com/bjornarhagen/saga-rydd/internal/localfs"
 	"github.com/bjornarhagen/saga-rydd/internal/state"
 )
@@ -577,6 +578,25 @@ func TestWorkerCPUWindowIncludesProgressCommit(t *testing.T) {
 					afterCommit <- savedObservation{summary, err}
 				}
 				return time.Duration(samples/2) * 20 * time.Millisecond, nil
+			}
+			if mode == "scan commit" {
+				var sourceEntered, committedObserved atomic.Bool
+				options.scannerNext = func(ctx context.Context, scanner *inventory.Scanner, job state.Job, permit inventory.APIPermit) (state.ScanBatch, error) {
+					sourceEntered.Store(true)
+					return scanner.NextPermitted(ctx, job, permit)
+				}
+				options.cpuObserve = func() (time.Duration, error) {
+					// Setup has its own windows. Observe the first source window
+					// after its progress commit, independent of setup call count.
+					if !sourceEntered.Load() {
+						return 0, nil
+					}
+					if committedObserved.CompareAndSwap(false, true) {
+						summary, err := r.Summary(context.Background())
+						afterCommit <- savedObservation{summary, err}
+					}
+					return 20 * time.Millisecond, nil
+				}
 			}
 			_, done := start(t, dir, c, options)
 			var saved savedObservation

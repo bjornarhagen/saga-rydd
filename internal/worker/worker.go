@@ -68,6 +68,7 @@ type Options struct {
 	// Optional session observations/hooks are private; production uses SELF.
 	cpuSessionObserve func() (time.Duration, error)
 	cpuSessionHooks   *cpuSessionHooks
+	cpuPeriodHooks    *cpuPeriodHooks
 	// Private fixture coordinator; production retains one process-wide slot.
 	powerCoordinator *powerCoordinator
 	// Metadata-only admission fixture seam; production samples the fixed DB/WAL.
@@ -139,6 +140,9 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 	if revisitInterval <= 0 || revisitInterval > 30*24*time.Hour {
 		return errors.New("invalid root-listing revisit interval")
 	}
+	if cfg.Scan.CPUChargeSecondsPerHour < 0 || cfg.Scan.CPUChargeSecondsPerHour > 3600 || cfg.Scan.CPUChargeSecondsPerDay < 0 || cfg.Scan.CPUChargeSecondsPerDay > 86400 || !cfg.Scan.CPUSessionCharges && (cfg.Scan.CPUChargeSecondsPerHour != 0 || cfg.Scan.CPUChargeSecondsPerDay != 0) {
+		return state.ErrCPUChargeAdmissionInvalid
+	}
 	if options.ExperimentalScan && (cfg.Scan.MetadataAttemptsPerDay < 1 || cfg.Scan.MetadataAttemptsPerDay > state.MetadataDailyLimit) {
 		return state.ErrMetadataInvalid
 	}
@@ -183,6 +187,8 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 	var startupAllowance int64
 	var revisitCursor int64
 	var revisitMore bool
+	var inventorySetupStage int
+	var adaptiveDigest string
 	var fairRoots state.FairInventoryRoots
 	var adaptive adaptiveRevisitPolicy
 	var apiPacer *sourceAPIPacer
@@ -237,25 +243,10 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 		return err
 	}
 	if options.ExperimentalScan {
-		background, err := w.ConfigureBackgroundInventoryMode(ctx, fairRoots, cfg.Scan.CompactInventory, wallNow())
-		if err != nil {
-			return fmt.Errorf("configure background inventory mode: %w", err)
-		}
-		adaptive.background = background
 		home, _ := os.UserHomeDir()
-		digest, err := adaptiveRevisitDigest(cfg.Roots, cfg.Excludes, privatePaths, home)
+		adaptiveDigest, err = adaptiveRevisitDigest(cfg.Roots, cfg.Excludes, privatePaths, home)
 		if err != nil {
 			return err
-		}
-		if err = adaptive.configure(ctx, w, fairRoots, cfg.Scan.AdaptiveRevisits, digest, wallNow()); err != nil {
-			return fmt.Errorf("configure adaptive inventory revisits: %w", err)
-		}
-		if !adaptive.enabled {
-			page, err := w.SeedBackgroundInventoryRevisitPage(ctx, adaptive.background, 0, wallNow(), revisitInterval)
-			if err != nil {
-				return err
-			}
-			revisitCursor, revisitMore = page.Cursor, page.More
 		}
 	}
 	paused, err := w.Paused(ctx)
@@ -268,12 +259,12 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 	}
 	live := Snapshot{PID: os.Getpid(), Instance: hex.EncodeToString(id[:]), StartedAt: wallNow().UTC(), Paused: paused, RecoveredJobs: recovered, Handlers: len(handlers)}
 	var session *cpuSessionPolicy
-	if options.ExperimentalScan && cfg.Scan.CPUSessionCharges {
+	if options.ExperimentalScan {
 		sessionObserve := options.cpuSessionObserve
 		if sessionObserve == nil {
 			sessionObserve = observeCPU
 		}
-		session = &cpuSessionPolicy{store: w, instance: live.Instance, observe: sessionObserve, wall: wallNow, elapsed: elapsedNow, hooks: options.cpuSessionHooks}
+		session = &cpuSessionPolicy{store: w, instance: live.Instance, observe: sessionObserve, wall: wallNow, elapsed: elapsedNow, hooks: options.cpuSessionHooks, periodHooks: options.cpuPeriodHooks, selectProtocol: true, tracking: cfg.Scan.CPUSessionCharges, limits: state.CPUChargeLimits{HourNS: int64(cfg.Scan.CPUChargeSecondsPerHour) * int64(time.Second), DayNS: int64(cfg.Scan.CPUChargeSecondsPerDay) * int64(time.Second)}}
 		live.WaitReason = "cpu_session_startup"
 	}
 	cpu := newCPUBudget()
@@ -328,7 +319,9 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 			live.Power = powerState.snapshot()
 			live.InventoryState = inventoryState.snapshot()
 			live.AdaptiveRevisits = adaptive.snapshot()
-			live.InventoryMode = &InventoryModeSnapshot{Compact: adaptive.background.Compact()}
+			if inventorySetupStage > 0 {
+				live.InventoryMode = &InventoryModeSnapshot{Compact: adaptive.background.Compact()}
+			}
 			live.APIPacing = apiPacer.snapshot()
 		}
 		live.Priority = priorityObservation.Load()
@@ -503,7 +496,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 					var due time.Time
 					var plan fairInventoryPlan
 					var err error
-					if revisitMore || adaptive.startupPending() {
+					if options.ExperimentalScan && (inventorySetupStage < 3 || revisitMore || adaptive.startupPending()) {
 						due, live.WaitReason = now, "inventory_revisit_setup"
 					} else if options.ExperimentalScan {
 						if err = refreshMetadata(ctx, now); err != nil {
@@ -557,11 +550,11 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						}
 						wait := dispatchWait{reason: live.WaitReason}
 						wait.wall(due, now, live.WaitReason)
-						if options.ExperimentalScan && !revisitMore && !adaptive.startupPending() && !plan.generic && plan.schedule.Turn == nil && !plan.schedule.NextSourceDue.IsZero() {
+						if options.ExperimentalScan && inventorySetupStage >= 3 && !revisitMore && !adaptive.startupPending() && !plan.generic && plan.schedule.Turn == nil && !plan.schedule.NextSourceDue.IsZero() {
 							wait.add(powerState.remaining(now, elapsed), "power_source_backoff")
 							wait.add(inventoryState.remaining(now, elapsed), "inventory_state_source_backoff")
 						}
-						if options.ExperimentalScan && !revisitMore && !adaptive.startupPending() {
+						if options.ExperimentalScan && inventorySetupStage >= 3 && !revisitMore && !adaptive.startupPending() {
 							budget, err := w.DispatchBudget(ctx, now, cfg.Scan.MaxScanChunksPerDay)
 							if err != nil {
 								if ctx.Err() != nil {
@@ -583,7 +576,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 							savedCPU.add(&wait, *live.CPUFeedback, now, elapsed)
 						}
 						wait.elapsed(walNextAllowed, elapsed, "wal_backpressure")
-						if !session.wait(&wait) && session != nil && session.refused != nil {
+						if !session.selectionWait(&wait) && session != nil && session.refused != nil {
 							live.WaitReason = wait.reason
 							continue
 						}
@@ -678,7 +671,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 				savedCPU.add(&wait, *live.CPUFeedback, wallNow(), elapsedNow())
 			}
 			wait.elapsed(walNextAllowed, elapsedNow(), "wal_backpressure")
-			if !session.wait(&wait) && session != nil && session.refused != nil {
+			if !session.selectionWait(&wait) && session != nil && session.refused != nil {
 				reschedule = true
 				continue
 			}
@@ -704,6 +697,59 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 					reschedule = true
 					continue
 				}
+				if inventorySetupStage < 3 || revisitMore || adaptive.startupPending() {
+					if !session.sampleAtBoundary(ctx, false) {
+						reschedule = true
+						continue
+					}
+					admission := dispatchWait{}
+					session.wait(&admission)
+					admission.elapsed(nextAllowed, elapsedNow(), "cadence")
+					admission.elapsed(cpu.nextAllowed, elapsedNow(), "cpu_backoff")
+					if live.CPUFeedback != nil {
+						savedCPU.add(&admission, *live.CPUFeedback, wallNow(), elapsedNow())
+					}
+					admission.elapsed(walNextAllowed, elapsedNow(), "wal_backpressure")
+					if !session.wait(&admission) || admission.duration > 0 {
+						reschedule = true
+						continue
+					}
+					blocked, checkErr := w.WALBlocked(ctx, state.WALBackpressureBytes)
+					if checkErr != nil {
+						return checkErr
+					}
+					if blocked {
+						walNextAllowed = elapsedNow().Add(time.Minute)
+						reschedule = true
+						continue
+					}
+				}
+				if inventorySetupStage < 3 {
+					setupCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+					var setupErr error
+					switch inventorySetupStage {
+					case 0:
+						adaptive.background, setupErr = w.ConfigureBackgroundInventoryMode(setupCtx, fairRoots, cfg.Scan.CompactInventory, wallNow())
+					case 1:
+						setupErr = adaptive.configure(setupCtx, w, fairRoots, cfg.Scan.AdaptiveRevisits, adaptiveDigest, wallNow())
+					case 2:
+						if !adaptive.enabled {
+							var page state.InventoryRevisitPage
+							page, setupErr = w.SeedBackgroundInventoryRevisitPage(setupCtx, adaptive.background, 0, wallNow(), revisitInterval)
+							revisitCursor, revisitMore = page.Cursor, page.More
+						}
+					}
+					cancel()
+					cpuErr := finishCPU(window, nil)
+					if setupErr != nil || cpuErr != nil {
+						return errors.Join(setupErr, cpuErr)
+					}
+					inventorySetupStage++
+					session.sampleAtBoundary(context.Background(), false)
+					refreshMetrics()
+					reschedule = true
+					continue
+				}
 				if revisitMore {
 					pageCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 					page, err := w.SeedBackgroundInventoryRevisitPage(pageCtx, adaptive.background, revisitCursor, wallNow(), revisitInterval)
@@ -719,6 +765,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 					if err := finishCPU(window, nil); err != nil {
 						return err
 					}
+					session.sampleAtBoundary(context.Background(), false)
 					reschedule = true
 					continue
 				}
@@ -736,6 +783,7 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 					if err := finishCPU(window, nil); err != nil {
 						return err
 					}
+					session.sampleAtBoundary(context.Background(), false)
 					reschedule = true
 					continue
 				}
@@ -830,13 +878,12 @@ func Run(ctx context.Context, dir string, cfg config.Config, options Options) er
 						continue
 					}
 					admission := dispatchWait{}
-					session.wait(&admission)
 					admission.elapsed(nextAllowed, elapsedNow(), "cadence")
 					admission.elapsed(cpu.nextAllowed, elapsedNow(), "cpu_backoff")
 					if live.CPUFeedback != nil {
 						savedCPU.add(&admission, *live.CPUFeedback, wallNow(), elapsedNow())
 					}
-					if session.refused != nil || admission.duration > 0 {
+					if !session.wait(&admission) || admission.duration > 0 {
 						reschedule = true
 						continue
 					}

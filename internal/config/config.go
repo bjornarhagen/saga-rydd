@@ -68,19 +68,21 @@ type Config struct {
 }
 
 type Scan struct {
-	WorkSeconds            int   `toml:"work_seconds"`
-	IntervalSeconds        int   `toml:"interval_seconds"`
-	MetadataPerSecond      int   `toml:"metadata_per_second"`
-	APIAttemptsPerSecond   int   `toml:"api_attempts_per_second"`
-	MetadataAttemptsPerDay int64 `toml:"metadata_attempts_per_day"`
-	ReadBytesPerSecond     int64 `toml:"read_bytes_per_second"`
-	ReadBytesPerDay        int64 `toml:"read_bytes_per_day"`
-	PauseOnBattery         bool  `toml:"pause_on_battery"`
-	MaxScanChunksPerDay    int   `toml:"max_scan_chunks_per_day"`
-	MaxStateBytes          int64 `toml:"max_state_bytes"`
-	AdaptiveRevisits       bool  `toml:"adaptive_revisits"`
-	CompactInventory       bool  `toml:"compact_inventory"`
-	CPUSessionCharges      bool  `toml:"cpu_session_charges"`
+	WorkSeconds             int   `toml:"work_seconds"`
+	IntervalSeconds         int   `toml:"interval_seconds"`
+	MetadataPerSecond       int   `toml:"metadata_per_second"`
+	APIAttemptsPerSecond    int   `toml:"api_attempts_per_second"`
+	MetadataAttemptsPerDay  int64 `toml:"metadata_attempts_per_day"`
+	ReadBytesPerSecond      int64 `toml:"read_bytes_per_second"`
+	ReadBytesPerDay         int64 `toml:"read_bytes_per_day"`
+	PauseOnBattery          bool  `toml:"pause_on_battery"`
+	MaxScanChunksPerDay     int   `toml:"max_scan_chunks_per_day"`
+	MaxStateBytes           int64 `toml:"max_state_bytes"`
+	AdaptiveRevisits        bool  `toml:"adaptive_revisits"`
+	CompactInventory        bool  `toml:"compact_inventory"`
+	CPUSessionCharges       bool  `toml:"cpu_session_charges"`
+	CPUChargeSecondsPerHour int   `toml:"cpu_charge_seconds_per_hour"`
+	CPUChargeSecondsPerDay  int   `toml:"cpu_charge_seconds_per_day"`
 }
 
 func Default() Config {
@@ -138,6 +140,12 @@ func (c *Config) Validate(home string) error {
 		}
 	}
 	s := c.Scan
+	if s.CPUChargeSecondsPerHour < 0 || s.CPUChargeSecondsPerHour > 3600 || s.CPUChargeSecondsPerDay < 0 || s.CPUChargeSecondsPerDay > 86400 {
+		return errors.New("CPU charge limits must be 0–3600 seconds/hour and 0–86400 seconds/day")
+	}
+	if !s.CPUSessionCharges && (s.CPUChargeSecondsPerHour != 0 || s.CPUChargeSecondsPerDay != 0) {
+		return errors.New("positive CPU charge limits require cpu_session_charges")
+	}
 	if s.CompactInventory && s.AdaptiveRevisits {
 		return errors.New("compact_inventory cannot be combined with adaptive_revisits; compact background inventory uses fixed 24-hour revisits")
 	}

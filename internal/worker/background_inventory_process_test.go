@@ -135,8 +135,8 @@ func TestWorkerCompactSIGKILLRetainsPartialModeAndCursor(t *testing.T) {
 	logical, allocated, _, beforeBody := compactWorkerOracle(t, root)
 	dir := filepath.Join(temp, "state")
 	child, ready := spawnCompactWorker(t, dir, root, false)
-	if ready.InventoryMode == nil || !ready.InventoryMode.Compact || ready.InventoryMetrics != nil {
-		t.Fatal(ready)
+	if ready.InventoryMode != nil || ready.InventoryMetrics != nil {
+		t.Fatal("listener readiness ran staged mode/source setup", ready)
 	}
 	var saved compactProcessCursor
 	if err = json.Unmarshal([]byte(child.line(t)), &saved); err != nil || saved.JobID == 0 || len(saved.Cursor) == 0 {
@@ -147,8 +147,10 @@ func TestWorkerCompactSIGKILLRetainsPartialModeAndCursor(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
+	var settled Snapshot
 	waitUntil(t, func() bool {
-		if control(t, dir, "status").WaitReason != "daily_chunk_limit" {
+		settled = control(t, dir, "status")
+		if settled.WaitReason != "daily_chunk_limit" {
 			return false
 		}
 		m, e := r.MeasureDirectory(context.Background(), root)
@@ -158,6 +160,11 @@ func TestWorkerCompactSIGKILLRetainsPartialModeAndCursor(t *testing.T) {
 		f, e := r.CPUFeedback(context.Background())
 		return e == nil && m.CompactedFiles == state.MaxBatchEntries && m.Status == "partial" && f.Status == "observed" && f.Window != nil && f.Window.JobID == saved.JobID && f.Window.CPUTimeNS != nil && *f.Window.CPUTimeNS == 0
 	})
+	// The exact committed partial batch and settled CPU window, rather than
+	// listener readiness, establish completed mode setup and source admission.
+	if settled.InventoryMode == nil || !settled.InventoryMode.Compact || settled.InventoryMetrics == nil || settled.ActiveJob != 0 || settled.CPUFeedback == nil || settled.CPUFeedback.Status != "observed" || settled.CPUFeedback.Window == nil || settled.CPUFeedback.Window.JobID != saved.JobID || settled.CPUFeedback.Window.CPUTimeNS == nil || *settled.CPUFeedback.Window.CPUTimeNS != 0 {
+		t.Fatal("committed compact partial batch lacks initialized settled status", settled)
+	}
 	dueBefore, err := r.NextJobDue(context.Background(), []string{state.ScanKind})
 	if err != nil {
 		t.Fatal(err)
@@ -187,12 +194,16 @@ func TestWorkerCompactSIGKILLRetainsPartialModeAndCursor(t *testing.T) {
 		t.Fatal("process loss changed saved due", dueBefore, dueAfter, err)
 	}
 	child, restarted := spawnCompactWorker(t, dir, root, true)
-	if restarted.InventoryMode == nil || !restarted.InventoryMode.Compact || restarted.CPUFeedback == nil || restarted.CPUFeedback.RecoveredUnknownWindows != 0 {
-		t.Fatal("known terminal process loss invented unknown CPU or changed mode", restarted)
+	if restarted.InventoryMode != nil || restarted.InventoryMetrics != nil || restarted.CPUFeedback == nil || restarted.CPUFeedback.RecoveredUnknownWindows != 0 {
+		t.Fatal("listener readiness ran setup or known terminal process loss invented unknown CPU", restarted)
 	}
 	var resumed compactProcessCursor
 	if err = json.Unmarshal([]byte(child.line(t)), &resumed); err != nil || resumed.JobID != saved.JobID || !bytes.Equal(resumed.Cursor, saved.Cursor) {
 		t.Fatal("restart did not retain exact saved job and cursor", saved, resumed, err)
+	}
+	initialized := control(t, dir, "status")
+	if initialized.InventoryMode == nil || !initialized.InventoryMode.Compact || initialized.InventoryMetrics == nil || initialized.CPUFeedback == nil || initialized.CPUFeedback.RecoveredUnknownWindows != 0 {
+		t.Fatal("exact resumed cursor lacks initialized compact source status", initialized)
 	}
 	// Keep a finite restart bound inside the child's unchanged 30-second lease.
 	// The generic five-second lifecycle wait is too short for this completion

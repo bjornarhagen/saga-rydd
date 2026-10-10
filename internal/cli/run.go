@@ -31,6 +31,7 @@ Commands:
   state init                                           Initialize/migrate state from existing config
   status [--json]                                       Read saved state summary
   status --cpu-charges [--json]                       Read saved conservative CPU charge history
+  status --cpu-period-charges [--json]                Read saved UTC hour/day charge history
   daemon [--experimental-scan]                         Run the worker (scanning opt-in for fixtures)
   service preview --executable ABSOLUTE_PATH [--json]  Preview an idle-only service descriptor
   service install/status --executable ABSOLUTE_PATH [--directory ABSOLUTE_PATH] [--json]
@@ -109,6 +110,7 @@ Options: --help, --version; --json on finite commands
 Experimental metadata scanning, charged background scanner API allowances, saved CPU pacing,
 explicit hashing and idle-service descriptor controls are available. Full global CPU/I/O/power limits, verified
 service runtime state and cleanup remain unavailable.
+Optional UTC CPU charge settings default to zero and require session tracking for positive limits.
 `
 
 type pathsFlag []string
@@ -141,6 +143,32 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 		return 0
 	}
 	if remaining[0] == "status" {
+		periodMode, modeErr := cpuPeriodChargesStatusMode(remaining[1:])
+		if modeErr != nil {
+			fmt.Fprintln(errOut, modeErr)
+			return 2
+		}
+		if periodMode {
+			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			paths, err := cpuChargesStatusPaths(*dataDir)
+			var report CPUPeriodChargesReport
+			if err == nil {
+				report, err = savedCPUPeriodCharges(ctx, paths)
+			}
+			if err == nil {
+				err = printCPUPeriodChargesReport(out, report)
+			}
+			if err == nil && ctx.Err() != nil {
+				fmt.Fprintln(errOut, "Saved CPU period accounting reply was canceled; no saved records or source files were changed.")
+				err = ctx.Err()
+			}
+			if err != nil {
+				fmt.Fprintln(errOut, cpuPeriodChargesStatusError(err))
+				return 1
+			}
+			return 0
+		}
 		mode, modeErr := cpuChargesStatusMode(remaining[1:])
 		if modeErr != nil {
 			fmt.Fprintln(errOut, modeErr)

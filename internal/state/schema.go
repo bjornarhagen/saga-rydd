@@ -66,6 +66,7 @@ var migrations = []struct{ name, sql string }{
 	{"adaptive-historical-metadata-revisits", migration13},
 	{"background-compact-mode", migration14},
 	{"conservative-self-cpu-charges", migration15},
+	{"conservative-cpu-period-admission", migration16},
 }
 
 const migration12 = `

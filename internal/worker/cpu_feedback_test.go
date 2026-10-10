@@ -14,6 +14,20 @@ import (
 	"github.com/bjornarhagen/saga-rydd/internal/state"
 )
 
+// Listener readiness does not promise a live dispatch projection while staged
+// setup is held by recovered CPU debt. Inspect the saved charge at the exact
+// fixture wall observation instead; this reader does not reserve another turn.
+func savedWorkerDispatchBudget(t *testing.T, store *state.Store, observed time.Time, limit int) state.DispatchBudget {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	budget, err := store.DispatchBudget(ctx, observed, limit)
+	if err != nil {
+		t.Fatal("saved dispatch budget", err)
+	}
+	return budget
+}
+
 func TestWorkerCPUFeedbackIndependentClockAdmission(t *testing.T) {
 	wall := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 	elapsed := time.Now()
@@ -121,11 +135,11 @@ func TestWorkerCPUFeedbackLostSettlementPreservesProgressAndRecovery(t *testing.
 	}
 	defer r.Close()
 	before, err := r.CPUFeedback(context.Background())
-	if err != nil || before.Status != "pending" || before.Window.Token != firstToken || before.Window.CPUTimeNS != nil {
+	if err != nil || before.Status != "pending" || before.Window == nil || before.Window.Token != firstToken || before.Window.CPUTimeNS != nil {
 		t.Fatal(before, err)
 	}
 	restarted, done := start(t, dir, c, Options{ExperimentalScan: true, Interval: time.Second, WorkDuration: time.Second})
-	if restarted.CPUFeedback == nil || restarted.CPUFeedback.Status != "recovered_unknown" || restarted.CPUFeedback.RecoveredUnknownWindows != 1 || restarted.CPUFeedback.Window.Token != firstToken || restarted.CPUFeedback.Window.CPUTimeNS != nil || restarted.CPU.Status != "not_recorded" || restarted.CPU.WindowCPUNS != nil {
+	if restarted.CPUFeedback == nil || restarted.CPUFeedback.Status != "recovered_unknown" || restarted.CPUFeedback.RecoveredUnknownWindows != 1 || restarted.CPUFeedback.Window == nil || restarted.CPUFeedback.Window.Token != firstToken || restarted.CPUFeedback.Window.CPUTimeNS != nil || restarted.CPUFeedback.Window.SettledAt == nil || restarted.CPUFeedback.NextAllowedAt == nil || restarted.CPU == nil || restarted.CPU.Status != "not_recorded" || restarted.CPU.WindowCPUNS != nil {
 		t.Fatal("restart reused a process CPU baseline", restarted)
 	}
 	deadline := *restarted.CPUFeedback.NextAllowedAt
@@ -137,8 +151,9 @@ func TestWorkerCPUFeedbackLostSettlementPreservesProgressAndRecovery(t *testing.
 	control(t, dir, "resume")
 	time.Sleep(30 * time.Millisecond)
 	blocked := control(t, dir, "status")
-	if blocked.ActiveJob != 0 || blocked.InventoryMetrics != nil || blocked.Dispatch.Used != 1 || blocked.CPUFeedback.RecoveredUnknownWindows != 1 || !blocked.CPUFeedback.NextAllowedAt.Equal(deadline) {
-		t.Fatal("controls bypassed or renewed recovery cooldown", blocked)
+	blockedBudget := savedWorkerDispatchBudget(t, r, time.Now(), c.Scan.MaxScanChunksPerDay)
+	if blocked.ActiveJob != 0 || blocked.InventoryMetrics != nil || blockedBudget.Used != 1 || blocked.CPUFeedback == nil || blocked.CPUFeedback.Window == nil || blocked.CPUFeedback.RecoveredUnknownWindows != 1 || blocked.CPUFeedback.NextAllowedAt == nil || !blocked.CPUFeedback.NextAllowedAt.Equal(deadline) {
+		t.Fatal("controls bypassed or renewed recovery cooldown", blocked, blockedBudget)
 	}
 	control(t, dir, "stop")
 	waitExit(t, done)
@@ -152,27 +167,39 @@ func TestWorkerCPUFeedbackLostSettlementPreservesProgressAndRecovery(t *testing.
 	var beforeAdvance Snapshot
 	waitUntil(t, func() bool {
 		beforeAdvance = control(t, dir, "status")
-		return beforeAdvance.Dispatch != nil && beforeAdvance.WaitReason == "cpu_recovery_backoff"
+		return beforeAdvance.WaitReason == "cpu_recovery_backoff" && beforeAdvance.CPUFeedback != nil && beforeAdvance.CPUFeedback.Window != nil && beforeAdvance.CPUFeedback.NextAllowedAt != nil && beforeAdvance.CPU != nil
 	})
 	control(t, dir, "pause")
+	beforeObservation := options.wallNow()
+	beforeBudget := savedWorkerDispatchBudget(t, r, beforeObservation, c.Scan.MaxScanChunksPerDay)
+	if beforeAdvance.ActiveJob != 0 || beforeAdvance.InventoryMetrics != nil || beforeAdvance.CPUFeedback.Window.Token != firstToken || !beforeAdvance.CPUFeedback.NextAllowedAt.Equal(deadline) {
+		t.Fatal("synthetic clock fixture started source before recovery deadline", beforeAdvance, beforeBudget)
+	}
 	offset.Store(int64(state.CPUUnknownRecoveryDelay + time.Second))
 	control(t, dir, "resume")
+	var afterBudget state.DispatchBudget
+	var afterObservation time.Time
 	waitUntil(t, func() bool {
 		s := control(t, dir, "status")
-		want := beforeAdvance.Dispatch.Used + 1
-		if s.Dispatch != nil && s.Dispatch.Day != beforeAdvance.Dispatch.Day {
+		afterObservation = options.wallNow()
+		afterBudget = savedWorkerDispatchBudget(t, r, afterObservation, c.Scan.MaxScanChunksPerDay)
+		want := beforeBudget.Used + 1
+		if afterBudget.Day != beforeBudget.Day {
 			want = 1
 		}
-		return s.Dispatch != nil && s.Dispatch.Used == want && s.CPUFeedback.Status != "pending" && s.CPUFeedback.Window.Token != firstToken
+		return afterBudget.Used == want && s.CPUFeedback != nil && s.CPUFeedback.Window != nil && s.CPUFeedback.Status != "pending" && s.CPUFeedback.Window.Token != firstToken
 	})
 	control(t, dir, "pause")
 	resumed := control(t, dir, "status")
-	want := beforeAdvance.Dispatch.Used + 1
-	if resumed.Dispatch.Day != beforeAdvance.Dispatch.Day {
+	afterObservation = options.wallNow()
+	afterBudget = savedWorkerDispatchBudget(t, r, afterObservation, c.Scan.MaxScanChunksPerDay)
+	t.Logf("saved dispatch before/after fixture clock advance: observed=%s day=%s used=%d; observed=%s day=%s used=%d", beforeObservation.UTC().Format(time.RFC3339Nano), beforeBudget.Day, beforeBudget.Used, afterObservation.UTC().Format(time.RFC3339Nano), afterBudget.Day, afterBudget.Used)
+	want := beforeBudget.Used + 1
+	if afterBudget.Day != beforeBudget.Day {
 		want = 1
 	}
-	if resumed.Dispatch.Used != want || resumed.CPUFeedback.RecoveredUnknownWindows != 1 || resumed.CPUFeedback.Window.Token == firstToken {
-		t.Fatal("synthetic late wake granted catch-up turns", resumed)
+	if afterBudget.Used != want || resumed.CPUFeedback == nil || resumed.CPUFeedback.Window == nil || resumed.CPUFeedback.RecoveredUnknownWindows != 1 || resumed.CPUFeedback.Window.Token == firstToken {
+		t.Fatal("synthetic late wake granted catch-up turns", resumed, beforeBudget, afterBudget)
 	}
 	control(t, dir, "stop")
 	waitExit(t, done)
@@ -290,8 +317,8 @@ func TestWorkerCPUFeedbackRollbackTimerRecoversBeforeAnotherDispatch(t *testing.
 			}
 			defer r.Close()
 			before, err := r.CPUFeedback(context.Background())
-			if err != nil {
-				t.Fatal(err)
+			if err != nil || before.ClockHighWater == nil {
+				t.Fatal(before, err)
 			}
 			at := *before.ClockHighWater
 			var advanced atomic.Bool
@@ -308,14 +335,14 @@ func TestWorkerCPUFeedbackRollbackTimerRecoversBeforeAnotherDispatch(t *testing.
 				return w.RecoverCPUWindow(ctx, now)
 			}
 			ready, done := start(t, dir, c, options)
-			if ready.CPUFeedback.Status != "pending" {
+			if ready.CPUFeedback == nil || ready.CPUFeedback.Status != "pending" {
 				t.Fatal("initial rollback was not retained", ready)
 			}
 			// Keep the wall clock held until the elapsed timer is armed. Status reads
 			// do not reschedule; no pause/resume/control wake reaches the boundary.
 			waitUntil(t, func() bool {
 				s := control(t, dir, "status")
-				return s.CPUFeedback.Status == "pending" && s.WaitReason == "cpu_clock_rollback"
+				return s.CPUFeedback != nil && s.CPUFeedback.Status == "pending" && s.WaitReason == "cpu_clock_rollback"
 			})
 			advanced.Store(true)
 			waitUntil(t, func() bool {
@@ -323,8 +350,9 @@ func TestWorkerCPUFeedbackRollbackTimerRecoversBeforeAnotherDispatch(t *testing.
 				return err == nil && feedback.Status == "recovered_unknown"
 			})
 			status := control(t, dir, "status")
-			if status.CPUFeedback.Window.Token != token || status.CPUFeedback.RecoveredUnknownWindows != 1 || status.Dispatch.Used != 1 || status.ActiveJob != 0 || status.InventoryMetrics != nil || recoveryCalls.Load() != 2 {
-				t.Fatal("rollback boundary claimed work before recovering the old window", status, recoveryCalls.Load())
+			budget := savedWorkerDispatchBudget(t, r, options.wallNow(), c.Scan.MaxScanChunksPerDay)
+			if status.CPUFeedback == nil || status.CPUFeedback.Window == nil || status.CPUFeedback.Window.Token != token || status.CPUFeedback.RecoveredUnknownWindows != 1 || budget.Used != 1 || status.ActiveJob != 0 || status.InventoryMetrics != nil || recoveryCalls.Load() != 2 {
+				t.Fatal("rollback boundary claimed work before recovering the old window", status, budget, recoveryCalls.Load())
 			}
 			if completed {
 				due, err := r.NextJobDue(context.Background(), []string{state.ScanKind})
@@ -352,23 +380,35 @@ func TestWorkerCPUFeedbackRecoveryPublicationWallJumpPreservesElapsedHour(t *tes
 		return feedback, err
 	}
 	ready, done := start(t, dir, c, options)
-	if ready.CPUFeedback.Status != "recovered_unknown" || ready.CPUFeedback.Window.Token != token || ready.CPUFeedback.NextAllowedAt.Sub(*ready.CPUFeedback.Window.SettledAt) != time.Hour {
+	if ready.CPUFeedback == nil || ready.CPUFeedback.Status != "recovered_unknown" || ready.CPUFeedback.Window == nil || ready.CPUFeedback.Window.Token != token || ready.CPUFeedback.NextAllowedAt == nil || ready.CPUFeedback.Window.SettledAt == nil || ready.CPUFeedback.NextAllowedAt.Sub(*ready.CPUFeedback.Window.SettledAt) != time.Hour {
 		t.Fatal("recovery did not save its exact hour", ready)
 	}
+	r, err := state.OpenReader(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
 	waitUntil(t, func() bool { return control(t, dir, "status").WaitReason == "cpu_recovery_backoff" })
 	time.Sleep(30 * time.Millisecond)
 	status := control(t, dir, "status")
+	budget := savedWorkerDispatchBudget(t, r, options.wallNow(), c.Scan.MaxScanChunksPerDay)
 	wantUsed := 1
-	if status.Dispatch.Day != ready.CPUFeedback.Window.DispatchReservedAt.UTC().Format("2006-01-02") {
+	if budget.Day != ready.CPUFeedback.Window.DispatchReservedAt.UTC().Format("2006-01-02") {
 		wantUsed = 0
 	}
-	if status.Dispatch.Used != wantUsed || status.ActiveJob != 0 || status.InventoryMetrics != nil || status.CPUFeedback.RecoveredUnknownWindows != 1 {
-		t.Fatal("wall change during recovery erased elapsed admission", status)
+	if budget.Used != wantUsed || status.ActiveJob != 0 || status.InventoryMetrics != nil || status.CPUFeedback == nil || status.CPUFeedback.RecoveredUnknownWindows != 1 {
+		t.Fatal("wall change during recovery erased elapsed admission", status, budget)
 	}
 	control(t, dir, "pause")
 	control(t, dir, "resume")
-	if status = control(t, dir, "status"); status.Dispatch.Used != wantUsed || status.CPUFeedback.Window.Token != token {
-		t.Fatal("control refreshed the wait anchor", status)
+	status = control(t, dir, "status")
+	budget = savedWorkerDispatchBudget(t, r, options.wallNow(), c.Scan.MaxScanChunksPerDay)
+	wantUsed = 1
+	if budget.Day != ready.CPUFeedback.Window.DispatchReservedAt.UTC().Format("2006-01-02") {
+		wantUsed = 0
+	}
+	if budget.Used != wantUsed || status.CPUFeedback == nil || status.CPUFeedback.Window == nil || status.CPUFeedback.Window.Token != token {
+		t.Fatal("control refreshed the wait anchor", status, budget)
 	}
 	control(t, dir, "stop")
 	waitExit(t, done)

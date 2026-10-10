@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -81,7 +82,9 @@ func TestMetadataWorkerSIGKILLRetainsUnknownCharge(t *testing.T) {
 	}
 	t.Setenv("RYDD_TEST_SCAN_ROOT", root)
 	t.Setenv("RYDD_TEST_METADATA_SLOW", "1")
-	t.Setenv("RYDD_TEST_WORKER_CPU_NATIVE", "1")
+	// This fixture checks metadata/unknown CPU recovery, not CPU measurement.
+	// Keep staged setup deterministic through the child's existing zero observer.
+	t.Setenv("RYDD_TEST_WORKER_CPU_NATIVE", "0")
 	child, ready := spawnWorker(t, dir, false)
 	if ready.InventoryMetrics != nil || ready.Metadata == nil || ready.Metadata.Status != "untracked" {
 		t.Fatal("eager source work before readiness", ready)
@@ -89,7 +92,7 @@ func TestMetadataWorkerSIGKILLRetainsUnknownCharge(t *testing.T) {
 	var admitted Snapshot
 	waitUntil(t, func() bool {
 		admitted = control(t, dir, "status")
-		return admitted.ActiveJob != 0 && admitted.CPUFeedback != nil && admitted.CPUFeedback.Status == "pending" && admitted.InventoryMetrics != nil && admitted.InventoryMetrics.Throttled && admitted.Metadata.TotalCharges != nil && admitted.Metadata.TotalCharges.OutstandingReserved >= inventory.MaxAPIAttemptAllowance
+		return admitted.ActiveJob != 0 && admitted.CPUFeedback != nil && admitted.CPUFeedback.Status == "pending" && admitted.CPUFeedback.Window != nil && admitted.InventoryMetrics != nil && admitted.InventoryMetrics.Throttled && admitted.Metadata != nil && admitted.Metadata.TotalCharges != nil && admitted.Metadata.TotalCharges.OutstandingReserved >= inventory.MaxAPIAttemptAllowance
 	})
 	reserved := admitted.Metadata.TotalCharges.Reserved
 	if reserved <= inventory.MaxAPIAttemptAllowance {
@@ -100,8 +103,13 @@ func TestMetadataWorkerSIGKILLRetainsUnknownCharge(t *testing.T) {
 	}
 	select {
 	case err := <-child.done:
-		if err == nil {
-			t.Fatal("SIGKILL succeeded normally")
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) {
+			t.Fatal("child was not killed", err)
+		}
+		status, ok := exit.Sys().(syscall.WaitStatus)
+		if !ok || !status.Signaled() || status.Signal() != syscall.SIGKILL {
+			t.Fatal("wrong process termination", status)
 		}
 	case <-time.After(8 * time.Second):
 		t.Fatal("kill timed out")
@@ -113,7 +121,7 @@ func TestMetadataWorkerSIGKILLRetainsUnknownCharge(t *testing.T) {
 	defer r.Close()
 	// Saved-only status retains outstanding receipts until a writer restarts.
 	before, err := r.MetadataBudget(context.Background(), time.Now(), 20_000_000)
-	if err != nil || before.TotalCharges.OutstandingReserved != reserved || before.TotalCharges.UnknownReserved != 0 {
+	if err != nil || before.TotalCharges == nil || before.TotalCharges.OutstandingReserved != reserved || before.TotalCharges.UnknownReserved != 0 {
 		t.Fatal(before, err)
 	}
 	beforeCPU, err := r.CPUFeedback(context.Background())
@@ -122,10 +130,10 @@ func TestMetadataWorkerSIGKILLRetainsUnknownCharge(t *testing.T) {
 	}
 	t.Setenv("RYDD_TEST_METADATA_CAP", strconv.FormatInt(reserved, 10))
 	child, restarted := spawnWorker(t, dir, false)
-	if restarted.RecoveredJobs != 1 || restarted.Metadata == nil || restarted.Metadata.TotalCharges.OutstandingReserved != 0 || restarted.Metadata.TotalCharges.UnknownReserved != reserved || restarted.InventoryMetrics != nil {
+	if restarted.RecoveredJobs != 1 || restarted.Metadata == nil || restarted.Metadata.TotalCharges == nil || restarted.Metadata.TotalCharges.OutstandingReserved != 0 || restarted.Metadata.TotalCharges.UnknownReserved != reserved || restarted.InventoryMetrics != nil {
 		t.Fatal("restart failed to recover charges before source work", restarted)
 	}
-	if restarted.CPUFeedback == nil || restarted.CPUFeedback.Status != "recovered_unknown" || restarted.CPUFeedback.RecoveredUnknownWindows != 1 || restarted.CPUFeedback.Window.Token != beforeCPU.Window.Token || restarted.CPUFeedback.Window.CPUTimeNS != nil || restarted.CPUFeedback.Window.ElapsedNS != nil || restarted.CPUFeedback.NextAllowedAt == nil || restarted.CPUFeedback.Window.SettledAt == nil || restarted.CPUFeedback.NextAllowedAt.Sub(*restarted.CPUFeedback.Window.SettledAt) != state.CPUUnknownRecoveryDelay || restarted.CPU == nil || restarted.CPU.Status != "not_recorded" || restarted.CPU.WindowCPUNS != nil {
+	if restarted.CPUFeedback == nil || restarted.CPUFeedback.Status != "recovered_unknown" || restarted.CPUFeedback.RecoveredUnknownWindows != 1 || restarted.CPUFeedback.Window == nil || restarted.CPUFeedback.Window.Token != beforeCPU.Window.Token || restarted.CPUFeedback.Window.CPUTimeNS != nil || restarted.CPUFeedback.Window.ElapsedNS != nil || restarted.CPUFeedback.NextAllowedAt == nil || restarted.CPUFeedback.Window.SettledAt == nil || restarted.CPUFeedback.NextAllowedAt.Sub(*restarted.CPUFeedback.Window.SettledAt) != state.CPUUnknownRecoveryDelay || restarted.CPU == nil || restarted.CPU.Status != "not_recorded" || restarted.CPU.WindowCPUNS != nil {
 		t.Fatal("restart invented a cross-process CPU delta or shortened unknown recovery", restarted)
 	}
 	waitUntil(t, func() bool {
@@ -135,10 +143,11 @@ func TestMetadataWorkerSIGKILLRetainsUnknownCharge(t *testing.T) {
 	control(t, dir, "pause")
 	control(t, dir, "resume")
 	snapshot := control(t, dir, "status")
-	if snapshot.ActiveJob != 0 || snapshot.InventoryMetrics != nil || snapshot.Metadata.TotalCharges.Reserved != reserved || snapshot.Dispatch.Used != 1 {
-		t.Fatal("restart refunded usage or burned another dispatch", snapshot)
+	budget := savedWorkerDispatchBudget(t, r, time.Now(), config.Default().Scan.MaxScanChunksPerDay)
+	if snapshot.ActiveJob != 0 || snapshot.InventoryMetrics != nil || snapshot.Metadata == nil || snapshot.Metadata.TotalCharges == nil || snapshot.Metadata.TotalCharges.Reserved != reserved || budget.Used != 1 {
+		t.Fatal("restart refunded usage or burned another dispatch", snapshot, budget)
 	}
-	if snapshot.CPUFeedback.Window.Token != beforeCPU.Window.Token || snapshot.CPUFeedback.RecoveredUnknownWindows != 1 || !snapshot.CPUFeedback.NextAllowedAt.Equal(*restarted.CPUFeedback.NextAllowedAt) {
+	if snapshot.CPUFeedback == nil || snapshot.CPUFeedback.Window == nil || snapshot.CPUFeedback.Window.Token != beforeCPU.Window.Token || snapshot.CPUFeedback.RecoveredUnknownWindows != 1 || snapshot.CPUFeedback.NextAllowedAt == nil || !snapshot.CPUFeedback.NextAllowedAt.Equal(*restarted.CPUFeedback.NextAllowedAt) {
 		t.Fatal("controls renewed or cleared saved CPU recovery", snapshot.CPUFeedback)
 	}
 	control(t, dir, "stop")

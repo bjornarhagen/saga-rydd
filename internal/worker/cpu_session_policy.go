@@ -24,24 +24,28 @@ type cpuSessionHooks struct {
 // One owning loop holds this policy. Its marker cannot survive Store reopen.
 // Saved wall evidence and live elapsed debt are distinct admission predicates.
 type cpuSessionPolicy struct {
-	store           *state.Store
-	instance        string
-	observe         func() (time.Duration, error)
-	wall, elapsed   func() time.Time
-	hooks           *cpuSessionHooks
-	stage           int
-	saved           state.CPUChargeState
-	marker          state.CPUSessionMarker
-	start           *state.CPUSessionStart
-	sample          *state.CPUSessionSample
-	operation       string
-	operationAt     time.Time
-	wallHigh        time.Time
-	elapsedHigh     time.Time
-	elapsedDue      time.Time
-	observedElapsed time.Time
-	attached        bool
-	refused         error
+	store                                    *state.Store
+	instance                                 string
+	observe                                  func() (time.Duration, error)
+	wall, elapsed                            func() time.Time
+	hooks                                    *cpuSessionHooks
+	periodHooks                              *cpuPeriodHooks
+	selectProtocol, routed, tracking, bypass bool
+	limits                                   state.CPUChargeLimits
+	period                                   *cpuPeriodPolicy
+	stage                                    int
+	saved                                    state.CPUChargeState
+	marker                                   state.CPUSessionMarker
+	start                                    *state.CPUSessionStart
+	sample                                   *state.CPUSessionSample
+	operation                                string
+	operationAt                              time.Time
+	wallHigh                                 time.Time
+	elapsedHigh                              time.Time
+	elapsedDue                               time.Time
+	observedElapsed                          time.Time
+	attached                                 bool
+	refused                                  error
 }
 
 func (p *cpuSessionPolicy) fail(err error) {
@@ -86,15 +90,20 @@ func (p *cpuSessionPolicy) accept(saved state.CPUChargeState, wall, elapsed time
 	p.saved = saved
 }
 
-func (p *cpuSessionPolicy) wait(wait *dispatchWait) bool {
+func (p *cpuSessionPolicy) wait(wait *dispatchWait) bool          { return p.waitMode(wait, false) }
+func (p *cpuSessionPolicy) selectionWait(wait *dispatchWait) bool { return p.waitMode(wait, true) }
+func (p *cpuSessionPolicy) waitMode(wait *dispatchWait, selection bool) bool {
 	if p == nil {
+		return true
+	}
+	if p.bypass && p.refused == nil {
 		return true
 	}
 	wall, elapsed, err := p.clocks()
 	p.fail(err)
 	if p.refused != nil {
 		wait.reason = "cpu_session_refused"
-		if errors.Is(p.refused, state.ErrCPUChargesPublication) {
+		if cpuPeriodPublication(p.refused) {
 			wait.reason = "cpu_session_outcome_unknown"
 		} else if errors.Is(p.refused, state.ErrCPUChargesClockRollback) {
 			wait.reason = "cpu_session_clock_refused"
@@ -116,7 +125,8 @@ func (p *cpuSessionPolicy) wait(wait *dispatchWait) bool {
 		wait.wall(*p.saved.NextAllowedAt, wall, "cpu_session_backoff")
 	}
 	wait.elapsed(p.elapsedDue, elapsed, "cpu_session_backoff")
-	return wait.duration == 0
+	periodReady := p.period.wait(wait, wall, elapsed, selection)
+	return periodReady && wait.duration == 0
 }
 
 func (p *cpuSessionPolicy) startup(ctx context.Context) {
@@ -128,14 +138,30 @@ func (p *cpuSessionPolicy) startup(ctx context.Context) {
 		p.fail(err)
 		return
 	}
-	if p.saved.ClockHighWater != nil && wall.Before(*p.saved.ClockHighWater) {
-		return // The event-loop wall fence wakes once; no native polling.
-	}
 	callCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
+	if err = p.route(callCtx, wall, elapsed); err != nil {
+		p.fail(err)
+		return
+	}
+	if p.bypass {
+		return
+	}
+	if p.saved.ClockHighWater != nil && wall.Before(*p.saved.ClockHighWater) {
+		return
+	}
+	if p.period != nil && p.selectProtocol && !p.tracking {
+		p.fail(p.openGap(callCtx, wall, elapsed))
+		return
+	}
 	var saved state.CPUChargeState
+	var a state.CPUChargeAdmissionState
 	switch p.stage {
 	case 0:
+		if p.period != nil {
+			p.stage++
+			return
+		} // Actual16 is already activated; bare APIs refuse it.
 		p.operation, p.operationAt = "activate", wall
 		if p.hooks != nil && p.hooks.activate != nil {
 			saved, err = p.hooks.activate(callCtx, p.store, wall)
@@ -148,7 +174,13 @@ func (p *cpuSessionPolicy) startup(ctx context.Context) {
 	case 1:
 		p.operation, p.operationAt = "recover", wall
 		wasActive := p.saved.Session != nil && p.saved.Session.Status == "active"
-		if p.hooks != nil && p.hooks.recover != nil {
+		if p.period != nil {
+			if p.periodHooks != nil && p.periodHooks.recover != nil {
+				saved, a, err = p.periodHooks.recover(callCtx, p.store, wall)
+			} else {
+				saved, a, err = p.store.RecoverCPUSessionLimited(callCtx, wall)
+			}
+		} else if p.hooks != nil && p.hooks.recover != nil {
 			saved, err = p.hooks.recover(callCtx, p.store, wall)
 		} else {
 			saved, err = p.store.RecoverCPUSession(callCtx, wall)
@@ -159,11 +191,14 @@ func (p *cpuSessionPolicy) startup(ctx context.Context) {
 				intrinsic = state.CPUChargesUnknownDelay
 			}
 			p.accept(saved, wall, elapsed, intrinsic)
+			if p.period != nil {
+				p.period.accept(a, wall, elapsed)
+			} else if p.limits.HourNS > 0 || p.limits.DayNS > 0 {
+				err = p.activatePeriod(callCtx, wall, elapsed)
+			}
 		}
 	case 2:
 		cpu, observationErr := p.observe()
-		// Prefix repayment begins after the actual native observation, never
-		// at process birth, startup, or before a slow observation callback.
 		wall, elapsed, err = p.clocks()
 		if err != nil {
 			p.fail(err)
@@ -183,17 +218,36 @@ func (p *cpuSessionPolicy) startup(ctx context.Context) {
 		}
 		p.start = &request
 		p.operation, p.operationAt = "begin", wall
-		if p.hooks != nil && p.hooks.begin != nil {
-			p.marker, saved, err = p.hooks.begin(callCtx, p.store, request)
+		if p.period != nil {
+			q := state.CPULimitedSessionStart{Start: request, ExpectedPolicyRevision: p.period.saved.PolicyRevision, Limits: p.limits}
+			p.period.start = &q
+			if p.periodHooks != nil && p.periodHooks.begin != nil {
+				p.period.marker, saved, a, err = p.periodHooks.begin(callCtx, p.store, q)
+			} else {
+				p.period.marker, saved, a, err = p.store.BeginCPUSessionLimited(callCtx, q)
+			}
+			if err == nil && (p.period.marker.Generation() == 0 || p.period.marker.PolicyRevision() != a.PolicyRevision) {
+				err = state.ErrCPUChargesStale
+			}
 		} else {
-			p.marker, saved, err = p.store.BeginCPUSession(callCtx, request)
+			if p.hooks != nil && p.hooks.begin != nil {
+				p.marker, saved, err = p.hooks.begin(callCtx, p.store, request)
+			} else {
+				p.marker, saved, err = p.store.BeginCPUSession(callCtx, request)
+			}
+			if err == nil && p.marker.Generation() == 0 {
+				err = state.ErrCPUChargesStale
+			}
 		}
 		if err == nil {
-			if p.marker.Generation() == 0 || saved.Session == nil || saved.Status != "active" {
+			if saved.Session == nil || saved.Status != "active" {
 				err = state.ErrCPUChargesStale
 			} else {
 				p.accept(saved, wall, elapsed, time.Duration(saved.Session.LastBackoffNS))
 				p.observedElapsed = elapsed
+				if p.period != nil {
+					p.period.accept(a, wall, elapsed)
+				}
 			}
 		}
 	}
@@ -209,6 +263,9 @@ func (p *cpuSessionPolicy) startup(ctx context.Context) {
 func (p *cpuSessionPolicy) sampleAtBoundary(ctx context.Context, finish bool) bool {
 	if p == nil {
 		return true
+	}
+	if p.bypass {
+		return p.refused == nil
 	}
 	if p.refused != nil || p.stage != 3 || p.saved.Status != "active" || p.saved.Session == nil {
 		return false
@@ -243,7 +300,16 @@ func (p *cpuSessionPolicy) sampleAtBoundary(ctx context.Context, finish bool) bo
 	defer cancel()
 	var saved state.CPUChargeState
 	var err error
-	if p.hooks != nil && p.hooks.sample != nil {
+	var a state.CPUChargeAdmissionState
+	if p.period != nil {
+		if p.periodHooks != nil && p.periodHooks.sample != nil {
+			saved, a, err = p.periodHooks.sample(callCtx, p.store, p.period.marker, request, finish)
+		} else if finish {
+			saved, a, err = p.store.FinishCPUSessionLimited(callCtx, p.period.marker, request)
+		} else {
+			saved, a, err = p.store.SampleCPUSessionLimited(callCtx, p.period.marker, request)
+		}
+	} else if p.hooks != nil && p.hooks.sample != nil {
 		saved, err = p.hooks.sample(callCtx, p.store, p.marker, request, finish)
 	} else if finish {
 		saved, err = p.store.FinishCPUSession(callCtx, p.marker, request)
@@ -253,6 +319,9 @@ func (p *cpuSessionPolicy) sampleAtBoundary(ctx context.Context, finish bool) bo
 	if err == nil && clockErr == nil {
 		p.accept(saved, wall, elapsed, time.Duration(saved.Session.LastBackoffNS))
 		p.observedElapsed = elapsed
+		if p.period != nil {
+			p.period.accept(a, wall, elapsed)
+		}
 		return true
 	}
 	p.fail(errors.Join(err, clockErr))
@@ -262,6 +331,9 @@ func (p *cpuSessionPolicy) sampleAtBoundary(ctx context.Context, finish bool) bo
 func (p *cpuSessionPolicy) error() error {
 	if p == nil || p.refused == nil {
 		return nil
+	}
+	if p.period != nil && p.period.gap != nil {
+		return fmt.Errorf("worker CPU tracking gap nonce %s (new work refused; inspect saved CPU period charges before explicit restart): %w", p.period.gap.Nonce, p.refused)
 	}
 	if p.start != nil {
 		if p.start.ExpectedGeneration == math.MaxInt64 {
@@ -279,7 +351,7 @@ func (p *cpuSessionPolicy) finish() error {
 	if p == nil {
 		return nil
 	}
-	if p.refused == nil && p.stage == 3 && p.saved.Status == "active" {
+	if !p.bypass && p.refused == nil && p.stage == 3 && p.saved.Status == "active" {
 		// Stop has already joined the handler and all existing settlements.
 		// Cancellation of Run cannot discard this finite graceful accounting.
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

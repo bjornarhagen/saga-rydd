@@ -3,7 +3,7 @@ package state
 // Ordinary state writers stay at schema 14. Only ActivateCPUCharges publishes
 // this optional extension; older schema-14 binaries then refuse the store.
 const cpuChargesSchemaVersion = 15
-const maxStateSchemaVersion = cpuChargesSchemaVersion
+const maxStateSchemaVersion = cpuChargeAdmissionSchemaVersion
 const CPUChargesMaxJSONBytes = 8192
 
 const migration15 = `

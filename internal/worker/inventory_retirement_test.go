@@ -257,19 +257,81 @@ func TestWorkerFairMaintenancePrecedesFutureSourceSharesCap(t *testing.T) {
 	if err = w.SyncRoots(context.Background(), c.Roots); err != nil {
 		t.Fatal(err)
 	}
-	if err = w.EnqueueJob(context.Background(), 2, state.ScanKind, []byte("."), time.Now().Add(400*time.Millisecond)); err != nil {
+	// Reconciliation and the earlier fixed-table purge phases can commit
+	// without changing the entry count. Prepare the first entry purge so the
+	// single worker dispatch below must perform the next bounded entry purge.
+	prepareCtx, prepareCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer prepareCancel()
+	initial, err := w.Summary(prepareCtx)
+	if err != nil || initial.Entries <= 2*state.MaxBatchEntries+4 {
+		t.Fatal("missing generated stale maintenance evidence", initial, err)
+	}
+	var prepared state.Summary
+	entryPurgeCommitted := false
+	for i := 0; i < 32; i++ {
+		step, stepErr := w.RetireInventoryForRoot(prepareCtx, 1)
+		if stepErr != nil || !step.Eligible || !step.Worked || !step.Remaining {
+			t.Fatal("entry purge preparation lost partial maintenance", i, step, stepErr)
+		}
+		prepared, err = w.Summary(prepareCtx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if prepared.Entries == initial.Entries {
+			continue
+		}
+		if initial.Entries-prepared.Entries != state.MaxBatchEntries || prepared.Entries <= state.MaxBatchEntries+4 {
+			t.Fatal("first prepared entry purge was not bounded and partial", initial, prepared)
+		}
+		entryPurgeCommitted = true
+		break
+	}
+	if !entryPurgeCommitted {
+		t.Fatal("entry purge preparation exceeded 32 saved maintenance turns")
+	}
+	if err = w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	r, err := state.OpenReader(prepareCtx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	before, err := r.Summary(prepareCtx)
+	if err != nil || before.Entries != prepared.Entries {
+		t.Fatal("prepared saved entry baseline changed", prepared, before, err)
+	}
+	prepareCancel()
+	w, err = state.OpenWriter(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Keep the future-source interval anchored after finite saved preparation.
+	futureDue := time.Now().Add(400 * time.Millisecond)
+	if err = w.EnqueueJob(context.Background(), 2, state.ScanKind, []byte("."), futureDue); err != nil {
 		t.Fatal(err)
 	}
 	if err = w.Close(); err != nil {
 		t.Fatal(err)
 	}
-	var samples int
+	var committedObserved atomic.Bool
+	committed := make(chan state.Summary, 1)
 	var calls atomic.Int64
 	options := Options{ExperimentalScan: true, Interval: time.Millisecond, WorkDuration: time.Second}
 	options.cpuObserve = func() (time.Duration, error) {
-		samples++
-		if samples < 2 {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		summary, err := r.Summary(ctx)
+		if err != nil {
+			return 0, err
+		}
+		// Charge the committed maintenance window, not an earlier setup
+		// observation. The first bounded retirement must reduce saved rows.
+		if summary.Entries >= before.Entries {
 			return 0, nil
+		}
+		if committedObserved.CompareAndSwap(false, true) {
+			committed <- summary
 		}
 		return 10 * time.Millisecond, nil
 	}
@@ -279,16 +341,20 @@ func TestWorkerFairMaintenancePrecedesFutureSourceSharesCap(t *testing.T) {
 		snapshot := control(t, dir, "status")
 		return snapshot.WaitReason == "daily_chunk_limit"
 	})
-	r, err := state.OpenReader(context.Background(), dir)
-	if err != nil {
-		t.Fatal(err)
+	select {
+	case saved := <-committed:
+		if saved.Entries <= 4 || before.Entries-saved.Entries != state.MaxBatchEntries {
+			t.Fatal("CPU witness did not follow bounded partial maintenance", before, saved)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("committed maintenance CPU witness missing")
 	}
-	defer r.Close()
 	summary, err := r.Summary(context.Background())
-	if err != nil || summary.Entries <= 4 || summary.Entries >= 306 || calls.Load() != 0 || control(t, dir, "status").Dispatch.Used != 1 {
-		t.Fatal("eligible maintenance did not use its fair turn", summary, err, calls.Load())
+	status := control(t, dir, "status")
+	if err != nil || summary.Entries <= 4 || before.Entries-summary.Entries != state.MaxBatchEntries || calls.Load() != 0 || status.Dispatch == nil || status.Dispatch.Used != 1 || status.CPUFeedback == nil || status.CPUFeedback.Status != "observed" || status.CPUFeedback.Window == nil || status.CPUFeedback.Window.Kind != state.FairInventoryMaintenance || status.CPUFeedback.Window.CPUTimeNS == nil || *status.CPUFeedback.Window.CPUTimeNS != int64(10*time.Millisecond) || !status.CPUFeedback.Window.DispatchReservedAt.Before(futureDue) {
+		t.Fatal("eligible maintenance did not use its fair turn before future source", summary, err, calls.Load(), status)
 	}
-	if due, err := r.NextJobDue(context.Background(), []string{state.ScanKind}); err != nil || due.IsZero() {
+	if due, err := r.NextJobDue(context.Background(), []string{state.ScanKind}); err != nil || !due.Equal(futureDue) {
 		t.Fatal("future source job was lost", due, err)
 	}
 	control(t, dir, "stop")

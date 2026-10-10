@@ -326,7 +326,7 @@ func cpuChargesSchema(ctx context.Context, tx *sql.Tx) (int, error) {
 	}
 	// Indexed raw census, including one sentinel. Extra zero/negative versions
 	// must not bypass the usual positive-version lookups.
-	rows, err := tx.QueryContext(ctx, `SELECT CASE WHEN typeof(version)='integer' THEN version ELSE 0 END,CASE WHEN typeof(name)='text' THEN CAST(substr(CAST(name AS BLOB),1,129) AS TEXT) ELSE '' END,typeof(version)='integer' AND typeof(name)='text' AND typeof(applied_at_ns)='integer' AND applied_at_ns>=0 FROM schema_migrations ORDER BY version LIMIT 16`)
+	rows, err := tx.QueryContext(ctx, `SELECT CASE WHEN typeof(version)='integer' THEN version ELSE 0 END,CASE WHEN typeof(name)='text' THEN CAST(substr(CAST(name AS BLOB),1,129) AS TEXT) ELSE '' END,typeof(version)='integer' AND typeof(name)='text' AND typeof(applied_at_ns)='integer' AND applied_at_ns>=0 FROM schema_migrations ORDER BY version LIMIT 17`)
 	if err != nil {
 		return 0, cpuChargesStorageError(ctx, err)
 	}
@@ -346,6 +346,9 @@ func cpuChargesSchema(ctx context.Context, tx *sql.Tx) (int, error) {
 	closeErr := rows.Close()
 	if err != nil || closeErr != nil || count != version {
 		return 0, cpuChargesStorageError(ctx, errors.Join(err, closeErr))
+	}
+	if err = cpuChargeAdmissionSchema(ctx, tx, version); err != nil {
+		return 0, err
 	}
 	var extra bool
 	var shape, kind string
@@ -395,6 +398,11 @@ func readCPUCharges(ctx context.Context, tx *sql.Tx) (CPUChargeState, error) {
 	if !bytes.Equal(raw, canonical) {
 		return cpuChargesBase(true), ErrCPUChargesCorrupt
 	}
+	if v >= cpuChargeAdmissionSchemaVersion {
+		if _, err = readCPUAdmission(ctx, tx, s, v); err != nil {
+			return cpuChargesBase(true), err
+		}
+	}
 	return s, nil
 }
 func writeCPUCharges(ctx context.Context, tx *sql.Tx, s CPUChargeState) error {
@@ -414,6 +422,12 @@ func (s *Store) cpuChargesWriter(ctx context.Context) error {
 	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if s == nil || s.db == nil {
+		return ErrCPUChargesReadOnly
+	}
+	if s.cpuAuthorityRefused.Load() {
+		return ErrCPUChargeAdmissionAuthority
 	}
 	if s.readOnly {
 		return ErrCPUChargesReadOnly
@@ -481,6 +495,9 @@ func (s *Store) ActivateCPUCharges(ctx context.Context, at time.Time) (CPUCharge
 		return cpuChargesBase(false), err
 	}
 	defer tx.Rollback()
+	if err = s.bareCPUAuthority(ctx, tx); err != nil {
+		return cpuChargesBase(false), err
+	}
 	prior, err := readCPUCharges(ctx, tx)
 	if err != nil {
 		return prior, err
@@ -527,6 +544,9 @@ func (s *Store) BeginCPUSession(ctx context.Context, start CPUSessionStart) (CPU
 		return empty, cpuChargesBase(false), err
 	}
 	defer tx.Rollback()
+	if err = s.bareCPUAuthority(ctx, tx); err != nil {
+		return empty, cpuChargesBase(false), err
+	}
 	prior, err := readCPUCharges(ctx, tx)
 	if err != nil {
 		return empty, prior, err
@@ -615,6 +635,9 @@ func (s *Store) sampleCPUSession(ctx context.Context, marker CPUSessionMarker, s
 		return cpuChargesBase(false), err
 	}
 	defer tx.Rollback()
+	if err = s.bareCPUAuthority(ctx, tx); err != nil {
+		return cpuChargesBase(false), err
+	}
 	prior, err := readCPUCharges(ctx, tx)
 	if err != nil {
 		return prior, err
@@ -707,6 +730,9 @@ func (s *Store) RecoverCPUSession(ctx context.Context, at time.Time) (CPUChargeS
 		return cpuChargesBase(false), err
 	}
 	defer tx.Rollback()
+	if err = s.bareCPUAuthority(ctx, tx); err != nil {
+		return cpuChargesBase(false), err
+	}
 	prior, err := readCPUCharges(ctx, tx)
 	if err != nil {
 		return prior, err

@@ -163,6 +163,15 @@ func TestWorkerAdaptiveRevisitsScopeChangeAndDisablePreserveUntouchedWork(t *tes
 			}
 			beforeListings := f.listings.Load()
 			ready, done := start(t, f.dir, f.config, f.options)
+			if !ready.Paused || ready.AdaptiveRevisits != nil || ready.InventoryMode != nil {
+				t.Fatal("adaptive mutation preceded paused listener/accounting", ready)
+			}
+			if !f.due(t).Equal(beforeDue) || f.listings.Load() != beforeListings {
+				t.Fatal("paused restart changed exact scheduled work", beforeDue, f.due(t), f.listings.Load())
+			}
+			control(t, f.dir, "resume")
+			waitUntil(t, func() bool { return f.due(t).Equal(beforeDue.Add(-6 * 24 * time.Hour)) })
+			ready = control(t, f.dir, "status")
 			afterDue := f.due(t)
 			if !afterDue.Equal(beforeDue.Add(-6*24*time.Hour)) || f.listings.Load() != beforeListings {
 				t.Fatal("policy change reset work or failed its exact daily shortening", beforeDue, afterDue, f.listings.Load())

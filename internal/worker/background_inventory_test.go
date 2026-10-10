@@ -116,9 +116,10 @@ func TestWorkerCompactBackgroundBeyondReportLimit(t *testing.T) {
 		})
 	}
 	ready, done := startPacingWorker(t, dir, c, options)
-	if ready.InventoryMode == nil || !ready.InventoryMode.Compact || ready.AdaptiveRevisits != nil {
-		t.Fatal("startup storage policy differs", ready)
+	if ready.InventoryMode != nil || ready.AdaptiveRevisits != nil {
+		t.Fatal("inventory configured before listener/accounting", ready)
 	}
+	waitUntil(t, func() bool { mode := control(t, dir, "status").InventoryMode; return mode != nil && mode.Compact })
 	reader, err := state.OpenReader(context.Background(), dir)
 	if err != nil {
 		t.Fatal(err)

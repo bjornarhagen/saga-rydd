@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bjornarhagen/saga-rydd/internal/localfs"
@@ -20,13 +21,14 @@ const Filename = "state.sqlite3"
 const WALBackpressureBytes int64 = 32 << 20
 
 type Store struct {
-	db        *sql.DB
-	path      string
-	readOnly  bool
-	schema    int
-	lock      *localfs.Lock
-	closeOnce sync.Once
-	closeErr  error
+	db                  *sql.DB
+	path                string
+	readOnly            bool
+	schema              int
+	lock                *localfs.Lock
+	closeOnce           sync.Once
+	closeErr            error
+	cpuAuthorityRefused atomic.Bool
 }
 
 // OpenWriter creates/migrates only a private Rydd-owned database. FULL durability
@@ -93,7 +95,7 @@ func OpenReader(ctx context.Context, dir string) (*Store, error) {
 		s.Close()
 		return nil, err
 	}
-	if version != cpuChargesSchemaVersion && version != schemaVersion && version != 4 && version != 5 && version != 6 && version != 7 && version != 8 && version != 9 && version != 10 && version != 11 && version != 12 && version != 13 {
+	if version != cpuChargeAdmissionSchemaVersion && version != cpuChargesSchemaVersion && version != schemaVersion && version != 4 && version != 5 && version != 6 && version != 7 && version != 8 && version != 9 && version != 10 && version != 11 && version != 12 && version != 13 {
 		s.Close()
 		return nil, fmt.Errorf("state schema %d requires migration; run rydd state init", version)
 	}

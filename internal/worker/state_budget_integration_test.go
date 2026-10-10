@@ -392,7 +392,21 @@ func TestWorkerInventoryStateReturnedCancellationRetainsChargedReceipt(t *testin
 		}}
 	noRetirementSource(t, &o, &sources)
 	_, done, _ := startCancelable(t, dir, c, o, func(cancel context.CancelFunc, _ <-chan error) { runCancel = cancel })
-	waitExit(t, done)
+	// Run preserves its canceled lifetime after the routing session finishes.
+	// Reject any added finish error rather than accepting errors.Is alone.
+	select {
+	case exitErr := <-done:
+		joined, ok := exitErr.(interface{ Unwrap() []error })
+		if !ok {
+			t.Fatal("worker did not return its joined cancellation cause", exitErr)
+		}
+		causes := joined.Unwrap()
+		if len(causes) != 1 || causes[0] != context.Canceled {
+			t.Fatal("worker returned an unexpected finish cause", exitErr)
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatal("worker did not stop")
+	}
 	r, err := state.OpenReader(context.Background(), dir)
 	if err != nil {
 		t.Fatal(err)
@@ -569,7 +583,21 @@ func TestWorkerInventoryStateClaimUsesValidatedClockReading(t *testing.T) {
 				}}
 			noRetirementSource(t, &o, &sources)
 			_, done, _ := startCancelable(t, dir, c, o, func(cancel context.CancelFunc, _ <-chan error) { cancelRun = cancel })
-			waitExit(t, done)
+			// Run preserves its canceled lifetime after the routing session finishes.
+			// Reject any added finish error rather than accepting errors.Is alone.
+			select {
+			case exitErr := <-done:
+				joined, ok := exitErr.(interface{ Unwrap() []error })
+				if !ok {
+					t.Fatal("worker did not return its joined cancellation cause", exitErr)
+				}
+				causes := joined.Unwrap()
+				if len(causes) != 1 || causes[0] != context.Canceled {
+					t.Fatal("worker returned an unexpected finish cause", exitErr)
+				}
+			case <-time.After(8 * time.Second):
+				t.Fatal("worker did not stop")
+			}
 			if begins.Load() != 1 || samples.Load() != 2 || sources.Load() != 0 {
 				t.Fatal("claim took a new unvalidated clock reading", begins.Load(), samples.Load(), sources.Load())
 			}
