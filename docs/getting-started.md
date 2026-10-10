@@ -42,6 +42,14 @@ Use full IDs from the output. A later scan cannot add targets to an existing pla
 
 [The CLI guide](cli.md#saved-hash-observations) describes the exact hashing workflow. Full-file reads require separate confirmation and fixed byte caps. Each run performs one bounded step and exits. Original selections and fresh keeper/copy jobs have independent consent, progress and charges. Review consent for a cleanup plan cannot permit a content read or cleanup.
 
+A saved keeper/copy choice includes historical sizes of the selected possible copies. To inspect a choice already saved in your private state:
+
+1. Reopen its full ID with `rydd --data-dir /path/to/private/state hashes --choice CHOICE_ID`.
+2. Compare the historical logical and allocated totals for the selected possible copies. The keeper and unselected paths are excluded.
+3. If output fails, keep the same ID and reopen it. The read-only view saves no new choice and grants no permission to read current file contents or perform cleanup.
+
+Saved aliases, missing identities or conflicting evidence are refused. An overflowed total is unknown, while a known zero remains zero. Shared allocation can overlap; current allocation and reclaimable space remain unknown. Add `--json` for the derived `hashes.historical_copy_sizes` sibling without changing the saved choice ID or record.
+
 ## Configure a worker separately
 
 Manual scans are sufficient for the first review. To prepare configured roots, initialize a dedicated private instance:
@@ -117,6 +125,29 @@ Start with the same data directory, folder and IDs used by the original command.
 | Configuration changed during startup | Reload the intended configuration and start a new worker after the previous writer exits. A worker cannot adopt a mixture of old and new settings. |
 
 Do not delete a lock, database, WAL, consent record or history to clear a refusal. There is no automatic repair or restore command. The plans-history export below does not repair corrupt state or back up the full instance. For corrupt state or uncertain storage, stop new writes, preserve the files and collect the exact private error before choosing a recovery action.
+
+## Inspect an existing private instance
+
+Use `doctor` for bounded configuration, metadata and main-header observations of an existing private instance before choosing a separate diagnostic or state command.
+
+1. Select the existing private data directory used by the instance. Use a clean absolute path; put `--data-dir` before `doctor`. Doctor does not initialize a missing directory or choose a default instance.
+2. Read the human report:
+
+   ```sh
+   rydd --data-dir /absolute/private/state doctor
+   ```
+
+   For a machine report, use the same selection:
+
+   ```sh
+   rydd --data-dir /absolute/private/state doctor --json
+   ```
+
+3. Read every check's qualification, then choose a suggested command only after reviewing its effects and preconditions. Doctor never runs the suggestions. If `state init` is suggested, it is a separate command that can write state: preserve existing data, stop all writers and wait for exit, and review the intended configuration and compatibility first.
+
+The seven checks cover the directory and six fixed child names. Contents are limited to at most 1 MiB of configuration and the first 100 main-header bytes; sidecars and the lock receive metadata checks only. Doctor opens no SQLite engine, worker/service connection or configured scan root. Current schema, ledger integrity, live worker health and lock availability stay unknown, including when the report says `CHECKS FINISHED`. A nonempty sidecar can make the main header outdated; absent sidecars or a lock do not prove writer shutdown.
+
+Exit 0 means the selected observations finished without an attention finding. Attention, incomplete observations, cancellation or output failure return 1; invalid arguments return 2. Keep reports private and preserve any partial output. Do not delete a lock, database or sidecar to clear a finding. See [the exact checks, JSON contract and guidance effects](cli.md#existing-only-doctor-observations).
 
 ## Plans-history export
 

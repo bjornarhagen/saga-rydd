@@ -32,6 +32,7 @@ Commands:
   backup --plans --to ABSENT_DESTINATION [--json]      Export history from an explicit existing --data-dir
   backup --verify ARTIFACT --scratch-dir PRIVATE_PARENT [--json]
                                                      Verify artifact structure using a scratch copy
+  doctor [--json]                                     Inspect one explicit existing --data-dir; no repair
   status [--json]                                       Read saved state summary
   status --cpu-charges [--json]                       Read saved conservative CPU charge history
   status --cpu-period-charges [--json]                Read saved UTC hour/day charge history
@@ -122,6 +123,9 @@ func (p *pathsFlag) String() string         { return fmt.Sprint([]string(*p)) }
 func (p *pathsFlag) Set(value string) error { *p = append(*p, value); return nil }
 
 func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer) int {
+	if doctorInvocation(args) {
+		return runDoctor(ctx, args, out, errOut)
+	}
 	flags := flag.NewFlagSet("rydd", flag.ContinueOnError)
 	flags.SetOutput(errOut)
 	dataDir := flags.String("data-dir", "", "private directory for both config and state")
@@ -142,7 +146,7 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 		return 0
 	}
 	if remaining[0] == "capabilities" && len(remaining) == 1 {
-		fmt.Fprintln(out, "Rydd commands: init, config check, exclude, state init, backup, status, scan, measure, report, docker, service, review, plan, ignore, journal, hashes, hash, pause, resume, stop, capabilities.\nAdd --json for versioned machine output on finite commands. review prompts in text mode; daemon uses foreground text output.\nOther commands are noninteractive. Exit codes: 0 success, 1 operation failed, 2 invalid usage.\nScanning is experimental. Deletion, duplicate detection, and full resource controls are unavailable.")
+		fmt.Fprintln(out, "Rydd commands: init, config check, exclude, state init, backup, doctor, status, scan, measure, report, docker, service, review, plan, ignore, journal, hashes, hash, pause, resume, stop, capabilities.\nAdd --json for versioned machine output on finite commands. review prompts in text mode; daemon uses foreground text output.\nOther commands are noninteractive. Exit codes: 0 success, 1 operation failed, 2 invalid usage.\nScanning is experimental. Deletion, duplicate detection, and full resource controls are unavailable.")
 		return 0
 	}
 	if remaining[0] == "backup" {
@@ -313,6 +317,9 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 		}
 		if _, shared := r.(HashStoreBudgetReport); shared && err == nil && ctx.Err() != nil {
 			err = fmt.Errorf("Shared read accounting reply was canceled; no saved records or source files were changed: %w", ctx.Err())
+		}
+		if choice, sized := r.(inventory.HashKeeperChoiceSizesReport); sized && err == nil && ctx.Err() != nil {
+			err = hashChoiceSizesViewError(choice.ID, ctx.Err())
 		}
 	case "hash":
 		var r any

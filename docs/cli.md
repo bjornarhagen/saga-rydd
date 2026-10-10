@@ -25,6 +25,62 @@ Every JSON response has `api_version: 1`, `ok` and `command`. Success fields dep
 
 Control responses contain `acknowledged` and a worker snapshot. A stop acknowledgement means shutdown was requested; it does not guarantee process exit. Pause is durable and requests cancellation of the current cooperative batch; an active filesystem call can still be draining. Status reads saved inventory even without a worker. Paths may contain private information; treat reports as local data.
 
+## Existing-only doctor observations
+
+Doctor is implemented in a development candidate. Integration, native and publication acceptance remain pending. It provides finite observations of an explicitly selected existing private instance:
+
+```sh
+rydd --data-dir /absolute/private/state doctor
+rydd --data-dir /absolute/private/state doctor --json
+```
+
+Supply `--data-dir` exactly once, before `doctor`. Use a clean absolute path to an existing directory owned by the current user, with no group or other permissions. Relative paths, `~/` in this argument, symlink components, extra arguments and duplicate options are refused. Doctor does not select a default instance or initialize a missing directory. `doctor --help` is text only; use `capabilities --json` for machine discovery.
+
+There are seven fixed checks: the directory and these six child names. Doctor does not list other entries or inspect another inventory or plans store.
+
+| Check ID | Selected name | Observation |
+| --- | --- | --- |
+| `directory` | Selected data directory | Existing directory and ancestor identity/permission metadata |
+| `configuration` | `config.toml` | Admitted metadata and configuration validation within the doctor subset; at most 1 MiB of contents |
+| `state_header` | `state.sqlite3` | Admitted metadata and at most the first 100 bytes of the main SQLite header |
+| `wal` | `state.sqlite3-wal` | Metadata only |
+| `shm` | `state.sqlite3-shm` | Metadata only |
+| `journal` | `state.sqlite3-journal` | Metadata only |
+| `writer_lock` | `writer.lock` | Metadata only; no lock acquisition or availability test |
+
+Only private, owned, single-link regular configuration/header files are admitted for contents. Configuration outside the bounded doctor subset is reported as `unsupported_profile`; that does not declare it globally invalid. Validation does not probe configured roots. A changed object, unavailable observation or close failure can leave a partial, qualified report. Reads can change access times; paired observations are historical and are not an atomic snapshot.
+
+The main header can declare a schema in the binary's reader range while WAL or journal state holds a different effective state. Nonempty sidecar metadata makes this limitation explicit. Doctor reads no sidecar contents, performs no checkpoint or recovery, and does not open SQLite. Current effective schema, database readability, whole migration-ledger integrity, worker activity and writer-lock availability remain unknown. Missing sidecars or a missing lock do not prove an idle writer or corruption. Do not delete a lock, database or sidecar to clear a finding.
+
+### Report status and process exit
+
+Human output uses `CHECKS FINISHED`, `ATTENTION REQUIRED` or `CHECKS INCOMPLETE`, each qualified with `LIVE HEALTH NOT CHECKED`. A normal completed JSON response uses the API-1 envelope with `command: "doctor"`, `ok`, optional `doctor` and optional `error`. Read each check's `observation_status`, `reason_code` and `qualification`; `doctor.status` summarizes the observations:
+
+| Report status | Ordinary completed exit | Meaning |
+| --- | --- | --- |
+| `checks_finished` | 0 | The selected checks finished without an attention finding; live health is still unknown |
+| `attention_required` | 1 | Observed missing, unsafe, invalid or unsupported evidence needs review; no repair occurred |
+| `incomplete` | 1 | The observations could not finish reliably; retain the qualified evidence |
+| No report, invalid arguments | 2 | Argument/output-mode validation refused before instance observations |
+
+An output failure or cancellation can also produce exit 1. A complete reply received before later cancellation does not establish a successful process exit. Normal complete JSON success/error replies leave stderr empty; output failure or cancellation during/after reply delivery can add stderr guidance. Match public error codes, not human message text. Output is staged within 128 KiB. An incomplete write is not followed by a second reply; keep any partial output private and inspect the exact error.
+
+JSON and human output disclose the selected instance path and copyable guidance paths. They are private local reports, not sanitized issue attachments. Raw configuration and underlying configuration-error text are withheld by doctor; a later `config check` can expose more detail. The five-second context is cooperative: an entered filesystem call, parsing or output can take longer.
+
+### Choose a next command explicitly
+
+Guidance is inferred from observed checks, includes preconditions and describes effects. Doctor never runs it:
+
+| Suggested command | Separate effect |
+| --- | --- |
+| `rydd --json --version` | Declared build metadata, with no instance opening; provenance is not authentication |
+| `rydd capabilities --json` | Command/effect discovery, with no initialization or configuration/state reads |
+| `rydd --data-dir PATH config check --json` | Reads the selected configuration and can disclose detailed paths/errors; no scan-root probe |
+| `rydd --data-dir PATH status --json` | Opens existing SQLite, queries saved state and attempts worker IPC; reader sidecars/access times can change |
+| `rydd --data-dir PATH state init --json` | **Mutating:** can initialize/migrate inventory and synchronize configured roots; never automatic |
+
+The data-scoped commands appear only when their observation preconditions permit guidance; they can still refuse. Before choosing `state init`, confirm the intended instance, preserve existing data, stop every writer and wait for exit, then review configuration and compatibility. Lock metadata and main-header bytes cannot establish those conditions. A finding or suggested command grants no repair, recovery or cleanup permission.
+
 ## Version and finite build metadata
 
 `rydd --version` keeps the existing human first-line format. Unstamped development builds retain the dev label; candidate builds show their linked label. `rydd --json --version` preserves `version` and adds `build_metadata` with contract `build_metadata_v1`, version/source, nullable revision, clean/dirty/unknown source status, Go version, OS/architecture and nullable CGO status. A valid runtime label uses `version_source: linked_value` and `executable_label_verified: true`. No configuration, state or source files are opened. Declared VCS provenance is not authentication; private paths, dependencies and raw flags are not projected. Cancellation or failed output returns failure without a second JSON document. See [local candidate packaging](../CONTRIBUTING.md#local-candidate-packages) for the separate structural archive contract and release limits.
@@ -1013,6 +1069,25 @@ Writer JSON uses the `hash` envelope; reopening uses `hashes`. Both expose `id` 
 `review --hashes --save-choice` requires the saving flag once with a true value, and still rejects directory/age/positional options and JSON. After the full preview, type a complete newline-terminated `save`, `back` or `quit`. Back returns to the same frozen member list. Readers and writer locks are closed before input. EOF, partial confirmation, cancellation or sticky output failure before publication saves nothing. After publication, cancellation or failed output reports the saved choice ID; commit uncertainty identifies its candidate ID. Reopen that ID or repeat the exact save request without changing roles or recapturing evidence. No automatic retry occurs.
 
 Invalid IDs/requests are `invalid_arguments` with exit `2`. Changed displayed evidence is `hash_choice_evidence_changed`, corrupt saved choices are `hash_choice_invalid`, and full capacity is `hash_choice_capacity`, with exit `1`. Missing existing storage or a missing choice is `not_found`. Errors never imply read or cleanup permission.
+
+### Historical sizes of selected possible copies
+
+The `hashes --choice CHOICE_ID [--json]` view includes historical sizes of selected possible copies. It adds no flag, choice record, ID or saved decision.
+
+Human output appends `HISTORICAL SIZES OF SELECTED POSSIBLE COPIES`. Both totals exclude the keeper and every unselected path:
+
+| Total | Basis |
+| --- | --- |
+| Historical logical bytes | The saved per-file logical size multiplied by the number of explicitly selected possible copy paths. |
+| Historical allocated bytes | The sum of the recorded allocation for those selected paths. Sparse files can differ from logical size; shared extents can overlap. |
+
+JSON adds `hashes.historical_copy_sizes` beside the unchanged `hashes.id` and `hashes.record`. Its contract is `historical_selected_copy_sizes_v1`, basis `immutable_choice_evidence` and scope `explicit_saved_copy_paths`. `selected_copy_paths` is the denominator. `known_saved_objects` and `known_allocation_paths` count the selected copies with valid saved identity and allocation evidence.
+
+A successful summary requires distinct canonical saved device/inode pairs, including separation from the keeper. Missing, repeated or conflicting identities, or missing, invalid or negative allocation evidence, refuse the whole view. They do not produce a partial numeric summary. Thus successful summaries have zero `repeated_saved_paths`, `unknown_saved_identity_paths`, `conflicting_saved_objects` and `unknown_allocation_paths`. Saved object identities do not establish current inode continuity or independent physical storage.
+
+`logical_bytes_status` and `saved_allocated_bytes_status` are independently `known` or `overflow`. A known value can be zero. Overflow makes the corresponding byte value `null`; human output shows `Unknown (overflow)`. `reclaimable_bytes` stays `null`. `current_state_verified`, `independent_allocation_verified` and `executable` stay false. The totals cannot establish current equality, space that deletion would free or cleanup permission.
+
+The view uses existing saved hash records and works with source folders, inventory and configuration offline. It reads no selected file bodies, initializes or migrates no storage, recovers no work, and changes no consent, clocks, charges or progress. Private SQLite reader sidecar behavior remains separate from persistent record writes. Read, close or cancellation failures retain the full requested choice ID without returning a partial summary or proving that the choice exists. A failed or canceled reply exits `1`; JSON can contain one already-written envelope, but no second envelope is appended. Inspect stderr and reopen the same ID with `hashes --choice CHOICE_ID`.
 
 ### Metadata check for a saved choice
 

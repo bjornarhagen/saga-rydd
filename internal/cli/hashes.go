@@ -71,12 +71,18 @@ func hashes(ctx context.Context, args []string, paths config.Paths) (any, error)
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err := ctx.Err(); err != nil {
+		if choice.set {
+			return nil, hashChoiceSizesViewError(choice.value, err)
+		}
 		return HashReport{}, err
 	}
 	reader, err := inventory.OpenHashReader(ctx, paths.StateDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			err = missingHashError{fmt.Errorf("saved hash storage is unavailable; hashes only reads existing observations: %w", err)}
+		}
+		if choice.set {
+			return nil, hashChoiceSizesViewError(choice.value, err)
 		}
 		return HashReport{}, err
 	}
@@ -95,18 +101,9 @@ func hashes(ctx context.Context, args []string, paths config.Paths) (any, error)
 		return HashStoreBudgetReport{Contract: inventory.HashStoreReadBudgetContract, Activated: r != nil, SavedBudget: r}, nil
 	}
 	if choice.set {
-		r, readErr := reader.KeeperChoice(ctx, choice.value)
+		r, readErr := reader.KeeperChoiceSizes(ctx, choice.value)
 		closeErr := reader.Close()
-		if readErr != nil {
-			return nil, readErr
-		}
-		if closeErr != nil {
-			return nil, closeErr
-		}
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		return r, nil
+		return completeHashChoiceSizesView(ctx, choice.value, r, readErr, closeErr)
 	}
 	if preview.set {
 		r, readErr := reader.PreviewKeeper(ctx, preview.value, keeper.value, f.Args())
@@ -177,6 +174,8 @@ func printHashes(out io.Writer, report any) error {
 		return printHashKeeperPreview(out, r)
 	case inventory.SavedHashKeeperChoice:
 		return printHashKeeperChoice(out, r)
+	case inventory.HashKeeperChoiceSizesReport:
+		return printHashKeeperChoiceSizes(out, r)
 	default:
 		return errors.New("unsupported saved hash report")
 	}

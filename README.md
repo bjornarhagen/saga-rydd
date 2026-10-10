@@ -18,6 +18,19 @@ For distribution work, follow the [local candidate and future release procedure]
 
 **Next milestone: resource controls and user services.** The generated owner read-only walkthrough and human-output corrections passed, including guided review and separately consented fresh hashing with historical comparisons. Exact finding dismissal, persistent exclusion controls, saved Cargo/Go cache reports and finite selected Docker image/container/Engine-cache metadata are verified on generated native fixtures. Genuine Cargo producer compatibility passed both native platforms. Restart-safe CPU feedback and bounded Linux power observations are verified. The current continuation adds sparse source-power scheduling, finite resource measurements and the remaining state/service controls after the read-only MVP. Installed-Docker, cache-action/regeneration and Linux clone acceptance remain open. Cleanup needs an operation that preserves the exact reviewed source object and ancestor scope; the reviewed rename operations do not provide that boundary. See [ADR 003](docs/decisions/003-source-namespace-boundary.md), the [current handoff](PROGRESS.md#current-state) and [trial lessons](docs/mvp-trial-results.md). Numbered phases are not a strict work order, and the full plan remains unfinished.
 
+## Inspect an existing private instance
+
+Use `doctor` to inspect an existing private instance. Select its data directory explicitly:
+
+```sh
+rydd --data-dir /absolute/private/state doctor
+rydd --data-dir /absolute/private/state doctor --json
+```
+
+Doctor checks the selected directory, configuration, main SQLite header, three sidecars and writer lock. It does not open SQLite, contact a worker or service, inspect scan roots, initialize, migrate or repair the instance. A finished check does not prove live health, current schema or lock availability.
+
+Read each qualified observation before choosing a suggested command. Guidance explains its effects; a suggested `state init` can write state and is never run automatically. Keep the output private. See [doctor observations and exit statuses](docs/cli.md#existing-only-doctor-observations) and the [short procedure](docs/getting-started.md#inspect-an-existing-private-instance).
+
 ## Scan a chosen folder
 
 ```sh
@@ -205,6 +218,10 @@ The guided saving mode shows the exact preview, then asks you to type `save`, `b
 Keep the returned choice ID and the same data directory. Reopening works with source folders and inventory offline. Exact retries return the first saved ID, time and evidence. There is room for 128 distinct immutable choices per hashing selection, each at most 256 KiB. Existing choices are never replaced or discarded automatically.
 
 A saved choice records historical roles only. It does not hide candidates, create a keep policy, approve another content read or permit cleanup. Current equality and reclaimable space remain unverified. If a reply fails after publication, the choice may already exist; inspect its full ID or repeat the exact save request. Private state and reports belong in a private data directory, outside version control.
+
+The pending candidate adds historical size totals when you reopen `hashes --choice`. It counts only the selected possible copies, excluding the keeper and every unselected path. Logical size and recorded allocated size are separate totals. Allocation can overlap shared storage, and observations need not be simultaneous. Current allocation and reclaimable space remain unknown.
+
+The view requires valid, distinct saved device/inode identities. Missing, repeated or conflicting evidence is refused. Arithmetic overflow shows `Unknown (overflow)`, not zero. In JSON, `hashes.historical_copy_sizes` is a sibling of the unchanged `id` and `record`. This saved-only view reads no source files, inventory or configuration and saves no new decision. See [historical selected-copy sizes](docs/cli.md#historical-sizes-of-selected-possible-copies). Joint validation and publication remain pending for this addition.
 
 ## Check metadata for a saved choice
 

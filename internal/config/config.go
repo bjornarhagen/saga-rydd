@@ -194,6 +194,17 @@ func Load(path, home string) (Config, error) {
 // fields and path/budget validation as Load. It performs no filesystem access,
 // so a caller can validate bytes read from an already held file descriptor.
 func Decode(data []byte, home string) (Config, error) {
+	c, err := DecodeSyntax(data)
+	if err != nil {
+		return c, err
+	}
+	return c, c.Validate(home)
+}
+
+// DecodeSyntax retains the bounded strict syntax/defaults of Decode, without
+// validating path pairs. Doctor admits its smaller array/path profile before
+// calling Validate. This function performs no filesystem/environment access.
+func DecodeSyntax(data []byte) (Config, error) {
 	c := Default()
 	if len(data) > maxConfigBytes {
 		return c, errors.New("configuration exceeds 1 MiB")
@@ -201,7 +212,7 @@ func Decode(data []byte, home string) (Config, error) {
 	if err := toml.NewDecoder(bytes.NewReader(data)).DisallowUnknownFields().Decode(&c); err != nil {
 		return c, fmt.Errorf("decode config: %w", err)
 	}
-	return c, c.Validate(home)
+	return c, nil
 }
 
 // Create refuses to replace an existing configuration. Roots need not currently
