@@ -306,10 +306,15 @@ func (s *SampleStore) checkSampleStorage(target *SavedFileTarget) error {
 		}
 		id := objectID(st)
 		ids[id] = true
-		if old, ok := s.storageIDs[p]; ok && old != id {
-			return errors.New("sample storage path identity changed")
+		// SQLite can remove and recreate its sidecars when a connection closes.
+		// Keep their current private shape and alias checks, but pin only objects
+		// that must retain their identity for this store's lifetime.
+		if isDir || p == db || p == filepath.Join(dir, "writer.lock") {
+			if old, ok := s.storageIDs[p]; ok && old != id {
+				return errors.New("sample storage path identity changed")
+			}
+			s.storageIDs[p] = id
 		}
-		s.storageIDs[p] = id
 	}
 	if target != nil {
 		if config.Within(string(target.File.PathBytes), s.base) || config.Within(string(target.Root.PathBytes), s.base) || ids[target.File.Device+":"+target.File.Inode] {

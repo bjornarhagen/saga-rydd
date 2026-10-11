@@ -768,6 +768,196 @@ func TestSampleStorePrivateLeafAndLockAdmission(t *testing.T) {
 	}
 }
 
+func TestSampleStoreSQLiteSidecarRecreation(t *testing.T) {
+	f := sampleStoreFixture(t, []byte("abc"))
+	dir := filepath.Join(f.base, "samples")
+	db := filepath.Join(dir, sampleStoreFilename)
+	stable := map[string]string{}
+	for _, path := range []string{f.base, dir, db, filepath.Join(dir, "writer.lock")} {
+		var st unix.Stat_t
+		if err := unix.Lstat(path, &st); err != nil {
+			t.Fatal(err)
+		}
+		stable[path] = objectID(st)
+		if f.store.storageIDs[path] != stable[path] {
+			t.Fatal("stable storage identity was not retained", path)
+		}
+	}
+	prior := map[string]string{}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		path := db + suffix
+		fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		file := os.NewFile(uintptr(fd), path)
+		t.Cleanup(func() {
+			if err := file.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+		var st unix.Stat_t
+		if err = unix.Fstat(fd, &st); err != nil {
+			t.Fatal(err)
+		}
+		prior[path] = objectID(st)
+	}
+	// Eviction closes the real idle SQLite connection. Holding the old files
+	// prevents inode reuse, so a recreated sidecar cannot appear unchanged.
+	f.store.db.SetMaxIdleConns(0)
+	f.store.db.SetMaxIdleConns(1)
+	saved, err := f.store.Snapshot(context.Background())
+	if err != nil || !reflect.DeepEqual(saved, f.batch) {
+		t.Fatal("SQLite connection recreation changed saved accounting", saved, err)
+	}
+	for path, old := range prior {
+		var st unix.Stat_t
+		if err = unix.Lstat(path, &st); err != nil {
+			t.Fatal(err)
+		}
+		if objectID(st) == old {
+			t.Fatal("SQLite did not recreate the selected sidecar", path)
+		}
+	}
+	for path, old := range stable {
+		var st unix.Stat_t
+		if err = unix.Lstat(path, &st); err != nil {
+			t.Fatal(err)
+		}
+		if objectID(st) != old || f.store.storageIDs[path] != old {
+			t.Fatal("SQLite recreation changed a stable storage identity", path)
+		}
+	}
+}
+
+// Isolate the private-name guard from SQLite so unsafe leaves cannot be opened
+// or repaired by the driver before their refusal is checked.
+func sampleStorageGuardFixture(t *testing.T) (*SampleStore, string) {
+	t.Helper()
+	parent, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := filepath.Join(parent, "sample-data")
+	dir := filepath.Join(base, "samples")
+	if err = os.Mkdir(base, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	db := filepath.Join(dir, sampleStoreFilename)
+	for _, path := range []string{db, filepath.Join(dir, "writer.lock")} {
+		if err = os.WriteFile(path, nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := &SampleStore{base: base, storageIDs: map[string]string{}}
+	if err = s.checkSampleStorage(nil); err != nil {
+		t.Fatal(err)
+	}
+	return s, db
+}
+
+func TestSampleStoreSidecarLeafAndAliasAdmission(t *testing.T) {
+	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
+		for _, kind := range []string{"symlink", "hardlink", "shared_mode", "oversized", "file_alias", "ancestor_alias"} {
+			t.Run(suffix+"/"+kind, func(t *testing.T) {
+				s, db := sampleStorageGuardFixture(t)
+				path := db + suffix
+				other := filepath.Join(filepath.Dir(s.base), "other")
+				if err := os.WriteFile(other, nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+				var err error
+				switch kind {
+				case "symlink":
+					err = os.Symlink(other, path)
+				case "hardlink":
+					err = os.Link(other, path)
+				default:
+					err = os.WriteFile(path, nil, 0600)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if kind == "shared_mode" {
+					if err = os.Chmod(path, 0644); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if kind == "oversized" {
+					limit := int64(32 * 1024 * 1024)
+					if suffix == "-shm" {
+						limit = 1024 * 1024
+					}
+					if err = os.Truncate(path, limit+1); err != nil {
+						t.Fatal(err)
+					}
+				}
+				var target *SavedFileTarget
+				if kind == "file_alias" || kind == "ancestor_alias" {
+					if err = s.checkSampleStorage(nil); err != nil {
+						t.Fatal("valid current sidecar refused", err)
+					}
+					var st unix.Stat_t
+					if err = unix.Lstat(path, &st); err != nil {
+						t.Fatal(err)
+					}
+					root := filepath.Join(filepath.Dir(s.base), "source")
+					target = &SavedFileTarget{
+						Root: state.RootBinding{PathBytes: []byte(root)},
+						File: state.SameSizeFile{PathBytes: []byte(filepath.Join(root, "file"))},
+					}
+					if kind == "file_alias" {
+						target.File.Device, target.File.Inode = fmt.Sprint(st.Dev), fmt.Sprint(st.Ino)
+					} else {
+						target.Ancestors = []state.Entry{{Device: fmt.Sprint(st.Dev), Inode: fmt.Sprint(st.Ino)}}
+					}
+				}
+				if err = s.checkSampleStorage(target); err == nil {
+					t.Fatal("unsafe or aliased current sidecar admitted", suffix, kind)
+				}
+			})
+		}
+	}
+}
+
+func TestSampleStoreStableIdentityReplacement(t *testing.T) {
+	for _, kind := range []string{"base", "samples", "database", "lock"} {
+		t.Run(kind, func(t *testing.T) {
+			s, db := sampleStorageGuardFixture(t)
+			dir := filepath.Dir(db)
+			path := map[string]string{"base": s.base, "samples": dir, "database": db, "lock": filepath.Join(dir, "writer.lock")}[kind]
+			original := map[string]string{}
+			for name, id := range s.storageIDs {
+				original[name] = id
+			}
+			if err := os.Rename(path, path+".prior"); err != nil {
+				t.Fatal(err)
+			}
+			if kind == "base" || kind == "samples" {
+				if err := os.MkdirAll(dir, 0700); err != nil {
+					t.Fatal(err)
+				}
+				for _, leaf := range []string{db, filepath.Join(dir, "writer.lock")} {
+					if err := os.WriteFile(leaf, nil, 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			} else if err := os.WriteFile(path, nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.checkSampleStorage(nil); err == nil || !strings.Contains(err.Error(), "sample storage path identity changed") {
+				t.Fatal("stable identity replacement was not refused", kind, err)
+			}
+			if !reflect.DeepEqual(s.storageIDs, original) {
+				t.Fatal("refusal replaced the original stable identity pins", s.storageIDs, original)
+			}
+		})
+	}
+}
+
 func TestSampleStoreTypedCorruptionAndConservation(t *testing.T) {
 	for _, kind := range []string{"text_counter", "extra_row", "negative_counter", "coherent_bad_payload", "grant_mismatch", "unknown_mismatch"} {
 		t.Run(kind, func(t *testing.T) {
