@@ -45,6 +45,9 @@ func newAdaptiveWorkerFixture(t *testing.T, files int) *adaptiveWorkerFixture {
 			}
 			return batch, err
 		}})
+	// Join finite state observations before this cadence fixture allows
+	// competing writes or advances its paired clocks.
+	f.options.inventoryStatePhaseStarted = returnedInventoryStateFinitePhaseForFixture
 	return f
 }
 
