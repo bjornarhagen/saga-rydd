@@ -28,56 +28,57 @@ var ErrRuntimeObservationClock = errors.New("service runtime observation cannot 
 // No loaded unit or process is authenticated, and no dynamic field authorizes
 // activation, source access or cleanup. Failed operations omit dynamic positives.
 type RuntimeObservation struct {
-	Contract                     string             `json:"contract"`
-	Platform                     string             `json:"platform"`
-	ManagerProfile               string             `json:"manager_profile"`
-	Label                        string             `json:"label"`
-	Directory                    string             `json:"directory"`
-	DescriptorPath               string             `json:"descriptor_path"`
-	DescriptorSHA256             string             `json:"descriptor_sha256"`
-	Executable                   string             `json:"executable"`
-	ConfigFile                   string             `json:"config_file"`
-	StateDir                     string             `json:"state_dir"`
-	RuntimeDir                   string             `json:"runtime_dir"`
-	Argv                         []string           `json:"argv"`
-	Env                          map[string]string  `json:"env"`
-	Supported                    bool               `json:"supported"`
-	Status                       string             `json:"status"`
-	ArtifactStatus               string             `json:"artifact_status"`
-	Manager                      ManagerObservation `json:"manager"`
-	ManagerUniqueName            string             `json:"manager_unique_name"`
-	UnitObjectPath               string             `json:"unit_object_path"`
-	LookupAttempted              bool               `json:"lookup_attempted"`
-	LookupRechecked              bool               `json:"lookup_rechecked"`
-	LoadedBindingMatched         *bool              `json:"loaded_binding_matched"`
-	BindingCheckedAt             *time.Time         `json:"binding_checked_at"`
-	UnitObservedAt               *time.Time         `json:"unit_observed_at"`
-	ServiceObservedAt            *time.Time         `json:"service_observed_at"`
-	FinishedAt                   *time.Time         `json:"finished_at"`
-	ActiveState                  *string            `json:"active_state"`
-	SubState                     *string            `json:"sub_state"`
-	ServiceResult                *string            `json:"service_result"`
-	MainPID                      *uint32            `json:"main_pid"`
-	InvocationID                 *string            `json:"invocation_id"`
-	InvocationIDStatus           string             `json:"invocation_id_status"`
-	ManagerCalls                 int                `json:"manager_calls"`
-	ManagerReplyBytes            int                `json:"manager_reply_bytes"`
-	RuntimeStateObserved         bool               `json:"runtime_state_observed"`
-	SequentialObservation        bool               `json:"sequential_observation"`
-	Running                      *bool              `json:"running"`
-	Stopped                      *bool              `json:"stopped"`
-	ApplicationReady             *bool              `json:"application_ready"`
-	RuntimeStateVerified         bool               `json:"runtime_state_verified"`
-	LoadedOriginVerified         bool               `json:"loaded_origin_verified"`
-	ProcessIdentityVerified      bool               `json:"process_identity_verified"`
-	ApplicationReadinessVerified bool               `json:"application_readiness_verified"`
-	UnitLoadRequested            bool               `json:"unit_load_requested"`
-	StartStopRequested           bool               `json:"start_stop_requested"`
-	ScanningRequested            bool               `json:"scanning_requested"`
-	EnablementChanged            bool               `json:"enablement_changed"`
-	ReloadRequested              bool               `json:"reload_requested"`
-	DescriptorChanged            bool               `json:"descriptor_changed"`
-	SourceContentsOpened         bool               `json:"source_contents_opened"`
+	ScannerLifecycleIntent       *ScannerLifecycleIntent `json:"scanner_lifecycle_intent,omitempty"`
+	Contract                     string                  `json:"contract"`
+	Platform                     string                  `json:"platform"`
+	ManagerProfile               string                  `json:"manager_profile"`
+	Label                        string                  `json:"label"`
+	Directory                    string                  `json:"directory"`
+	DescriptorPath               string                  `json:"descriptor_path"`
+	DescriptorSHA256             string                  `json:"descriptor_sha256"`
+	Executable                   string                  `json:"executable"`
+	ConfigFile                   string                  `json:"config_file"`
+	StateDir                     string                  `json:"state_dir"`
+	RuntimeDir                   string                  `json:"runtime_dir"`
+	Argv                         []string                `json:"argv"`
+	Env                          map[string]string       `json:"env"`
+	Supported                    bool                    `json:"supported"`
+	Status                       string                  `json:"status"`
+	ArtifactStatus               string                  `json:"artifact_status"`
+	Manager                      ManagerObservation      `json:"manager"`
+	ManagerUniqueName            string                  `json:"manager_unique_name"`
+	UnitObjectPath               string                  `json:"unit_object_path"`
+	LookupAttempted              bool                    `json:"lookup_attempted"`
+	LookupRechecked              bool                    `json:"lookup_rechecked"`
+	LoadedBindingMatched         *bool                   `json:"loaded_binding_matched"`
+	BindingCheckedAt             *time.Time              `json:"binding_checked_at"`
+	UnitObservedAt               *time.Time              `json:"unit_observed_at"`
+	ServiceObservedAt            *time.Time              `json:"service_observed_at"`
+	FinishedAt                   *time.Time              `json:"finished_at"`
+	ActiveState                  *string                 `json:"active_state"`
+	SubState                     *string                 `json:"sub_state"`
+	ServiceResult                *string                 `json:"service_result"`
+	MainPID                      *uint32                 `json:"main_pid"`
+	InvocationID                 *string                 `json:"invocation_id"`
+	InvocationIDStatus           string                  `json:"invocation_id_status"`
+	ManagerCalls                 int                     `json:"manager_calls"`
+	ManagerReplyBytes            int                     `json:"manager_reply_bytes"`
+	RuntimeStateObserved         bool                    `json:"runtime_state_observed"`
+	SequentialObservation        bool                    `json:"sequential_observation"`
+	Running                      *bool                   `json:"running"`
+	Stopped                      *bool                   `json:"stopped"`
+	ApplicationReady             *bool                   `json:"application_ready"`
+	RuntimeStateVerified         bool                    `json:"runtime_state_verified"`
+	LoadedOriginVerified         bool                    `json:"loaded_origin_verified"`
+	ProcessIdentityVerified      bool                    `json:"process_identity_verified"`
+	ApplicationReadinessVerified bool                    `json:"application_readiness_verified"`
+	UnitLoadRequested            bool                    `json:"unit_load_requested"`
+	StartStopRequested           bool                    `json:"start_stop_requested"`
+	ScanningRequested            bool                    `json:"scanning_requested"`
+	EnablementChanged            bool                    `json:"enablement_changed"`
+	ReloadRequested              bool                    `json:"reload_requested"`
+	DescriptorChanged            bool                    `json:"descriptor_changed"`
+	SourceContentsOpened         bool                    `json:"source_contents_opened"`
 }
 
 // ObserveRuntime reads only an exact existing descriptor/coordinator and an
@@ -112,7 +113,7 @@ func observeRuntime(ctx context.Context, spec InstallSpec, hooks runtimeObservat
 	if err != nil {
 		return r, err
 	}
-	d, err := Build(spec.Service)
+	d, err := buildLifecycle(spec.Service)
 	if err != nil {
 		return r, err
 	}
@@ -125,7 +126,7 @@ func observeRuntime(ctx context.Context, spec InstallSpec, hooks runtimeObservat
 		}
 	}
 	digest := sha256.Sum256([]byte(d.Content))
-	r = RuntimeObservation{Contract: RuntimeObservationContract, Platform: d.Platform, ManagerProfile: d.ManagerProfile, Label: d.Label, Directory: spec.Directory, DescriptorPath: filepath.Join(spec.Directory, d.Filename), DescriptorSHA256: hex.EncodeToString(digest[:]), Executable: d.Executable, ConfigFile: d.ConfigFile, StateDir: d.StateDir, RuntimeDir: d.RuntimeDir, Argv: append([]string{}, d.Argv...), Env: d.Env, Supported: d.Platform == "linux", Status: "unexamined", ArtifactStatus: "unexamined", InvocationIDStatus: "unexamined", Manager: ManagerObservation{Status: "not_checked", UnitPath: []string{}}}
+	r = RuntimeObservation{Contract: lifecycleContract(d, RuntimeObservationContract, ScannerObservationContract), ScannerLifecycleIntent: d.ScannerLifecycleIntent, Platform: d.Platform, ManagerProfile: d.ManagerProfile, Label: d.Label, Directory: spec.Directory, DescriptorPath: filepath.Join(spec.Directory, d.Filename), DescriptorSHA256: hex.EncodeToString(digest[:]), Executable: d.Executable, ConfigFile: d.ConfigFile, StateDir: d.StateDir, RuntimeDir: d.RuntimeDir, Argv: append([]string{}, d.Argv...), Env: d.Env, Supported: d.Platform == "linux", Status: "unexamined", ArtifactStatus: "unexamined", InvocationIDStatus: "unexamined", Manager: ManagerObservation{Status: "not_checked", UnitPath: []string{}}}
 	defer func() {
 		if resultErr != nil {
 			r.Status = "unavailable"

@@ -4,7 +4,7 @@ A quiet storage cleanup companion for macOS and Linux. Part of Saga.
 
 Rydd will gradually discover developer clutter and duplicate files, explain what can be removed, and help reclaim space through reviewed actions or explicitly enabled automatic policies.
 
-**Status: experimental read-only inventory and explicit hashing.** The worker can scan explicitly selected fixture directories in bounded, resumable batches and save metadata, skip reasons and directory reconciliation markers in SQLite. Use `scan -d PATH` for a foreground scan, or `daemon --experimental-scan` for configured roots; ordinary `daemon` stays idle. Durable dispatch cadence, a daily batch cap, charged scanner API allowances, child-entry pacing and WAL backpressure are enforced; saved largest-file and selected-directory size reports and review-required `node_modules` candidates are available. Explicit full-file hashing requires separate exact consent and one bounded invocation at a time. Process CPU observations, cooperative dispatch backoff, source-thread priority requests and sparse experimental source-power admission are live; exact idle-only service descriptors can be installed and inspected, with explicit start/stop requests and descriptor removal. Full CPU/I/O/power quotas, runtime verification and cleanup remain pending. Nothing runs in the background when you clone, build or initialize this repository.
+**Status: experimental read-only inventory and explicit hashing.** The worker can scan explicitly selected fixture directories in bounded, resumable batches and save metadata, skip reasons and directory reconciliation markers in SQLite. Use `scan -d PATH` for a foreground scan, or `daemon --experimental-scan` for configured roots; ordinary `daemon` stays idle. Durable dispatch cadence, a daily batch cap, charged scanner API allowances, child-entry pacing and WAL backpressure are enforced; saved largest-file and selected-directory size reports and review-required `node_modules` candidates are available. Explicit full-file hashing requires separate exact consent and one bounded invocation at a time. Process CPU observations, cooperative dispatch backoff, source-thread priority requests and sparse experimental source-power admission are live; default idle service descriptors can be installed and inspected, with explicit start/stop requests and descriptor removal. Scanner-profile descriptors and lifecycle requests require explicit `--experimental-scan`. Full CPU/I/O/power quotas, runtime verification and cleanup remain pending. Nothing runs in the background when you clone, build or initialize this repository.
 
 For humans and AI: readable output by default, versioned JSON with `--json`, and `rydd capabilities --json` for discovery. Status separates live process CPU observations from saved experimental-turn feedback. Interrupted tracked turns require explicit writer recovery and retain a one-hour cooldown; saved views never recover them. Scanner metadata API counters help inspect background work. Explicit hash runs space requested bytes using the configured read ceiling, with immutable consent and full reservation charges. See the [CLI contract](docs/cli.md). The [finite generated resource harness](experiments/backgroundresources/README.md) measures native worker CPU, peak memory, control/report latency and qualified Linux kernel I/O with separate observer overhead; hourly and soak acceptance remain open. Generated [wide/deep topology pilots](experiments/backgroundtopology/results/README.md) retain complete and partial compact-background evidence; million-entry acceptance remains open.
 
@@ -489,7 +489,29 @@ rydd service preview --executable /absolute/path/to/rydd
 rydd --data-dir /path/to/private/state service preview --executable /absolute/path/to/rydd --json
 ```
 
-This proposes an idle-only launchd or systemd user descriptor. It binds the exact executable, configuration, state and control-runtime paths. It renders plain `daemon`, with no scanner. It opens no configuration, state or executable contents, writes no descriptor and invokes no service manager. The output declares a supported profile; installed support and future executable identity are unverified.
+Without a scanner selector, this proposes an idle launchd or systemd user descriptor. It binds the exact executable, configuration, state and control-runtime paths. It renders plain `daemon`, with no scanner. It opens no configuration, state or executable contents, writes no descriptor and invokes no service manager. The output declares a supported profile; installed support and future executable identity are unverified.
+
+## Explicit scanner service profile
+
+Use `--experimental-scan` on preview or any lifecycle request to select the scanner profile: `install`, `status`, `start`, `stop`, `runtime-status`, `uninstall`, `enable-login` and `disable-login`. Omitting the selector or using exact `--experimental-scan=false` keeps idle.
+
+```sh
+rydd service preview --executable /absolute/path/to/rydd --experimental-scan --json
+rydd service install --executable /absolute/path/to/rydd --experimental-scan
+rydd service status --executable /absolute/path/to/rydd --experimental-scan
+rydd service start --executable /absolute/path/to/rydd --experimental-scan
+rydd service stop --executable /absolute/path/to/rydd --experimental-scan
+rydd service runtime-status --executable /absolute/path/to/rydd --experimental-scan
+rydd service enable-login --executable /absolute/path/to/rydd --experimental-scan
+rydd service disable-login --executable /absolute/path/to/rydd --experimental-scan
+rydd service uninstall --executable /absolute/path/to/rydd --experimental-scan
+```
+
+Use the same executable, data directory, service directory and profile on every lifecycle request. Invalid selector values or duplicate aliases refuse before path resolution. The scanner descriptor appends exactly one flag to the frozen worker arguments. Preview still writes nothing and calls no manager.
+
+Scanner v2 preview and lifecycle intent report API availability, not installed-manager support, configured-root permission, resource enforcement or observed scanning. Publication, a Linux login link, an explicit start request and runtime observation have separate outcomes. macOS login placement can start the selected worker at a future login. Linux preflight can load a unit or activate local broker infrastructure. macOS request replies leave loaded-registration origin unknown.
+
+Opposite-profile artifact bytes and mismatching typed Linux loaded settings refuse. There is no automatic transition, adoption or silent update. Stop preserves the descriptor/login effects; removal sends no stop request. Inspect uncertain outcomes in the same scope before deciding to retry. See the [scanner service contract](docs/cli.md#explicit-scanner-service-profile).
 
 Installing a descriptor in a login service directory can affect future logins. Exact artifact installation/status is available below; explicit start/stop requests are available below; exact descriptor removal is available below. The worker would update normal root/recovery bookkeeping when started. Scheduling hints supplement resource pacing; they do not prove effective CPU/I/O priority or hourly limits. See the [service preview contract](docs/cli.md#user-service-descriptor-preview).
 
@@ -511,7 +533,7 @@ rydd service start --executable /absolute/path/to/rydd
 rydd service stop --executable /absolute/path/to/rydd
 ```
 
-Use the exact installed spec and selected data directory. These send one explicit request for the idle service. A queued Linux job or successful macOS client reply is historical acceptance evidence; running/stopped state remains unknown. Linux checks declared loaded settings; macOS addresses the fixed current-user managed label without loaded-origin proof. Normal manager dependencies and preflight bookkeeping can be affected. Stop preserves the descriptor and its future-login effects. Inspect an uncertain reply before deciding to retry. See the [request contract](docs/cli.md#explicit-idle-service-start-and-stop-requests).
+Use the exact installed spec and selected data directory. Without a scanner selector, these send one explicit request for the idle service. A queued Linux job or successful macOS client reply is historical acceptance evidence; running/stopped state remains unknown. Linux checks declared loaded settings; macOS addresses the fixed current-user managed label without loaded-origin proof. Normal manager dependencies and preflight bookkeeping can be affected. Stop preserves the descriptor and its future-login effects. Inspect an uncertain reply before deciding to retry. See the [request contract](docs/cli.md#explicit-idle-service-start-and-stop-requests).
 
 ## Change the selected Linux login link
 

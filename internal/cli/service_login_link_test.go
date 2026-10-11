@@ -23,7 +23,7 @@ func TestServiceLoginLinkCLIStrictArgumentsBeforeAccess(t *testing.T) {
 			{}, {"--executable", "/a", "--executable=/b"},
 			{"--executable", "/a", "--directory", "/a", "--directory=/b"},
 			{"--executable", "/a", "--directory="},
-			{"--executable", "/a", "extra"}, {"--executable", "/a", "--experimental-scan"},
+			{"--executable", "/a", "extra"}, {"--executable", "/a", "--experimental-scan=invalid"},
 			{"--executable", "/a", "--now=false"}, {"--executable", "/a", "--force"},
 			{"--executable", "/a", "--enable-login=false"}, {"--executable", "/a", "--disable-login"},
 			{"--executable", "--json"}, {"-executable", "-json"},

@@ -17,8 +17,8 @@ import (
 )
 
 type serviceHost struct {
-	GOOS, HomeDir, XDGConfigHome, XDGRuntimeDir string
-	UID                                         int
+	GOOS, HomeDir, XDGConfigHome, XDGRuntimeDir, RuntimeDir string
+	UID                                                     int
 }
 
 // The manager's directory is independent of the child's selected data directory.
@@ -43,7 +43,10 @@ func serviceInstallSpec(paths config.Paths, executable, directory string, host s
 		}
 		busSocket = filepath.Join(base, "bus")
 	}
-	runtimeDir := os.Getenv("RYDD_RUNTIME_DIR")
+	runtimeDir := host.RuntimeDir
+	if runtimeDir == "" {
+		runtimeDir = os.Getenv("RYDD_RUNTIME_DIR")
+	}
 	if runtimeDir == "" {
 		runtimeDir = "/tmp"
 	}
@@ -53,6 +56,7 @@ func serviceInstallSpec(paths config.Paths, executable, directory string, host s
 	}
 }
 
+// Retained private idle parser; actual profile-aware routes use the selection below.
 func serviceLifecycleArguments(args []string) (action, executable, directory string, err error) {
 	if len(args) == 0 || (args[0] != "install" && args[0] != "status" && args[0] != "runtime-status" && args[0] != "start" && args[0] != "stop" && args[0] != "uninstall" && args[0] != "enable-login" && args[0] != "disable-login") {
 		return "", "", "", usageError{errors.New("use service preview, install, status, runtime-status, start, stop, uninstall, enable-login or disable-login with --executable ABSOLUTE_PATH")}
@@ -79,23 +83,84 @@ func serviceLifecycleArguments(args []string) (action, executable, directory str
 	return action, executable, directory, nil
 }
 
+func serviceLifecycleSelection(args []string) (action, executable, directory string, profile service.Profile, err error) {
+	if len(args) == 0 || (args[0] != "install" && args[0] != "status" && args[0] != "runtime-status" && args[0] != "start" && args[0] != "stop" && args[0] != "uninstall" && args[0] != "enable-login" && args[0] != "disable-login") {
+		return "", "", "", "", usageError{errors.New("use service preview, install, status, runtime-status, start, stop, uninstall, enable-login or disable-login with --executable ABSOLUTE_PATH")}
+	}
+	action = args[0]
+	flags := flag.NewFlagSet("service "+action, flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	flags.StringVar(&executable, "executable", "", "exact trusted executable")
+	flags.StringVar(&directory, "directory", "", "exact supported user-service directory")
+	scan := flags.Bool("experimental-scan", false, "select experimental inventory profile")
+	if argumentErr := validateServiceOptionArguments(args[1:], true); argumentErr != nil {
+		return "", "", "", "", usageError{argumentErr}
+	}
+	if parseErr := flags.Parse(args[1:]); parseErr != nil {
+		return "", "", "", "", usageError{parseErr}
+	}
+	if flags.NArg() != 0 || executable == "" {
+		return "", "", "", "", usageError{errors.New("service requires one --executable ABSOLUTE_PATH and at most one --directory ABSOLUTE_PATH")}
+	}
+	// A supplied empty directory is distinct from omission.
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "directory" && directory == "" {
+			err = usageError{errors.New("service --directory must not be empty")}
+		}
+	})
+	if err != nil {
+		return "", "", "", "", err
+	}
+	profile = service.ProfileIdle
+	if *scan {
+		profile = service.ProfileExperimentalInventory
+	}
+	return action, executable, directory, profile, nil
+}
+
+type serviceDispatchHooks struct {
+	host func() (serviceHost, error)
+	run  func(context.Context, string, service.InstallSpec) (any, error)
+}
+
 func dispatchService(ctx context.Context, args []string, paths config.Paths) (any, error) {
+	return dispatchServiceWithHooks(ctx, args, paths, serviceDispatchHooks{})
+}
+
+// Private generated fixtures can supply frozen host strings and capture the
+// exact route/spec. Neither argv nor the environment can select these hooks.
+func dispatchServiceWithHooks(ctx context.Context, args []string, paths config.Paths, hooks serviceDispatchHooks) (any, error) {
 	if len(args) > 0 && args[0] == "preview" {
 		return servicePreview(ctx, args, paths)
 	}
-	action, executable, directory, err := serviceLifecycleArguments(args)
+	action, executable, directory, profile, err := serviceLifecycleSelection(args)
 	if err != nil {
 		return nil, err
 	}
 	if err = ctx.Err(); err != nil {
 		return nil, err
 	}
-	homeDir, err := os.UserHomeDir()
+	var host serviceHost
+	if hooks.host != nil {
+		host, err = hooks.host()
+	} else {
+		var homeDir string
+		homeDir, err = os.UserHomeDir()
+		if err == nil {
+			host = serviceHost{GOOS: runtime.GOOS, HomeDir: homeDir, XDGConfigHome: os.Getenv("XDG_CONFIG_HOME"), XDGRuntimeDir: os.Getenv("XDG_RUNTIME_DIR"), RuntimeDir: os.Getenv("RYDD_RUNTIME_DIR"), UID: os.Geteuid()}
+		}
+	}
 	if err != nil {
 		return nil, errors.New("user home directory is unavailable for service placement")
 	}
-	host := serviceHost{GOOS: runtime.GOOS, HomeDir: homeDir, XDGConfigHome: os.Getenv("XDG_CONFIG_HOME"), XDGRuntimeDir: os.Getenv("XDG_RUNTIME_DIR"), UID: os.Geteuid()}
+	if host.RuntimeDir == "" {
+		host.RuntimeDir = "/tmp"
+	}
 	spec := serviceInstallSpec(paths, executable, directory, host)
+	spec.Service.Profile = profile
+	if hooks.run != nil {
+		return hooks.run(ctx, action, spec)
+	}
 	if action == "runtime-status" {
 		return runServiceRuntimeObservation(ctx, spec)
 	}
@@ -154,9 +219,19 @@ func printServiceResult(out io.Writer, result any) error {
 	if err != nil {
 		return err
 	}
+	if err = printServiceScannerQualification(w, r.ScannerLifecycleIntent); err != nil {
+		return err
+	}
 	if r.FutureLoginMayStart && (r.ArtifactStatus == "exact" || r.Publication == "uncertain") {
-		if _, err = fmt.Fprintln(w, "This macOS login-directory publication can start the idle worker at a\nfuture login. Plain daemon loads configuration and updates root/recovery\nbookkeeping; it does not enable the scanner."); err != nil {
-			return err
+		if r.ScannerLifecycleIntent != nil {
+			_, err = fmt.Fprintln(w, "This macOS publication can request the scanner at a future login.\nConfigured roots and resource behavior remain unverified.")
+			if err != nil {
+				return err
+			}
+		} else {
+			if _, err = fmt.Fprintln(w, "This macOS login-directory publication can start the idle worker at a\nfuture login. Plain daemon loads configuration and updates root/recovery\nbookkeeping; it does not enable the scanner."); err != nil {
+				return err
+			}
 		}
 	}
 	for _, directory := range r.DirectoriesCreated {
@@ -183,6 +258,9 @@ func serviceReplyMessage(result any) string {
 	}
 	if r, ok := result.(service.RuntimeResult); ok && r.DescriptorPath != "" {
 		message := fmt.Sprintf("Service %s request status is %s for managed label %q. Request attempted: %t. Running/stopped state is unverified; do not automatically retry an uncertain request. Descriptor: %q. Configuration, inventory/history and executable were preserved", r.Action, r.RequestStatus, r.Label, r.RequestAttempted, r.DescriptorPath)
+		if r.ScannerLifecycleIntent != nil {
+			message += fmt.Sprintf("; selected scanner start requested: %t; loaded profile/origin and current scanning remain unverified", r.ScanningRequested)
+		}
 		if r.UnitLoadAttempted {
 			message += "; preflight unit loading was attempted and manager bookkeeping can change"
 		}
@@ -286,4 +364,12 @@ func serviceMachineFailure(out, errOut io.Writer, result any, err error) int {
 		fmt.Fprintln(errOut, serviceReplyMessage(result))
 	}
 	return 1
+}
+
+func printServiceScannerQualification(out io.Writer, intent *service.ScannerLifecycleIntent) error {
+	if intent == nil {
+		return nil
+	}
+	_, err := fmt.Fprintln(out, "Selected profile: experimental_inventory_v1. A future descriptor start may\nscan configured roots. API support does not verify installed/native manager\nbehavior, loaded origin, current root permission or representative resources.\nNo hashing or cleanup authority is granted.")
+	return err
 }

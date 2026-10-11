@@ -7,7 +7,11 @@ import (
 
 func renderSystemd(descriptor Descriptor) string {
 	var content strings.Builder
-	content.WriteString("[Unit]\nDescription=Saga - Rydd idle worker\n\n[Service]\nType=exec\n")
+	if descriptor.ScannerIntent == nil {
+		content.WriteString("[Unit]\nDescription=Saga - Rydd idle worker\n\n[Service]\nType=exec\n")
+	} else {
+		content.WriteString("[Unit]\nDescription=Saga - Rydd experimental inventory worker\n\n[Service]\nType=exec\n")
+	}
 	content.WriteString("ExecStart=")
 	for index, argument := range descriptor.Argv {
 		if index == 0 {

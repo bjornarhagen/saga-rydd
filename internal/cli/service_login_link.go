@@ -31,6 +31,9 @@ func runServiceLoginLink(ctx context.Context, action string, spec service.Instal
 
 func printServiceLoginLink(out io.Writer, r service.LoginLinkResult) error {
 	w := &reviewOutput{writer: out}
+	if err := printServiceScannerQualification(w, r.ScannerLifecycleIntent); err != nil {
+		return err
+	}
 	if _, err := fmt.Fprintf(w, "SERVICE %s LINK\n\nSelected link change: %s\nChange attempted: %t\nChange syscall completed: %t\nLink parent sync completed: %t\nCreated directory parent sync completed: %t\n\nSelected link: %q\nExact target: %q\nLast checked selected link: %s\nLink present at that check: %s\nLink checked at: %s\nRemoved held link observed: %s\nDescriptor: %q\nDescriptor SHA-256: %s\n\n", strings.ToUpper(r.Action), r.ChangeStatus, r.ChangeAttempted, r.ChangeCompleted, r.SyncCompleted, r.DirectorySyncCompleted, r.LinkPath, r.LinkTarget, r.LinkStatus, serviceLinkBool(r.LinkPresent), serviceLinkTime(r.LinkObservedAt), removalEvidence(r.RemovalObserved), r.DescriptorPath, r.DescriptorSHA256); err != nil {
 		return err
 	}

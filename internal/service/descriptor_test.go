@@ -360,3 +360,190 @@ func TestServiceDescriptorDeterministicAndEnvironmentIndependent(t *testing.T) {
 		}
 	}
 }
+
+func scannerProfileSpecs() []Spec {
+	darwin, linux := unifiedSpec("darwin"), unifiedSpec("linux")
+	split := linux
+	split.Paths = config.Paths{ConfigFile: "/config $%\"'\\&/saga-rydd/config.toml", StateDir: "/state $%\"'\\&/saga-rydd"}
+	return []Spec{darwin, linux, split}
+}
+
+func TestServiceProfileIdleCompatibility(t *testing.T) {
+	for index, spec := range scannerProfileSpecs() {
+		t.Run(strconv.Itoa(index), func(t *testing.T) {
+			zero, err := Build(spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			spec.Profile = ProfileIdle
+			explicit, err := Build(spec)
+			guarded, guardErr := BuildIdle(spec)
+			before, beforeErr := json.Marshal(zero)
+			after, afterErr := json.Marshal(explicit)
+			if err != nil || guardErr != nil || beforeErr != nil || afterErr != nil || !reflect.DeepEqual(zero, explicit) || !reflect.DeepEqual(explicit, guarded) || string(before) != string(after) || strings.Contains(string(after), "\"scanner_intent\"") || explicit.Contract != Contract || explicit.InstallationPerformed || explicit.ActivationPerformed || explicit.ScanningEnabled {
+				t.Fatal("explicit idle changed legacy descriptor or JSON", zero, explicit, guarded, err, guardErr)
+			}
+			if strings.Contains(explicit.Content, "--experimental-scan") || (spec.GOOS == "linux" && !strings.Contains(explicit.Content, "Description=Saga - Rydd idle worker\n")) {
+				t.Fatal("idle content changed profile", explicit.Content)
+			}
+			var fields map[string]any
+			if json.Unmarshal(after, &fields) != nil || len(fields) != 15 {
+				t.Fatal("idle JSON gained a field", string(after))
+			}
+		})
+	}
+}
+
+func TestServiceProfileClosedSelection(t *testing.T) {
+	for _, invalid := range []Profile{"unknown", "experimental_inventory_v2", "Experimental_inventory_v1", " idle_v1", "idle_v1\x00", Profile(strings.Repeat("x", 4097))} {
+		spec := unifiedSpec("linux")
+		spec.Profile = invalid
+		assertServiceSpecRefused(t, spec)
+		guarded, err := BuildIdle(spec)
+		if !errors.Is(err, ErrSpec) || !reflect.DeepEqual(guarded, Descriptor{}) {
+			t.Fatal("unknown profile reached operational builder", guarded, err)
+		}
+	}
+}
+
+func TestServiceScannerExactArgv(t *testing.T) {
+	for index, spec := range scannerProfileSpecs() {
+		t.Run(strconv.Itoa(index), func(t *testing.T) {
+			idle, err := Build(spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			spec.Profile = ProfileExperimentalInventory
+			scanner, err := Build(spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := append(append([]string{}, idle.Argv...), "--experimental-scan")
+			if !reflect.DeepEqual(scanner.Argv, want) || !reflect.DeepEqual(scanner.Env, idle.Env) || scanner.Label != idle.Label || scanner.Filename != idle.Filename || scanner.Executable != idle.Executable || scanner.ConfigFile != idle.ConfigFile || scanner.StateDir != idle.StateDir || scanner.RuntimeDir != idle.RuntimeDir || scanner.ManagerProfile != idle.ManagerProfile {
+				t.Fatal("scanner gained authority beyond the exact trailing flag", scanner, idle)
+			}
+			wantIntent := &ScannerIntent{Contract: "service_scanner_profile_intent_v2", WorkerProfile: ProfileExperimentalInventory, ActivationFlag: "--experimental-scan", ConfigurationScope: "configured_roots_at_future_worker_start", DescriptorOnly: true, LifecycleSupported: true}
+			if scanner.Contract != ScannerContract || !reflect.DeepEqual(scanner.ScannerIntent, wantIntent) || scanner.InstallationPerformed || scanner.ActivationPerformed || scanner.ScanningEnabled || strings.Count(strings.Join(scanner.Argv, "\x00"), "--experimental-scan") != 1 {
+				t.Fatal("scanner intent claims execution or lost its contract", scanner)
+			}
+			if guarded, err := BuildIdle(spec); !errors.Is(err, ErrSpec) || !reflect.DeepEqual(guarded, Descriptor{}) {
+				t.Fatal("scanner admitted by idle operational guard", guarded, err)
+			}
+		})
+	}
+}
+
+func TestServiceScannerLiteralEncoding(t *testing.T) {
+	for index, spec := range scannerProfileSpecs() {
+		t.Run(strconv.Itoa(index), func(t *testing.T) {
+			spec.Profile = ProfileExperimentalInventory
+			descriptor, err := Build(spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if spec.GOOS == "darwin" {
+				var plist plistNode
+				if err := xml.Unmarshal([]byte(descriptor.Content), &plist); err != nil {
+					t.Fatal(err)
+				}
+				values := plistDictionary(t, plist.Children[0])
+				var args []string
+				for _, node := range values["ProgramArguments"].Children {
+					if node.XMLName.Local != "string" {
+						t.Fatal("non-string argument", node)
+					}
+					args = append(args, node.Text)
+				}
+				env := map[string]string{}
+				for name, node := range plistDictionary(t, values["EnvironmentVariables"]) {
+					env[name] = node.Text
+				}
+				if !reflect.DeepEqual(args, descriptor.Argv) || !reflect.DeepEqual(env, descriptor.Env) || len(values) != 8 {
+					t.Fatal("scanner XML changed literal scope", args, env)
+				}
+			} else {
+				var starts []string
+				env := map[string]string{}
+				for _, line := range strings.Split(descriptor.Content, "\n") {
+					if value, ok := strings.CutPrefix(line, "ExecStart="); ok {
+						starts = append(starts, value)
+					}
+					if value, ok := strings.CutPrefix(line, "Environment="); ok {
+						items := systemdQuotedItems(t, value)
+						if len(items) != 1 {
+							t.Fatal("unexpected environment item", items)
+						}
+						name, content, ok := strings.Cut(items[0], "=")
+						if !ok {
+							t.Fatal("invalid environment item", items)
+						}
+						if _, found := env[name]; found {
+							t.Fatal("duplicate environment name", name)
+						}
+						env[name] = content
+					}
+				}
+				if len(starts) != 1 {
+					t.Fatal("scanner has more than one command", starts)
+				}
+				args := systemdQuotedItems(t, starts[0])
+				if len(args) == 0 || !strings.HasPrefix(args[0], ":/") {
+					t.Fatal("scanner lost no-environment-expansion prefix", args)
+				}
+				args[0] = args[0][1:]
+				if !reflect.DeepEqual(args, descriptor.Argv) || !reflect.DeepEqual(env, descriptor.Env) || !strings.Contains(descriptor.Content, "Description=Saga - Rydd experimental inventory worker\n") {
+					t.Fatal("scanner systemd literals changed", args, env)
+				}
+			}
+		})
+	}
+	for _, executable := range []string{"/bad\"quote", "/bad'quote", "/bad\\slash"} {
+		spec := unifiedSpec("linux")
+		spec.Profile, spec.Executable = ProfileExperimentalInventory, executable
+		assertServiceSpecRefused(t, spec)
+	}
+}
+
+func TestServiceScannerBoundsAndDeterminism(t *testing.T) {
+	t.Setenv("RYDD_RUNTIME_DIR", "/unselected-runtime")
+	t.Setenv("XDG_CONFIG_HOME", "/unselected-config")
+	t.Setenv("XDG_STATE_HOME", "/unselected-state")
+	for _, spec := range scannerProfileSpecs() {
+		spec.Profile = ProfileExperimentalInventory
+		first, err := Build(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for range 3 {
+			next, err := Build(spec)
+			if err != nil || !reflect.DeepEqual(first, next) {
+				t.Fatal("scanner build used environment or changed", next, err)
+			}
+		}
+		first.Argv[0], first.Env["RYDD_RUNTIME_DIR"], first.ScannerIntent.WorkerProfile = "changed", "changed", "changed"
+		fresh, err := Build(spec)
+		if err != nil || fresh.Argv[0] != spec.Executable || fresh.Env["RYDD_RUNTIME_DIR"] != spec.RuntimeDir || fresh.ScannerIntent.WorkerProfile != ProfileExperimentalInventory {
+			t.Fatal("returned mutation changed a later scanner build", fresh, err)
+		}
+		for _, invalid := range []string{"/bad\xff", "/bad\x00", "/bad\n", "/bad\u202e", "/bad\uffff", "/" + strings.Repeat("a", 4096)} {
+			for _, field := range []string{"executable", "configuration", "state", "runtime"} {
+				bad := spec
+				switch field {
+				case "executable":
+					bad.Executable = invalid
+				case "configuration":
+					bad.Paths.ConfigFile = invalid
+				case "state":
+					bad.Paths.StateDir = invalid
+				case "runtime":
+					bad.RuntimeDir = invalid
+				}
+				assertServiceSpecRefused(t, bad)
+			}
+		}
+	}
+	maximum := Spec{GOOS: "darwin", Executable: "/" + strings.Repeat("&", 4095), Paths: config.Paths{ConfigFile: "/" + strings.Repeat("&", 4083) + "/config.toml", StateDir: "/" + strings.Repeat("&", 4083)}, RuntimeDir: "/" + strings.Repeat("&", 4095), Profile: ProfileExperimentalInventory}
+	if descriptor, err := Build(maximum); err != nil || len(descriptor.Content) > MaxDescriptorBytes {
+		t.Fatal("maximum scanner descriptor exceeds its unchanged bound", len(descriptor.Content), err)
+	}
+}

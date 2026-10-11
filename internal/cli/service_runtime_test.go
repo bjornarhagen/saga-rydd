@@ -24,7 +24,7 @@ func TestServiceRuntimeUsageBeforeManagerOrStorage(t *testing.T) {
 			{action, "--executable", "/generated/rydd", "--executable", "/other"},
 			{action, "--executable", "/generated/rydd", "--directory", ""},
 			{action, "--executable", "/generated/rydd", "--enable"},
-			{action, "--executable", "/generated/rydd", "--experimental-scan"},
+			{action, "--executable", "/generated/rydd", "--experimental-scan=invalid"},
 		} {
 			var out, diagnostic bytes.Buffer
 			argv := append([]string{"--data-dir", base, "service"}, args...)

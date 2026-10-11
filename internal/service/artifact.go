@@ -77,7 +77,7 @@ func lifecycle(ctx context.Context, spec InstallSpec, install bool, hooks artifa
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	descriptor, err := Build(spec.Service)
+	descriptor, err := buildLifecycle(spec.Service)
 	if err != nil {
 		return LifecycleResult{}, err
 	}
@@ -103,7 +103,7 @@ func lifecycle(ctx context.Context, spec InstallSpec, install bool, hooks artifa
 			return LifecycleResult{}, err
 		}
 	}
-	descriptor.Contract = LifecycleContract
+	descriptor.Contract = lifecycleContract(descriptor, LifecycleContract, ScannerLifecycleContract)
 	digest := sha256.Sum256([]byte(descriptor.Content))
 	r := LifecycleResult{Descriptor: descriptor, Action: "status", Directory: spec.Directory, DescriptorPath: filepath.Join(spec.Directory, descriptor.Filename), DescriptorSHA256: hex.EncodeToString(digest[:]), ArtifactStatus: "unexamined", Publication: "not_requested", DirectoriesCreated: []string{}, FutureLoginMayStart: spec.Service.GOOS == "darwin", Manager: ManagerObservation{Status: "not_checked", UnitPath: []string{}}}
 	if install {

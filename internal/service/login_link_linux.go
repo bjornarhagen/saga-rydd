@@ -28,7 +28,7 @@ func controlLoginLink(ctx context.Context, spec InstallSpec, action string, hook
 	if spec.Service.GOOS != "linux" || (action != "enable-login" && action != "disable-login") {
 		return LoginLinkResult{}, ErrSpec
 	}
-	d, err := Build(spec.Service)
+	d, err := buildLifecycle(spec.Service)
 	if err != nil {
 		return LoginLinkResult{}, err
 	}
@@ -46,7 +46,7 @@ func controlLoginLink(ctx context.Context, spec InstallSpec, action string, hook
 		return LoginLinkResult{}, ErrSpec
 	}
 	digest := sha256.Sum256([]byte(d.Content))
-	r := LoginLinkResult{Contract: LoginLinkContract, Action: action, Scope: "selected_default_target_dependency", Platform: d.Platform, ManagerProfile: d.ManagerProfile, Label: d.Label, Directory: spec.Directory, DescriptorPath: descriptorPath, DescriptorSHA256: hex.EncodeToString(digest[:]), Executable: d.Executable, ConfigFile: d.ConfigFile, StateDir: d.StateDir, RuntimeDir: d.RuntimeDir, Argv: append([]string{}, d.Argv...), Env: d.Env, Manager: ManagerObservation{Status: "not_checked", UnitPath: []string{}}, LinkPath: linkPath, LinkTarget: descriptorPath, LinkStatus: "unexamined", ChangeStatus: "not_requested", DirectoriesCreated: []string{}}
+	r := LoginLinkResult{Contract: lifecycleContract(d, LoginLinkContract, ScannerLoginLinkContract), ScannerLifecycleIntent: d.ScannerLifecycleIntent, Action: action, Scope: "selected_default_target_dependency", Platform: d.Platform, ManagerProfile: d.ManagerProfile, Label: d.Label, Directory: spec.Directory, DescriptorPath: descriptorPath, DescriptorSHA256: hex.EncodeToString(digest[:]), Executable: d.Executable, ConfigFile: d.ConfigFile, StateDir: d.StateDir, RuntimeDir: d.RuntimeDir, Argv: append([]string{}, d.Argv...), Env: d.Env, Manager: ManagerObservation{Status: "not_checked", UnitPath: []string{}}, LinkPath: linkPath, LinkTarget: descriptorPath, LinkStatus: "unexamined", ChangeStatus: "not_requested", DirectoriesCreated: []string{}}
 	g, err := openRuntimeGuard(ctx, filepath.Dir(filepath.Dir(spec.Directory)), spec.Directory, d)
 	if err != nil {
 		return r, err

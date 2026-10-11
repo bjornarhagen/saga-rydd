@@ -44,6 +44,9 @@ func serviceObservationTime(value *time.Time) string {
 
 func printServiceRuntimeObservation(out io.Writer, r service.RuntimeObservation) error {
 	w := &reviewOutput{writer: out}
+	if err := printServiceScannerQualification(w, r.ScannerLifecycleIntent); err != nil {
+		return err
+	}
 	matched, pid := "NOT RECORDED", "NOT RECORDED"
 	if r.LoadedBindingMatched != nil {
 		matched = strconv.FormatBool(*r.LoadedBindingMatched)

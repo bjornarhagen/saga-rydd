@@ -59,6 +59,13 @@ func printServiceRuntime(out io.Writer, r service.RuntimeResult) error {
 			return err
 		}
 	}
+	if r.ScannerLifecycleIntent != nil {
+		if err := printServiceScannerQualification(w, r.ScannerLifecycleIntent); err != nil {
+			return err
+		}
+		_, err := fmt.Fprintf(w, "Selected scanner start requested: %t. This is request-attempt evidence, not\ncurrent scanning. No enablement or reload was requested. macOS stop addresses\nthe fixed label with unknown loaded profile/origin. Configuration, history and\nexecutable contents were not opened. Inspect uncertain requests before retrying.\n", r.ScanningRequested)
+		return err
+	}
 	_, err := fmt.Fprintln(w, "No scanning, enablement or reload was requested. Configuration, inventory\nand the selected executable were preserved. Start uses plain idle daemon;\nits normal configuration/root/recovery bookkeeping can change. Stop leaves\nthe descriptor and its future-login effects in place. Paths can change\nafter checks. Inspect uncertain requests before deciding to retry. Native\ninstalled-manager/login/logout acceptance remains open.")
 	return err
 }

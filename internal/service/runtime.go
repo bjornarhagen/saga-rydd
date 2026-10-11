@@ -30,44 +30,45 @@ var (
 // on Linux, or an opaque launchctl exit status on macOS. Neither proves readiness,
 // shutdown completion, loaded-file identity or a hostile same-user namespace.
 type RuntimeResult struct {
-	Contract             string             `json:"contract"`
-	Action               string             `json:"action"`
-	Platform             string             `json:"platform"`
-	ManagerProfile       string             `json:"manager_profile"`
-	Label                string             `json:"label"`
-	Directory            string             `json:"directory"`
-	DescriptorPath       string             `json:"descriptor_path"`
-	DescriptorSHA256     string             `json:"descriptor_sha256"`
-	Executable           string             `json:"executable"`
-	ConfigFile           string             `json:"config_file"`
-	StateDir             string             `json:"state_dir"`
-	RuntimeDir           string             `json:"runtime_dir"`
-	Argv                 []string           `json:"argv"`
-	Env                  map[string]string  `json:"env"`
-	ArtifactStatus       string             `json:"artifact_status"`
-	Manager              ManagerObservation `json:"manager"`
-	ManagerUniqueName    string             `json:"manager_unique_name"`
-	UnitObjectPath       string             `json:"unit_object_path"`
-	UnitLoadAttempted    bool               `json:"unit_load_attempted"`
-	LoadedBindingMatched *bool              `json:"loaded_binding_matched"`
-	BindingCheckedAt     *time.Time         `json:"binding_checked_at"`
-	RequestAttempted     bool               `json:"request_attempted"`
-	RequestStatus        string             `json:"request_status"`
-	RequestAccepted      *bool              `json:"request_accepted"`
-	AcceptanceEvidence   string             `json:"acceptance_evidence"`
-	JobPath              *string            `json:"job_path"`
-	ReplyObservedAt      *time.Time         `json:"reply_observed_at"`
-	Running              *bool              `json:"running"`
-	Stopped              *bool              `json:"stopped"`
-	RuntimeStateVerified bool               `json:"runtime_state_verified"`
-	LoadedOriginVerified bool               `json:"loaded_origin_verified"`
-	ScanningRequested    bool               `json:"scanning_requested"`
-	EnablementChanged    bool               `json:"enablement_changed"`
-	ReloadRequested      bool               `json:"reload_requested"`
-	DescriptorChanged    bool               `json:"descriptor_changed"`
+	ScannerLifecycleIntent *ScannerLifecycleIntent `json:"scanner_lifecycle_intent,omitempty"`
+	Contract               string                  `json:"contract"`
+	Action                 string                  `json:"action"`
+	Platform               string                  `json:"platform"`
+	ManagerProfile         string                  `json:"manager_profile"`
+	Label                  string                  `json:"label"`
+	Directory              string                  `json:"directory"`
+	DescriptorPath         string                  `json:"descriptor_path"`
+	DescriptorSHA256       string                  `json:"descriptor_sha256"`
+	Executable             string                  `json:"executable"`
+	ConfigFile             string                  `json:"config_file"`
+	StateDir               string                  `json:"state_dir"`
+	RuntimeDir             string                  `json:"runtime_dir"`
+	Argv                   []string                `json:"argv"`
+	Env                    map[string]string       `json:"env"`
+	ArtifactStatus         string                  `json:"artifact_status"`
+	Manager                ManagerObservation      `json:"manager"`
+	ManagerUniqueName      string                  `json:"manager_unique_name"`
+	UnitObjectPath         string                  `json:"unit_object_path"`
+	UnitLoadAttempted      bool                    `json:"unit_load_attempted"`
+	LoadedBindingMatched   *bool                   `json:"loaded_binding_matched"`
+	BindingCheckedAt       *time.Time              `json:"binding_checked_at"`
+	RequestAttempted       bool                    `json:"request_attempted"`
+	RequestStatus          string                  `json:"request_status"`
+	RequestAccepted        *bool                   `json:"request_accepted"`
+	AcceptanceEvidence     string                  `json:"acceptance_evidence"`
+	JobPath                *string                 `json:"job_path"`
+	ReplyObservedAt        *time.Time              `json:"reply_observed_at"`
+	Running                *bool                   `json:"running"`
+	Stopped                *bool                   `json:"stopped"`
+	RuntimeStateVerified   bool                    `json:"runtime_state_verified"`
+	LoadedOriginVerified   bool                    `json:"loaded_origin_verified"`
+	ScanningRequested      bool                    `json:"scanning_requested"`
+	EnablementChanged      bool                    `json:"enablement_changed"`
+	ReloadRequested        bool                    `json:"reload_requested"`
+	DescriptorChanged      bool                    `json:"descriptor_changed"`
 }
 
-// Start requests the fixed idle-only service in the cooperating current user's
+// Start requests the fixed explicitly selected service in the cooperating current user's
 // manager namespace. It creates no artifacts and performs no enable or reload.
 func Start(ctx context.Context, spec InstallSpec) (RuntimeResult, error) {
 	if spec.Service.GOOS != runtime.GOOS {
@@ -106,7 +107,7 @@ func requestRuntime(ctx context.Context, spec InstallSpec, action string, hooks 
 	if action != "start" && action != "stop" {
 		return RuntimeResult{}, ErrSpec
 	}
-	d, err := Build(spec.Service)
+	d, err := buildLifecycle(spec.Service)
 	if err != nil {
 		return RuntimeResult{}, err
 	}
@@ -135,7 +136,7 @@ func requestRuntime(ctx context.Context, spec InstallSpec, action string, hooks 
 		program = "busctl"
 	}
 	digest := sha256.Sum256([]byte(d.Content))
-	r := RuntimeResult{Contract: RuntimeContract, Action: action, Platform: d.Platform, ManagerProfile: d.ManagerProfile, Label: d.Label, Directory: spec.Directory, DescriptorPath: filepath.Join(spec.Directory, d.Filename), DescriptorSHA256: hex.EncodeToString(digest[:]), Executable: d.Executable, ConfigFile: d.ConfigFile, StateDir: d.StateDir, RuntimeDir: d.RuntimeDir, Argv: append([]string{}, d.Argv...), Env: d.Env, ArtifactStatus: "unexamined", RequestStatus: "not_requested", Manager: ManagerObservation{Status: "not_checked", UnitPath: []string{}}}
+	r := RuntimeResult{Contract: lifecycleContract(d, RuntimeContract, ScannerRuntimeContract), ScannerLifecycleIntent: d.ScannerLifecycleIntent, Action: action, Platform: d.Platform, ManagerProfile: d.ManagerProfile, Label: d.Label, Directory: spec.Directory, DescriptorPath: filepath.Join(spec.Directory, d.Filename), DescriptorSHA256: hex.EncodeToString(digest[:]), Executable: d.Executable, ConfigFile: d.ConfigFile, StateDir: d.StateDir, RuntimeDir: d.RuntimeDir, Argv: append([]string{}, d.Argv...), Env: d.Env, ArtifactStatus: "unexamined", RequestStatus: "not_requested", Manager: ManagerObservation{Status: "not_checked", UnitPath: []string{}}}
 	guard, err := openRuntimeGuard(ctx, base, spec.Directory, d)
 	if err != nil {
 		return r, err
@@ -203,6 +204,7 @@ func requestRuntime(ctx context.Context, spec InstallSpec, action string, hooks 
 		}
 	}
 	r.RequestAttempted = reply.started
+	r.ScanningRequested = d.ScannerLifecycleIntent != nil && action == "start" && reply.started
 	if err != nil {
 		return runtimeFailure(r, errors.Join(err, ctx.Err()))
 	}

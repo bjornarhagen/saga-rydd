@@ -30,7 +30,7 @@ func TestServiceRuntimeObservationCLIUsageBeforeStorageOrManager(t *testing.T) {
 		{"--executable", "/generated/rydd", "--directory="},
 		{"--executable", "/generated/rydd", "--directory=/a", "--directory=/b"},
 		{"--executable", "/generated/rydd", "--start"},
-		{"--executable", "/generated/rydd", "--experimental-scan"},
+		{"--executable", "/generated/rydd", "--experimental-scan=invalid"},
 		{"--executable", "--json"},
 		{"--executable", "/generated/rydd", "--directory", "--json"},
 	} {

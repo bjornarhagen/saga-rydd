@@ -29,42 +29,43 @@ var ErrArtifactRemoval = errors.New("service descriptor removal requires inspect
 // enablement or future-login state. The scope is cooperating managed metadata;
 // pre/post checks do not turn unlinkat into an inode-conditioned source action.
 type RemovalResult struct {
-	Contract                string            `json:"contract"`
-	Action                  string            `json:"action"`
-	Platform                string            `json:"platform"`
-	ManagerProfile          string            `json:"manager_profile"`
-	Label                   string            `json:"label"`
-	Directory               string            `json:"directory"`
-	DescriptorPath          string            `json:"descriptor_path"`
-	DescriptorSHA256        string            `json:"descriptor_sha256"`
-	Executable              string            `json:"executable"`
-	ConfigFile              string            `json:"config_file"`
-	StateDir                string            `json:"state_dir"`
-	RuntimeDir              string            `json:"runtime_dir"`
-	Argv                    []string          `json:"argv"`
-	Env                     map[string]string `json:"env"`
-	ArtifactStatus          string            `json:"artifact_status"`
-	RemovalStatus           string            `json:"removal_status"`
-	RemovalAttempted        bool              `json:"removal_attempted"`
-	UnlinkCompleted         bool              `json:"unlink_completed"`
-	RemovalObserved         *bool             `json:"removal_observed"`
-	DescriptorAbsent        *bool             `json:"descriptor_absent"`
-	ObservationAt           *time.Time        `json:"observation_at"`
-	SyncCompleted           bool              `json:"sync_completed"`
-	ManagerRequestAttempted bool              `json:"manager_request_attempted"`
-	StopRequested           bool              `json:"stop_requested"`
-	EnablementChanged       bool              `json:"enablement_changed"`
-	ReloadRequested         bool              `json:"reload_requested"`
-	ScanningRequested       bool              `json:"scanning_requested"`
-	Running                 *bool             `json:"running"`
-	Stopped                 *bool             `json:"stopped"`
-	FutureLoginMayStart     *bool             `json:"future_login_may_start"`
-	RuntimeStateVerified    bool              `json:"runtime_state_verified"`
-	LoadedOriginVerified    bool              `json:"loaded_origin_verified"`
-	DataRemoved             bool              `json:"data_removed"`
-	ExecutableRemoved       bool              `json:"executable_removed"`
-	DirectoriesRemoved      bool              `json:"directories_removed"`
-	LockRemoved             bool              `json:"lock_removed"`
+	ScannerLifecycleIntent  *ScannerLifecycleIntent `json:"scanner_lifecycle_intent,omitempty"`
+	Contract                string                  `json:"contract"`
+	Action                  string                  `json:"action"`
+	Platform                string                  `json:"platform"`
+	ManagerProfile          string                  `json:"manager_profile"`
+	Label                   string                  `json:"label"`
+	Directory               string                  `json:"directory"`
+	DescriptorPath          string                  `json:"descriptor_path"`
+	DescriptorSHA256        string                  `json:"descriptor_sha256"`
+	Executable              string                  `json:"executable"`
+	ConfigFile              string                  `json:"config_file"`
+	StateDir                string                  `json:"state_dir"`
+	RuntimeDir              string                  `json:"runtime_dir"`
+	Argv                    []string                `json:"argv"`
+	Env                     map[string]string       `json:"env"`
+	ArtifactStatus          string                  `json:"artifact_status"`
+	RemovalStatus           string                  `json:"removal_status"`
+	RemovalAttempted        bool                    `json:"removal_attempted"`
+	UnlinkCompleted         bool                    `json:"unlink_completed"`
+	RemovalObserved         *bool                   `json:"removal_observed"`
+	DescriptorAbsent        *bool                   `json:"descriptor_absent"`
+	ObservationAt           *time.Time              `json:"observation_at"`
+	SyncCompleted           bool                    `json:"sync_completed"`
+	ManagerRequestAttempted bool                    `json:"manager_request_attempted"`
+	StopRequested           bool                    `json:"stop_requested"`
+	EnablementChanged       bool                    `json:"enablement_changed"`
+	ReloadRequested         bool                    `json:"reload_requested"`
+	ScanningRequested       bool                    `json:"scanning_requested"`
+	Running                 *bool                   `json:"running"`
+	Stopped                 *bool                   `json:"stopped"`
+	FutureLoginMayStart     *bool                   `json:"future_login_may_start"`
+	RuntimeStateVerified    bool                    `json:"runtime_state_verified"`
+	LoadedOriginVerified    bool                    `json:"loaded_origin_verified"`
+	DataRemoved             bool                    `json:"data_removed"`
+	ExecutableRemoved       bool                    `json:"executable_removed"`
+	DirectoriesRemoved      bool                    `json:"directories_removed"`
+	LockRemoved             bool                    `json:"lock_removed"`
 }
 
 // Uninstall removes only the exact managed descriptor. It invokes no manager,
@@ -90,7 +91,7 @@ func removeDescriptor(ctx context.Context, spec InstallSpec, hooks removalHooks)
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	d, err := Build(spec.Service)
+	d, err := buildLifecycle(spec.Service)
 	if err != nil {
 		return RemovalResult{}, err
 	}
@@ -114,7 +115,7 @@ func removeDescriptor(ctx context.Context, spec InstallSpec, hooks removalHooks)
 		base = filepath.Dir(filepath.Dir(spec.Directory))
 	}
 	digest := sha256.Sum256([]byte(d.Content))
-	r := RemovalResult{Contract: RemovalContract, Action: "uninstall", Platform: d.Platform, ManagerProfile: d.ManagerProfile, Label: d.Label, Directory: spec.Directory, DescriptorPath: filepath.Join(spec.Directory, d.Filename), DescriptorSHA256: hex.EncodeToString(digest[:]), Executable: d.Executable, ConfigFile: d.ConfigFile, StateDir: d.StateDir, RuntimeDir: d.RuntimeDir, Argv: append([]string{}, d.Argv...), Env: d.Env, ArtifactStatus: "unexamined", RemovalStatus: "not_requested"}
+	r := RemovalResult{Contract: lifecycleContract(d, RemovalContract, ScannerRemovalContract), ScannerLifecycleIntent: d.ScannerLifecycleIntent, Action: "uninstall", Platform: d.Platform, ManagerProfile: d.ManagerProfile, Label: d.Label, Directory: spec.Directory, DescriptorPath: filepath.Join(spec.Directory, d.Filename), DescriptorSHA256: hex.EncodeToString(digest[:]), Executable: d.Executable, ConfigFile: d.ConfigFile, StateDir: d.StateDir, RuntimeDir: d.RuntimeDir, Argv: append([]string{}, d.Argv...), Env: d.Env, ArtifactStatus: "unexamined", RemovalStatus: "not_requested"}
 	g, err := openRemovalGuard(ctx, base, spec.Directory, d)
 	if err != nil {
 		return r, err

@@ -535,16 +535,65 @@ Later conditions may also fail; these are first-match explanations, not an exhau
 rydd service preview --executable /absolute/path/to/rydd [--json]
 ```
 
-This finite exclusive mode requires one explicit executable path and no other service flags or positional arguments. The standard global `--data-dir` selects resolved configuration/state paths. The command only renders a descriptor: configuration/state/executable contents and service-manager state remain unchecked. Missing or invalid existing storage does not need initialization and is not interpreted. No descriptor is published, manager is invoked, worker is started or scanner is enabled.
+This finite exclusive mode requires one explicit executable path and no unrelated service flags or positional arguments. The default profile is idle; the scanner selector is described below. The standard global `--data-dir` selects resolved configuration/state paths. The command only renders a descriptor: configuration/state/executable contents and service-manager state remain unchecked. Missing or invalid existing storage does not need initialization and is not interpreted. No descriptor is published, manager is invoked, worker is started or scanner is enabled.
 
 All paths must be absolute, lexically clean UTF-8 of at most 4,096 bytes. Control/format characters and unsupported XML characters are refused. Spaces, dollar/percent signs and ordinary Unicode remain literal. The Linux executable path also refuses quotes and backslashes, as required by the [systemd v255 executable parser](https://github.com/systemd/systemd/blob/v255/src/core/load-fragment.c) and [safe-string check](https://github.com/systemd/systemd/blob/v255/src/basic/string-util.c). Those characters remain literal in other Linux arguments/environment values and in Darwin executable paths. Unified configuration/state paths use exact `--data-dir`. Standard split Linux `saga-rydd/config.toml` and `saga-rydd` state paths instead freeze `XDG_CONFIG_HOME` and `XDG_STATE_HOME`. The control runtime path is frozen from `RYDD_RUNTIME_DIR`, defaulting to `/tmp`. These are child environment additions, not a complete sanitized manager environment or a manager installation-directory choice.
 
 JSON uses the standard API 1 `service` envelope and contract `service_descriptor_preview_v1`, with platform, declared `manager_profile`, fixed managed label/filename, descriptor content, executable/configuration/state/runtime paths, exact `argv` and `env`, and false `installation_performed`, `activation_performed` and `scanning_enabled`. Those flags describe this preview, not the state of an existing service. Paths are valid UTF-8 under this narrow profile. Descriptor output is capped at 64 KiB. Human output shows the same scope and proposed content. Capabilities add `service_descriptor_previews`; `service_installation` stays false.
 
-The launchd profile uses literal XML `ProgramArguments`, background process classification, low-priority I/O, failure-only restart and finite restart/stop delays. The declared `systemd_user_v255` profile uses quoted whole items, a colon command prefix to disable dollar expansion, doubled percent specifiers, `Type=exec`, failure-only restart, finite delays and supplemental CPU/I/O priority hints. Neither profile detects an installed manager or proves effective priority. Both render plain `daemon`; the future worker would perform normal root/recovery bookkeeping without a scanner.
+The launchd profile uses literal XML `ProgramArguments`, background process classification, low-priority I/O, failure-only restart and finite restart/stop delays. The declared `systemd_user_v255` profile uses quoted whole items, a colon command prefix to disable dollar expansion, doubled percent specifiers, `Type=exec`, failure-only restart, finite delays and supplemental CPU/I/O priority hints. Neither profile detects an installed manager or proves effective priority. The default idle profile renders plain `daemon`; the future worker would perform normal root/recovery bookkeeping without a scanner.
 
 Publishing a descriptor in a login service directory can affect future logins. Later lifecycle adapters must distinguish publication, enablement and start outcomes, verify exact managed content, preserve user configuration/history and externally supplied executables, and disclose partial outcomes. Exact manager stop/unregistration is needed to suppress a failure restart. Generated rendering or syntax validation does not complete native user-manager/login/logout acceptance.
 
+
+## Explicit scanner service profile
+
+Use `--experimental-scan` to select the closed `experimental_inventory_v1` profile for service preview and lifecycle commands. This describes API availability, not installed-manager, configured-root, resource or owner-instance acceptance. Other service examples select the unchanged idle profile.
+
+Preview and all eight lifecycle routes require an explicit selector for scanner intent:
+
+```sh
+rydd service preview --executable /absolute/path/to/rydd --experimental-scan [--json]
+rydd service install --executable /absolute/path/to/rydd --experimental-scan [--directory /exact/user/service/directory] [--json]
+rydd service status --executable /absolute/path/to/rydd --experimental-scan [--directory /exact/user/service/directory] [--json]
+rydd service start --executable /absolute/path/to/rydd --experimental-scan [--directory /exact/user/service/directory] [--json]
+rydd service stop --executable /absolute/path/to/rydd --experimental-scan [--directory /exact/user/service/directory] [--json]
+rydd service runtime-status --executable /absolute/path/to/rydd --experimental-scan [--directory /exact/user/service/directory] [--json]
+rydd service uninstall --executable /absolute/path/to/rydd --experimental-scan [--directory /exact/user/service/directory] [--json]
+rydd service enable-login --executable /absolute/path/to/rydd --experimental-scan [--directory /exact/user/service/directory] [--json]
+rydd service disable-login --executable /absolute/path/to/rydd --experimental-scan [--directory /exact/user/service/directory] [--json]
+```
+
+The selector can occur once. Omission or `--experimental-scan=false` selects idle. Bare `--experimental-scan` and `=true` select scanner. The single-dash spellings behave the same. Only lowercase `true` and `false` are accepted. `1`, `TRUE`, `t`, duplicate aliases, positional boolean tokens and unrelated options refuse before service path resolution, HOME lookup or host/manager selection. Executable and directory values remain literal; a flag-like string consumed as a path value is not scanner authority. The standard global data-directory scope still applies.
+
+The scanner descriptor freezes the same executable/configuration/state/runtime scope as idle and appends exactly one trailing `--experimental-scan`. Configured roots are read at a future worker start, not by preview or installation. Preview publishes nothing, calls no manager and keeps `installation_performed`, `activation_performed` and `scanning_enabled` false.
+
+The standard API 1 `service` envelope uses the following scanner contracts. Default idle contracts, omitted scanner fields and human output remain unchanged.
+
+| Route | Scanner contract |
+| --- | --- |
+| `preview` | `service_scanner_descriptor_preview_v2` |
+| `install`, `status` | `service_scanner_artifact_lifecycle_v1` |
+| `start`, `stop` | `service_scanner_runtime_request_v1` |
+| `runtime-status` | `service_scanner_runtime_observation_v1` |
+| `uninstall` | `service_scanner_descriptor_removal_v1` |
+| `enable-login`, `disable-login` | `service_scanner_linux_login_link_v1` |
+
+Preview's optional `scanner_intent` uses `service_scanner_profile_intent_v2`. It keeps `descriptor_only: true` and reports `lifecycle_supported: true` because explicit scanner lifecycle APIs now exist. It does not perform an operation. Lifecycle results instead contain optional `scanner_lifecycle_intent` under `service_scanner_lifecycle_intent_v1`. It names `worker_profile: experimental_inventory_v1`, `activation_flag: --experimental-scan` and `configuration_scope: configured_roots_at_future_worker_start`, with `descriptor_start_may_scan: true` and `lifecycle_supported: true`. Native lifecycle, configured-root permission, current source permission, representative resources and cleanup authority remain unverified or false.
+
+Capabilities advertise `service_scanner_descriptor_previews`, `service_scanner_lifecycle` and `service_scanner_installation` as API availability. `service_scanner_runtime_verification` remains false, as do general verified installation, activation, runtime controls and enablement/runtime-state verification. These flags do not certify a current manager or authorize a user's roots.
+
+The existing ownership, coordinator, bounded-path and typed-manager rules apply separately to each effect:
+
+- Install/status requires exact selected artifact bytes. Idle/scanner byte differences refuse. There is no adoption, silent update, implicit stop or automatic profile transition.
+- macOS login-directory publication can start the selected worker at a future login but sends no bootstrap request. Linux install checks typed `UnitPath` visibility; it does not enable/start/reload a unit. Its getter can activate local broker infrastructure.
+- Linux enable-login/disable-login changes only the selected `default.target.wants` link. Preflight can request `LoadUnit` and change bookkeeping. No manager enable/disable/start/stop/reload request occurs. Global enablement and next-login behavior remain unknown.
+- Start/stop requires the same explicit profile and installed descriptor. Linux verifies declared loaded argv/environment and a pinned owner before one mode-`fail` request; an opposite-profile loaded unit refuses. macOS addresses the fixed current-user label while loaded-registration origin remains unknown.
+- For scanner start, `scanning_requested: true` means the direct request client actually started. It can remain true after cancellation or an unknown reply. It does not prove manager acceptance, current scanning or source permission. Stop and non-start routes keep it false. Queued jobs and opaque accepted replies are historical evidence; `running` and `stopped` remain null.
+- Linux runtime-status observes only the already loaded exact selected unit. It does not request `LoadUnit`, use a lifecycle fallback or contact worker IPC. Native macOS remains unsupported without a manager probe.
+- Uninstall removes only the exact descriptor. It preserves user data, executable, directories, lock and other links and sends no stop request. A loaded service can continue. Stop or disable the selected link before removal when wanted; acknowledgment does not prove shutdown.
+
+Existing bounds, cooperative deadlines, guarded direct-child cancellation/reaping and partial-result envelopes still apply. A failed or lost reply authorizes no automatic retry. Inspect the artifact, selected link and qualified manager evidence in the same scope before another explicit request.
 
 ## Exact user-service artifact installation and status
 
@@ -572,7 +621,7 @@ rydd service start --executable /absolute/path/to/rydd [--directory /exact/user/
 rydd service stop --executable /absolute/path/to/rydd [--directory /exact/user/service/directory] [--json]
 ```
 
-Use the exact installed descriptor specification, selected executable and global data-directory scope. These finite commands require the existing owned descriptor and stable coordinator lock. They create no directories, descriptor, configuration or state and preserve user data/executable. Scope, artifact and lock identities are rechecked around one explicit manager request; this remains a cooperating-user namespace, not authentication against deliberate same-user replacement.
+For the default idle examples above, use the exact installed descriptor specification, selected executable and global data-directory scope. These finite commands require the existing owned descriptor and stable coordinator lock. They create no directories, descriptor, configuration or state and preserve user data/executable. Scope, artifact and lock identities are rechecked around one explicit manager request; this remains a cooperating-user namespace, not authentication against deliberate same-user replacement.
 
 Linux uses at most seven fixed bounded typed calls: resolve the manager's unique owner, read UnitPath, request LoadUnit, read unit/service properties, recheck owner, then one StartUnit or StopUnit with mode `fail`. Calls target the pinned owner through the selected existing local broker socket. The loaded unit must declare the exact ID/fragment, loaded nontransient profile with no pending reload/drop-ins, supported exec/restart/stop settings, exact executable/argv and explicit environment, no additional commands or environment-file overrides, and ExecStartEx flags exactly `no-env-expand`. Missing, malformed or mismatching evidence refuses. Unrelated bounded property values are discarded. These are sequential declared loaded settings, not loaded-file authentication. Unit loading can change manager bookkeeping. Mode `fail` prevents replacing conflicting queued jobs; normal dependency effects remain possible. See the [v255 interface](https://raw.githubusercontent.com/systemd/systemd/v255/man/org.freedesktop.systemd1.xml), [exec property encoder](https://raw.githubusercontent.com/systemd/systemd/v255/src/core/dbus-execute.c) and [execution flags](https://raw.githubusercontent.com/systemd/systemd/v255/src/shared/exec-util.c).
 
@@ -590,7 +639,7 @@ Capabilities expose `service_activation_requests` and `service_stop_requests`; f
 rydd service runtime-status --executable /absolute/path/to/rydd [--directory /absolute/supported/service/directory] [--json]
 ```
 
-This is separate from artifact `service status`. Native Linux requires the exact existing idle descriptor and stable coordinator. Seven bounded calls pin the manager owner, observe UnitPath, look up an already loaded unit, read Unit and Service properties, repeat the same unit lookup and recheck the owner. There is no LoadUnit, lifecycle fallback, list, start/stop/reload or worker IPC. Connection can affect local broker infrastructure. Native macOS returns unsupported without inspecting an artifact or calling launchctl.
+This is separate from artifact `service status`. Without a scanner selector, native Linux requires the exact existing idle descriptor and stable coordinator. Seven bounded calls pin the manager owner, observe UnitPath, look up an already loaded unit, read Unit and Service properties, repeat the same unit lookup and recheck the owner. There is no LoadUnit, lifecycle fallback, list, start/stop/reload or worker IPC. Connection can affect local broker infrastructure. Native macOS returns unsupported without inspecting an artifact or calling launchctl.
 
 JSON retains the standard `service` envelope with contract `service_runtime_observation_v1`. It projects only bounded manager active/substate/result labels, declared MainPID and invocation ID. Unit, Service, final binding and completion times are separate observations. A zero MainPID is a manager declaration; an all-zero invocation ID is unset. Running, stopped and application readiness remain null. Process identity, loaded origin and current simultaneous runtime state are unverified.
 
@@ -617,7 +666,7 @@ rydd service enable-login --executable /absolute/path/to/rydd [--directory /exac
 rydd service disable-login --executable /absolute/path/to/rydd [--directory /exact/user/service/directory] [--json]
 ```
 
-These finite modes require native Linux, the exact existing idle descriptor and its stable coordinator lock. They address only `default.target.wants/<fixed service filename>` in the selected service directory, with the exact absolute descriptor as its target. Enable creates the absent link exclusively, or leaves an exact matching link unchanged. It can create only the immediate wants directory. Disable initializes nothing and removes only a matching owned single-link symlink. A foreign, repointed or changed link refuses. Every other link, existing directory, descriptor, executable and saved history is preserved.
+Without a scanner selector, these finite modes require native Linux, the exact existing idle descriptor and its stable coordinator lock. They address only `default.target.wants/<fixed service filename>` in the selected service directory, with the exact absolute descriptor as its target. Enable creates the absent link exclusively, or leaves an exact matching link unchanged. It can create only the immediate wants directory. Disable initializes nothing and removes only a matching owned single-link symlink. A foreign, repointed or changed link refuses. Every other link, existing directory, descriptor, executable and saved history is preserved.
 
 The creator of a matching link is unknown. An identical manually created link at this exact selected name is within the command's scope. This is a cooperating-user metadata operation, not authentication against deliberate same-user namespace replacement or original-source cleanup authority.
 

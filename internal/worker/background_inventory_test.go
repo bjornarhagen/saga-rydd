@@ -93,6 +93,93 @@ func TestWorkerCompactBackgroundBeyondReportLimit(t *testing.T) {
 	c.Scan.MetadataPerSecond = 100000
 	c.Scan.MaxScanChunksPerDay = 100000
 	var admitted atomic.Int64
+	// Cache fixed diagnostic scalars only. These do not grant admission or add
+	// queries, samples, joins, retries or a longer fixture deadline.
+	type compactSourceReturn struct {
+		Complete   bool
+		Fault      bool
+		Generation int64
+		Entries    int
+		Error      bool
+		Canceled   bool
+		TimedOut   bool
+	}
+	type compactCachedStatus struct {
+		Seen                   bool
+		ElapsedNS              int64
+		WaitReason             string
+		ActiveJob              int64
+		RecoveredJobs          int64
+		Paused                 bool
+		Stopping               bool
+		DispatchPresent        bool
+		DispatchUsed           int
+		DispatchReason         string
+		StatePresent           bool
+		StatePhase             string
+		StateDecision          string
+		StateReason            string
+		SamplingState          string
+		CallbackReturned       bool
+		ProcessSlotOccupied    bool
+		AttemptStartedPresent  bool
+		AttemptStartedNS       int64
+		AttemptFinishedPresent bool
+		AttemptFinishedNS      int64
+		RetryPresent           bool
+		RetryAfterNS           int64
+		ObservationPresent     bool
+		ObservationAvailable   bool
+		ObservationStatus      string
+		ObservationReason      string
+		DatabasePresent        bool
+		DatabaseBytes          int64
+		WALPresent             bool
+		WALBytes               int64
+		TotalPresent           bool
+		TotalBytes             int64
+		MetricsPresent         bool
+		EntryInspections       uint64
+		StatCalls              uint64
+		DirectoryOpenCalls     uint64
+		DirectoryReadCalls     uint64
+	}
+	// Unknown codes are disclosed without retaining arbitrary error/path text.
+	diagnosticCode := func(code string) string {
+		switch code {
+		case "", "paused", "stopping", "idle", "cadence", "clock_rollback", "daily_chunk_limit",
+			"job_retry", "inventory_revisit", "inventory_revisit_setup", "inventory_maintenance",
+			"inventory_state_source_backoff", "power_source_backoff", "wal_backpressure",
+			"cpu_backoff", "cpu_accounting_pending", "cpu_clock_rollback", "cpu_recovery_backoff",
+			"cpu_hour_charge_partial", "cpu_day_charge_partial", "cpu_hour_charge_backoff", "cpu_day_charge_backoff",
+			"metadata_daily_limit", "metadata_backoff", "api_pacing", "api_capacity_blocked", "api_profile_blocked",
+			"before_dispatch", "after_receipt", "not_evaluated", "source_deferred", "source_admitted",
+			"not_requested", "pending", "returned", "refused", "foreign_slot", "below_limit", "limit_reached",
+			"inventory_state_pending", "inventory_state_process_slot", "inventory_state_retry", "inventory_state_limit",
+			"inventory_state_clock", "inventory_state_timeout", "inventory_state_canceled", "inventory_state_unavailable",
+			"inventory_state_changed", "inventory_state_overflow", "inventory_state_invalid", "inventory_state_expired":
+			return code
+		default:
+			return "unrecognized"
+		}
+	}
+	var sourceEntered, sourceReturned, sourceEntries, sourceCompleted atomic.Uint64
+	var sourceCountersSaturated atomic.Bool
+	var lastSourceReturn atomic.Pointer[compactSourceReturn]
+	addDiagnostic := func(counter *atomic.Uint64, amount uint64) {
+		const maximum = uint64(1<<31 - 1)
+		for {
+			previous := counter.Load()
+			next := previous + amount
+			if amount > maximum-previous {
+				next = maximum
+				sourceCountersSaturated.Store(true)
+			}
+			if counter.CompareAndSwap(previous, next) {
+				return
+			}
+		}
+	}
 	// This fixture checks compact inventory and accounting endpoints, not native
 	// CPU behavior. Race instrumentation must not add production CPU cooldowns
 	// to its finite completion assertion; resource profiles use native SELF CPU.
@@ -107,13 +194,24 @@ func TestWorkerCompactBackgroundBeyondReportLimit(t *testing.T) {
 		}, opts...)
 	}
 	options.scannerNext = func(ctx context.Context, s *inventory.Scanner, j state.Job, permit inventory.APIPermit) (state.ScanBatch, error) {
-		return s.NextPermitted(ctx, j, func(ctx context.Context, kind inventory.APICallKind) error {
+		addDiagnostic(&sourceEntered, 1)
+		batch, err := s.NextPermitted(ctx, j, func(ctx context.Context, kind inventory.APICallKind) error {
 			if err := permit(ctx, kind); err != nil {
 				return err
 			}
 			admitted.Add(1)
 			return nil
 		})
+		addDiagnostic(&sourceReturned, 1)
+		addDiagnostic(&sourceEntries, uint64(len(batch.Entries)))
+		if batch.Complete {
+			addDiagnostic(&sourceCompleted, 1)
+		}
+		lastSourceReturn.Store(&compactSourceReturn{
+			Complete: batch.Complete, Fault: batch.Fault != "", Generation: batch.Generation, Entries: len(batch.Entries),
+			Error: err != nil, Canceled: errors.Is(err, context.Canceled), TimedOut: errors.Is(err, context.DeadlineExceeded),
+		})
+		return batch, err
 	}
 	ready, done := startPacingWorker(t, dir, c, options)
 	if ready.InventoryMode != nil || ready.AdaptiveRevisits != nil {
@@ -128,6 +226,8 @@ func TestWorkerCompactBackgroundBeyondReportLimit(t *testing.T) {
 	var report state.DirectoryReport
 	var lastPollErr error
 	drained := false
+	var lastSuccessfulStatus compactCachedStatus
+	diagnosticStarted := time.Now()
 	deadline := time.Now().Add(90 * time.Second)
 	for time.Now().Before(deadline) {
 		// Until the worker drains, this report falls back to examining 10,000
@@ -143,14 +243,71 @@ func TestWorkerCompactBackgroundBeyondReportLimit(t *testing.T) {
 				t.Fatal(pollErr)
 			}
 			lastPollErr = pollErr
-		} else if live.WaitReason == "inventory_revisit" {
-			drained = true
-			break
+		} else {
+			cached := compactCachedStatus{
+				Seen: true, ElapsedNS: time.Since(diagnosticStarted).Nanoseconds(), WaitReason: diagnosticCode(live.WaitReason),
+				ActiveJob: live.ActiveJob, RecoveredJobs: live.RecoveredJobs, Paused: live.Paused, Stopping: live.Stopping,
+			}
+			if dispatch := live.Dispatch; dispatch != nil {
+				cached.DispatchPresent, cached.DispatchUsed, cached.DispatchReason = true, dispatch.Used, diagnosticCode(dispatch.Reason)
+			}
+			if state := live.InventoryState; state != nil {
+				cached.StatePresent, cached.StatePhase = true, diagnosticCode(state.LastAttemptPhase)
+				cached.StateDecision, cached.StateReason = diagnosticCode(state.LastDecisionStatus), diagnosticCode(state.LastDecisionReason)
+				cached.SamplingState = diagnosticCode(state.SamplingState)
+				cached.CallbackReturned, cached.ProcessSlotOccupied = state.CallbackReturned, state.ProcessSlotOccupied
+				if state.LastAttemptStartedAt != nil {
+					cached.AttemptStartedPresent, cached.AttemptStartedNS = true, state.LastAttemptStartedAt.UnixNano()
+				}
+				if state.LastAttemptFinishedAt != nil {
+					cached.AttemptFinishedPresent, cached.AttemptFinishedNS = true, state.LastAttemptFinishedAt.UnixNano()
+				}
+				if state.RetryAfterAt != nil {
+					cached.RetryPresent, cached.RetryAfterNS = true, state.RetryAfterAt.UnixNano()
+				}
+				if observed := state.Observation; observed != nil {
+					cached.ObservationPresent, cached.ObservationAvailable = true, observed.Available
+					cached.ObservationStatus, cached.ObservationReason = diagnosticCode(observed.Status), diagnosticCode(observed.Reason)
+					if observed.DatabaseBytes != nil {
+						cached.DatabasePresent, cached.DatabaseBytes = true, *observed.DatabaseBytes
+					}
+					if observed.WALBytes != nil {
+						cached.WALPresent, cached.WALBytes = true, *observed.WALBytes
+					}
+					if observed.TotalBytes != nil {
+						cached.TotalPresent, cached.TotalBytes = true, *observed.TotalBytes
+					}
+				}
+			}
+			if metrics := live.InventoryMetrics; metrics != nil {
+				cached.MetricsPresent, cached.EntryInspections, cached.StatCalls = true, metrics.EntryInspections, metrics.StatCalls
+				cached.DirectoryOpenCalls, cached.DirectoryReadCalls = metrics.DirectoryOpenCalls, metrics.DirectoryReadCalls
+			}
+			lastSuccessfulStatus = cached
+			if live.WaitReason == "inventory_revisit" {
+				drained = true
+				break
+			}
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	if !drained {
-		t.Fatal("compact worker did not drain within its fixture bound", lastPollErr)
+		// This terminal-only receive never waits or steals a later successful
+		// waitExit. startCancelable closes done after its one buffered result.
+		var workerEnded, workerResultMissing, workerError, workerCanceled, workerTimedOut bool
+		select {
+		case err, ok := <-done:
+			workerEnded, workerResultMissing = true, !ok
+			if ok {
+				workerError = err != nil
+				workerCanceled, workerTimedOut = errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded)
+			}
+		default:
+		}
+		diagnostic := fmt.Sprintf("cached_last_successful_status_not_current=%+v source_counters_independently_sampled=(entered=%d returned=%d entries=%d complete=%d saturated=%t admitted=%d) last_source_return=%+v already_available_worker_result=(ended=%t missing=%t error=%t canceled=%t timed_out=%t)",
+			lastSuccessfulStatus, sourceEntered.Load(), sourceReturned.Load(), sourceEntries.Load(), sourceCompleted.Load(), sourceCountersSaturated.Load(), admitted.Load(), lastSourceReturn.Load(),
+			workerEnded, workerResultMissing, workerError, workerCanceled, workerTimedOut)
+		t.Fatal("compact worker did not drain within its fixture bound", lastPollErr, diagnostic)
 	}
 	report, err = reader.MeasureDirectory(context.Background(), modules)
 	if err != nil {

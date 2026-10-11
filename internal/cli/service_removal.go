@@ -19,6 +19,9 @@ func runServiceRemoval(ctx context.Context, spec service.InstallSpec) (service.R
 
 func printServiceRemoval(out io.Writer, r service.RemovalResult) error {
 	w := &reviewOutput{writer: out}
+	if err := printServiceScannerQualification(w, r.ScannerLifecycleIntent); err != nil {
+		return err
+	}
 	_, err := fmt.Fprintf(w, "SERVICE DESCRIPTOR REMOVAL\n\nDescriptor: %q\nRecorded removal: %s\nUnlink attempted: %t\nUnlink completed: %t\nSelected-file removal observed: %s\nDescriptor name absent: %s\nDirectory sync completed: %t\nRunning state: Unknown\nStopped state: Unknown\n\n", r.DescriptorPath, r.RemovalStatus, r.RemovalAttempted, r.UnlinkCompleted, removalEvidence(r.RemovalObserved), removalEvidence(r.DescriptorAbsent), r.SyncCompleted)
 	if err != nil {
 		return err

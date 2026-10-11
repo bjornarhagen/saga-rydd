@@ -49,7 +49,7 @@ func TestServiceLifecycleStrictArgumentsBeforePlacement(t *testing.T) {
 			{}, {"--executable", "/a", "--executable=/b"},
 			{"--executable", "/a", "--directory", "/a", "--directory=/b"},
 			{"--executable", "/a", "--directory="},
-			{"--executable", "/a", "extra"}, {"--executable", "/a", "--experimental-scan"},
+			{"--executable", "/a", "extra"}, {"--executable", "/a", "--experimental-scan=invalid"},
 			{"--executable", "--json"}, {"--executable", "/a", "--directory", "--json"},
 		} {
 			var out, errOut bytes.Buffer

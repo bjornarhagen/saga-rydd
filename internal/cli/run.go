@@ -37,16 +37,17 @@ Commands:
   status --cpu-charges [--json]                       Read saved conservative CPU charge history
   status --cpu-period-charges [--json]                Read saved UTC hour/day charge history
   daemon [--experimental-scan]                         Run the worker (scanning opt-in for fixtures)
-  service preview --executable ABSOLUTE_PATH [--json]  Preview an idle-only service descriptor
-  service install/status --executable ABSOLUTE_PATH [--directory ABSOLUTE_PATH] [--json]
-                                                     Publish or inspect the exact idle descriptor
-  service start/stop --executable ABSOLUTE_PATH [--directory ABSOLUTE_PATH] [--json]
-                                                     Request idle-service start or stop; runtime unknown
-  service runtime-status --executable ABSOLUTE_PATH [--directory ABSOLUTE_PATH] [--json]
+  service preview --executable ABSOLUTE_PATH [--experimental-scan[=true|false]] [--json]
+                                                     Preview a descriptor; no installation or scanning
+  service install/status --executable ABSOLUTE_PATH [--directory ABSOLUTE_PATH] [--experimental-scan[=true|false]] [--json]
+                                                     Publish or inspect the explicitly selected descriptor
+  service start/stop --executable ABSOLUTE_PATH [--directory ABSOLUTE_PATH] [--experimental-scan[=true|false]] [--json]
+                                                     Request selected-service start or stop; runtime unknown
+  service runtime-status --executable ABSOLUTE_PATH [--directory ABSOLUTE_PATH] [--experimental-scan[=true|false]] [--json]
                                                      Observe loaded Linux manager state; readiness unknown
-  service uninstall --executable ABSOLUTE_PATH [--directory ABSOLUTE_PATH] [--json]
+  service uninstall --executable ABSOLUTE_PATH [--directory ABSOLUTE_PATH] [--experimental-scan[=true|false]] [--json]
                                                      Remove the exact descriptor; does not stop a service
-  service enable-login/disable-login --executable ABSOLUTE_PATH [--directory ABSOLUTE_PATH] [--json]
+  service enable-login/disable-login --executable ABSOLUTE_PATH [--directory ABSOLUTE_PATH] [--experimental-scan[=true|false]] [--json]
                                                      Change one Linux login link; runtime unknown
   pause / resume                                       Persistently pause or resume work
   stop                                                 Request graceful worker shutdown
@@ -202,6 +203,12 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 				return 1
 			}
 			return 0
+		}
+	}
+	if remaining[0] == "service" {
+		if err := validateServiceSelection(remaining[1:]); err != nil {
+			fmt.Fprintln(errOut, err)
+			return 2
 		}
 	}
 	paths, err := config.ResolvePaths(*dataDir)
