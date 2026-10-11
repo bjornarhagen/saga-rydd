@@ -71,6 +71,8 @@ Commands:
   journal --show INTENT_ID [--json]                 Read saved preparation/history; no operations
   journal --observe INTENT_ID [--json]              Observe recovery locations; no operations
   hashes --store-budget [--json]                       Read shared saved reservation accounting
+  samples --show BATCH_ID [--json]                     Inspect one exact existing sample accounting batch
+                                                      Requires one explicit global --data-dir; no sampling
   hashes [--work WORK_ID | --groups] [--json]       Read saved hash observations or historical matches
   hashes --preview SELECTION_ID --keeper WORK_ID COPY_ID... [--json]
                                                 Preview possible roles from saved historical hashes
@@ -94,7 +96,7 @@ Commands:
   hash --run APPROVAL_ID [--json]                    One guarded hash step (at most 1 MiB; no cleanup)
   hash --revoke APPROVAL_ID [--json]                 Revoke read consent; no source or inventory needed
   Explicit hash runs use scan.read_bytes_per_second for this step only.
-  report --candidates [--include-dismissed] [--min-age-days N] [--cursor TOKEN] [--json]  Node modules review candidates
+  report --candidates [--page-size-summary] [--include-dismissed] [--min-age-days N] [--cursor TOKEN] [--json]  Node modules review candidates
   report --build-output -d ROOT [--min-age-days N] [--cursor TOKEN] [--json]
                                                      Saved Cargo target layouts; review required
   report --go-cache -d ROOT [--min-age-days N] [--cursor TOKEN] [--json]
@@ -138,16 +140,19 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 		}
 		return 2
 	}
+	remaining := flags.Args()
+	if len(remaining) > 0 && remaining[0] == "samples" {
+		return runSamplesCLI(ctx, args, out, errOut, false, nil)
+	}
 	if *version {
 		return versionReply(ctx, out, errOut, false)
 	}
-	remaining := flags.Args()
 	if len(remaining) == 0 {
 		fmt.Fprint(out, help)
 		return 0
 	}
 	if remaining[0] == "capabilities" && len(remaining) == 1 {
-		fmt.Fprintln(out, "Rydd commands: init, config check, exclude, state init, backup, doctor, status, scan, measure, report, docker, service, review, plan, ignore, journal, hashes, hash, pause, resume, stop, capabilities.\nAdd --json for versioned machine output on finite commands. review prompts in text mode; daemon uses foreground text output.\nOther commands are noninteractive. Exit codes: 0 success, 1 operation failed, 2 invalid usage.\nScanning is experimental. Deletion, duplicate detection, and full resource controls are unavailable.")
+		fmt.Fprintln(out, "Rydd commands: init, config check, exclude, state init, backup, doctor, status, scan, measure, report, docker, service, review, plan, ignore, journal, hashes, hash, samples, pause, resume, stop, capabilities.\nAdd --json for versioned machine output on finite commands. review prompts in text mode; daemon uses foreground text output.\nOther commands are noninteractive. Exit codes: 0 success, 1 operation failed, 2 invalid usage.\nScanning is experimental. Deletion, duplicate detection, and full resource controls are unavailable.")
 		return 0
 	}
 	if remaining[0] == "backup" {
@@ -356,7 +361,7 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 		var r savedReportDispatch
 		r, err = dispatchSavedReport(ctx, remaining[1:], paths)
 		if err == nil {
-			if r.BuildOutput != nil || r.GoCache != nil {
+			if r.BuildOutput != nil || r.GoCache != nil || r.CandidateSizeSummary != nil {
 				checked := &reviewOutput{writer: out}
 				printSavedReport(checked, r)
 				err = checked.err
@@ -364,6 +369,8 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 					category := "Cargo build-output"
 					if r.GoCache != nil {
 						category = "Go build-cache"
+					} else if r.CandidateSizeSummary != nil {
+						category = "Historical candidate page size"
 					}
 					err = fmt.Errorf("%s report reply was canceled; no saved records or source files were changed: %w", category, ctx.Err())
 				}

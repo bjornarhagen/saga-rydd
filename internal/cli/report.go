@@ -15,12 +15,13 @@ import (
 	"github.com/bjornarhagen/saga-rydd/internal/state"
 )
 
-// Presentation context stays outside the serialized report contract.
+// Commands stay private; the selected size summary is an omitted optional sibling.
 type reportResult struct {
 	state.FileReport
-	candidateCommand string
-	fileCommand      string
-	sameSizeCommand  string
+	CandidateSizeSummary *state.CandidatePageSizeSummary `json:"candidate_size_summary,omitempty"`
+	candidateCommand     string
+	fileCommand          string
+	sameSizeCommand      string
 }
 
 func report(ctx context.Context, args []string, paths config.Paths) (reportResult, error) {
@@ -31,6 +32,8 @@ func report(ctx context.Context, args []string, paths config.Paths) (reportResul
 	cursor := f.String("cursor", "", "next page cursor")
 	minimumAge := f.Int("min-age-days", state.FindingAgeDays, "minimum candidate age in days (1–36500)")
 	candidates := f.Bool("candidates", false, "review old node_modules observations")
+	var pageSizeSummary candidateSizePageMode
+	f.Var(&pageSizeSummary, "page-size-summary", "summarize historical sizes of visible candidates on one saved page")
 	includeDismissed := f.Bool("include-dismissed", false, "include exact dismissed findings for inspection")
 	sameSize := f.Bool("same-size", false, "read bounded saved same-size file bands; contents unchecked")
 	minimumBytes := f.Int64("min-size-bytes", state.SameSizeMinimumBytes, "minimum same-size file bytes")
@@ -71,6 +74,9 @@ func report(ctx context.Context, args []string, paths config.Paths) (reportResul
 			pageSet = true
 		}
 	})
+	if pageSizeSummary.set && !*candidates {
+		return reportResult{}, usageError{errors.New("--page-size-summary requires --candidates and cannot be combined with other report modes")}
+	}
 	if ageSet && !*candidates {
 		return reportResult{}, usageError{errors.New("--min-age-days requires --candidates")}
 	}
@@ -91,6 +97,11 @@ func report(ctx context.Context, args []string, paths config.Paths) (reportResul
 	}
 	if directorySet && pageSet && !*candidates && !*sameSize {
 		return reportResult{}, usageError{errors.New("directory size reports cannot be combined with --limit or --cursor")}
+	}
+	if pageSizeSummary.value {
+		if err := ctx.Err(); err != nil {
+			return reportResult{}, err
+		}
 	}
 	if directorySet {
 		normalized, err := directoryPath(*directory)
@@ -117,6 +128,9 @@ func report(ctx context.Context, args []string, paths config.Paths) (reportResul
 			return reportResult{}, missingScanMessage(*directory, scanPaths, err)
 		}
 		return reportResult{}, err
+	}
+	if pageSizeSummary.value {
+		return readCandidateSizePage(ctx, s, scanPaths, *directory, *cursor, *minimumAge, *includeDismissed)
 	}
 	defer s.Close()
 	if *sameSize {
@@ -174,6 +188,9 @@ func printReport(out io.Writer, r reportResult) {
 		return
 	}
 	if r.Candidates != nil {
+		if r.CandidateSizeSummary != nil {
+			printCandidateSizeSummary(out, *r.CandidateSizeSummary)
+		}
 		printFindingReport(out, *r.Candidates, r.candidateCommand)
 		return
 	}

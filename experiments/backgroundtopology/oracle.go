@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 var errOracle = errors.New("generated topology oracle refused unexpected evidence")
@@ -133,6 +135,161 @@ type oracle struct {
 	BodiesSHA256                                               string
 }
 
+// The hooks are a private deterministic fixture seam. Production passes the
+// zero value; no arguments, environment or generated profile can select them.
+type oracleLeafHooks struct {
+	beforeOpen func()
+	afterRead  func()
+}
+
+func sameOracleStat(a, b unix.Stat_t) bool {
+	return a.Dev == b.Dev && a.Ino == b.Ino && a.Mode == b.Mode &&
+		a.Uid == b.Uid && a.Gid == b.Gid && a.Nlink == b.Nlink &&
+		a.Size == b.Size && a.Blocks == b.Blocks &&
+		a.Mtim == b.Mtim && a.Ctim == b.Ctim
+}
+
+func oracleStatMatchesInfo(a unix.Stat_t, info os.FileInfo) bool {
+	b, ok := info.Sys().(*syscall.Stat_t)
+	return ok && uint64(a.Dev) == uint64(b.Dev) && uint64(a.Ino) == uint64(b.Ino) &&
+		uint32(a.Mode) == uint32(b.Mode) && a.Uid == b.Uid && a.Gid == b.Gid &&
+		uint64(a.Nlink) == uint64(b.Nlink) && a.Size == info.Size() &&
+		a.Blocks == b.Blocks && a.Mtim.Nano() == info.ModTime().UnixNano()
+}
+
+func oracleDirectoryNamedUnchanged(path string, expected unix.Stat_t) error {
+	var named unix.Stat_t
+	if err := unix.Lstat(path, &named); err != nil {
+		return errors.Join(errOracle, err)
+	}
+	if named.Mode&unix.S_IFMT != unix.S_IFDIR || !sameOracleStat(expected, named) {
+		return errOracle
+	}
+	return nil
+}
+
+func oracleDirectoryUnchanged(parent *os.File, path string, expected unix.Stat_t) error {
+	var held unix.Stat_t
+	if err := unix.Fstat(int(parent.Fd()), &held); err != nil {
+		return errors.Join(errOracle, err)
+	}
+	if held.Mode&unix.S_IFMT != unix.S_IFDIR || !sameOracleStat(expected, held) {
+		return errOracle
+	}
+	return oracleDirectoryNamedUnchanged(path, expected)
+}
+
+func openOracleDirectory(path string, info os.FileInfo) (*os.File, unix.Stat_t, error) {
+	var expected unix.Stat_t
+	if err := unix.Lstat(path, &expected); err != nil {
+		return nil, expected, errors.Join(errOracle, err)
+	}
+	if expected.Mode&unix.S_IFMT != unix.S_IFDIR || !oracleStatMatchesInfo(expected, info) {
+		return nil, expected, errOracle
+	}
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, expected, errors.Join(errOracle, err)
+	}
+	f := os.NewFile(uintptr(fd), path)
+	if err = oracleDirectoryUnchanged(f, path, expected); err != nil {
+		return nil, expected, errors.Join(err, f.Close())
+	}
+	return f, expected, nil
+}
+
+func oracleLeafNamedUnchanged(parent *os.File, name string, expected unix.Stat_t) error {
+	var named unix.Stat_t
+	if err := unix.Fstatat(int(parent.Fd()), name, &named, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return errors.Join(errOracle, err)
+	}
+	if named.Mode&unix.S_IFMT != unix.S_IFREG || named.Nlink != 1 || !sameOracleStat(expected, named) {
+		return errOracle
+	}
+	return nil
+}
+
+func readOracleLeaf(ctx context.Context, parent *os.File, parentPath, name string, parentStamp unix.Stat_t, info os.FileInfo, want []byte) ([]byte, error) {
+	return readOracleLeafWithHooks(ctx, parent, parentPath, name, parentStamp, info, want, oracleLeafHooks{})
+}
+
+func readOracleLeafWithHooks(ctx context.Context, parent *os.File, parentPath, name string, parentStamp unix.Stat_t, info os.FileInfo, want []byte, hooks oracleLeafHooks) (data []byte, err error) {
+	if name == "." || name == ".." || filepath.Base(name) != name || (len(want) != 0 && len(want) != 32) {
+		return nil, errOracle
+	}
+	if err = ctx.Err(); err != nil {
+		return nil, errors.Join(errOracle, err)
+	}
+	if err = oracleDirectoryUnchanged(parent, parentPath, parentStamp); err != nil {
+		return nil, err
+	}
+	var expected unix.Stat_t
+	if err = unix.Fstatat(int(parent.Fd()), name, &expected, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return nil, errors.Join(errOracle, err)
+	}
+	if expected.Mode&unix.S_IFMT != unix.S_IFREG || expected.Nlink != 1 ||
+		expected.Size != int64(len(want)) || !oracleStatMatchesInfo(expected, info) {
+		return nil, errOracle
+	}
+	if hooks.beforeOpen != nil {
+		hooks.beforeOpen()
+	}
+	fd, openErr := unix.Openat(int(parent.Fd()), name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if openErr != nil {
+		return nil, errors.Join(errOracle, openErr, ctx.Err())
+	}
+	body := os.NewFile(uintptr(fd), name)
+	defer func() {
+		// Attempt close and both name/parent proofs independently. A refusal
+		// returns no body even when a bounded read already completed.
+		closeErr := body.Close()
+		nameErr := oracleLeafNamedUnchanged(parent, name, expected)
+		parentErr := oracleDirectoryUnchanged(parent, parentPath, parentStamp)
+		contextErr := ctx.Err()
+		if closeErr != nil || nameErr != nil || parentErr != nil || contextErr != nil {
+			err = errors.Join(err, errOracle, closeErr, nameErr, parentErr, contextErr)
+		}
+		if err != nil {
+			data = nil
+		}
+	}()
+	var held unix.Stat_t
+	if err = unix.Fstat(fd, &held); err != nil {
+		return nil, errors.Join(errOracle, err)
+	}
+	if held.Mode&unix.S_IFMT != unix.S_IFREG || held.Nlink != 1 || !sameOracleStat(expected, held) {
+		return nil, errOracle
+	}
+	if err = ctx.Err(); err != nil {
+		return nil, errors.Join(errOracle, err)
+	}
+	data, err = io.ReadAll(io.LimitReader(body, 33))
+	if err != nil || !bytes.Equal(data, want) {
+		return nil, errors.Join(errOracle, err)
+	}
+	// For an admitted zero- or 32-byte body, ReadAll must have observed EOF
+	// before its 33-byte ceiling; an extra byte refuses the whole observation.
+	if hooks.afterRead != nil {
+		hooks.afterRead()
+	}
+	if err = unix.Fstat(fd, &held); err != nil {
+		return nil, errors.Join(errOracle, err)
+	}
+	if !sameOracleStat(expected, held) {
+		return nil, errOracle
+	}
+	if err = oracleLeafNamedUnchanged(parent, name, expected); err != nil {
+		return nil, err
+	}
+	if err = oracleDirectoryUnchanged(parent, parentPath, parentStamp); err != nil {
+		return nil, err
+	}
+	if err = ctx.Err(); err != nil {
+		return nil, errors.Join(errOracle, err)
+	}
+	return data, nil
+}
+
 func inspect(ctx context.Context, root, database string, t topology) (oracle, error) {
 	var result oracle
 	db, err := sql.Open("sqlite", database)
@@ -156,7 +313,7 @@ CREATE TABLE observations(ordinal INTEGER PRIMARY KEY,path BLOB UNIQUE,device TE
 		}
 	}()
 	var walk func(string) error
-	walk = func(dir string) error {
+	walk = func(dir string) (walkErr error) {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -180,11 +337,18 @@ CREATE TABLE observations(ordinal INTEGER PRIMARY KEY,path BLOB UNIQUE,device TE
 			return errOracle
 		}
 		result.DirectoryAllocated += rawDir.Blocks * 512
-		f, err := os.Open(dir)
+		f, parentStamp, err := openOracleDirectory(dir, info)
 		if err != nil {
 			return err
 		}
-		defer f.Close()
+		defer func() {
+			closeErr := f.Close()
+			nameErr := oracleDirectoryNamedUnchanged(dir, parentStamp)
+			contextErr := ctx.Err()
+			if closeErr != nil || nameErr != nil || contextErr != nil {
+				walkErr = errors.Join(walkErr, errOracle, closeErr, nameErr, contextErr)
+			}
+		}()
 		for {
 			names, readErr := f.Readdirnames(128)
 			for _, name := range names {
@@ -213,14 +377,9 @@ CREATE TABLE observations(ordinal INTEGER PRIMARY KEY,path BLOB UNIQUE,device TE
 				if !ok || raw.Nlink != 1 {
 					return errOracle
 				}
-				body, e := os.Open(p)
+				data, e := readOracleLeaf(ctx, f, dir, name, parentStamp, st, t.body(n))
 				if e != nil {
 					return e
-				}
-				data, e := io.ReadAll(io.LimitReader(body, 33))
-				ce := body.Close()
-				if e != nil || ce != nil || !bytes.Equal(data, t.body(n)) {
-					return errOracle
 				}
 				if raw.Blocks < 0 || raw.Blocks > int64(^uint64(0)>>1)/512 {
 					return errOracle
@@ -254,7 +413,10 @@ CREATE TABLE observations(ordinal INTEGER PRIMARY KEY,path BLOB UNIQUE,device TE
 				return readErr
 			}
 		}
-		return nil
+		if err := oracleDirectoryUnchanged(f, dir, parentStamp); err != nil {
+			return err
+		}
+		return ctx.Err()
 	}
 	if err = walk(root); err != nil {
 		return result, err

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"time"
@@ -65,7 +66,51 @@ func (s *Scanner) InspectTree(ctx context.Context, targets []state.LiveTarget) (
 	return s.inspect(ctx, targets, true)
 }
 
+// InspectWithUsage preserves input inspection and separately returns every
+// issued input-file read allowance and actual returned byte, including failures.
+// This is per-call diagnostics, not a durable quota or source-read authority.
+func (s *Scanner) InspectWithUsage(ctx context.Context, targets []state.LiveTarget) (InspectionReport, FileReadUsage, error) {
+	return s.inspectWithUsage(ctx, targets, false, inspectUsageHooks{})
+}
+
+// InspectTreeWithUsage counts only project input-file Read attempts. Directory
+// listings and link text are excluded, and dependency contents stay unchecked.
+func (s *Scanner) InspectTreeWithUsage(ctx context.Context, targets []state.LiveTarget) (InspectionReport, FileReadUsage, error) {
+	return s.inspectWithUsage(ctx, targets, true, inspectUsageHooks{})
+}
+
+// Hooks are private per-call generated-fixture observers. They never supply
+// successful source payloads or survive a call; public entry points use nil hooks.
+type inspectUsageHooks struct {
+	beforeRead        func(*os.File, int)
+	afterRead         func(int, int)
+	beforeRecheck     func()
+	beforeFinalReturn func()
+}
+
+func (s *Scanner) inspectWithUsage(ctx context.Context, targets []state.LiveTarget, tree bool, hooks inspectUsageHooks) (report InspectionReport, usage FileReadUsage, err error) {
+	started := time.Now()
+	defer func() {
+		// Nested input/path/tree descriptor close attempts have already run.
+		// Their legacy ignored close errors remain unchanged.
+		if hooks.beforeFinalReturn != nil {
+			hooks.beforeFinalReturn()
+		}
+		if ended := ctx.Err(); ended != nil {
+			report = InspectionReport{}
+			err = errors.Join(err, ended)
+		}
+		usage.Elapsed = time.Since(started)
+	}()
+	report, err = s.inspectCore(ctx, targets, tree, &usage, hooks)
+	return report, usage, err
+}
+
 func (s *Scanner) inspect(ctx context.Context, targets []state.LiveTarget, tree bool) (InspectionReport, error) {
+	return s.inspectCore(ctx, targets, tree, nil, inspectUsageHooks{})
+}
+
+func (s *Scanner) inspectCore(ctx context.Context, targets []state.LiveTarget, tree bool, usage *FileReadUsage, hooks inspectUsageHooks) (InspectionReport, error) {
 	r := InspectionReport{Status: "inputs_observed", Source: "live_project_inputs", LocalDependencyEdits: "unknown", Targets: []InspectionResult{}}
 	status := r.Status
 	if tree {
@@ -82,7 +127,7 @@ func (s *Scanner) inspect(ctx context.Context, targets []state.LiveTarget, tree 
 		if tree {
 			item.Message = "The project inputs and observed dependency layout fit the supported format during this check. File contents, local edits and successful reinstall remain unverified."
 		}
-		evidence, treeEvidence, err := s.inspectTargetWithTree(ctx, target, tree, nil)
+		evidence, treeEvidence, err := s.inspectTargetWithTreeUsage(ctx, target, tree, hooks.beforeRecheck, usage, hooks)
 		if err != nil {
 			if ctx.Err() != nil {
 				return InspectionReport{}, ctx.Err()
@@ -124,6 +169,8 @@ type inputReader struct {
 	mount   string
 	project string
 	files   []heldInput
+	usage   *FileReadUsage
+	hooks   inspectUsageHooks
 }
 
 func (s *Scanner) inspectTarget(ctx context.Context, target state.LiveTarget, beforeRecheck func()) (InputEvidence, error) {
@@ -132,7 +179,11 @@ func (s *Scanner) inspectTarget(ctx context.Context, target state.LiveTarget, be
 }
 
 func (s *Scanner) inspectTargetWithTree(ctx context.Context, target state.LiveTarget, tree bool, beforeRecheck func()) (InputEvidence, *TreeEvidence, error) {
-	reader := inputReader{scanner: s, ctx: ctx, project: filepath.Dir(string(target.Finding.PathBytes))}
+	return s.inspectTargetWithTreeUsage(ctx, target, tree, beforeRecheck, nil, inspectUsageHooks{})
+}
+
+func (s *Scanner) inspectTargetWithTreeUsage(ctx context.Context, target state.LiveTarget, tree bool, beforeRecheck func(), usage *FileReadUsage, hooks inspectUsageHooks) (InputEvidence, *TreeEvidence, error) {
+	reader := inputReader{scanner: s, ctx: ctx, project: filepath.Dir(string(target.Finding.PathBytes)), usage: usage, hooks: hooks}
 	defer reader.close()
 	var evidence InputEvidence
 	var treeEvidence *TreeEvidence
@@ -263,7 +314,20 @@ func (r *inputReader) read(name string, limit int) ([]byte, error) {
 		if err = r.ctx.Err(); err != nil {
 			return nil, err
 		}
-		n, readErr := file.Read(chunk[:min(len(chunk), limit+1-len(contents))])
+		want := min(len(chunk), limit+1-len(contents))
+		if r.usage != nil && !addInspectionUsage(&r.usage.RequestedBytes, int64(want)) {
+			return nil, blocked("input_usage_limit", "Input read accounting exceeded its fixed integer bound.")
+		}
+		if r.hooks.beforeRead != nil {
+			r.hooks.beforeRead(file, want)
+		}
+		n, readErr := file.Read(chunk[:want])
+		if r.usage != nil && (n < 0 || n > want || !addInspectionUsage(&r.usage.ReadBytes, int64(n))) {
+			return nil, blocked("input_usage_limit", "Input read accounting exceeded its fixed integer bound.")
+		}
+		if r.hooks.afterRead != nil {
+			r.hooks.afterRead(want, n)
+		}
 		contents = append(contents, chunk[:n]...)
 		if len(contents) > limit {
 			return nil, blocked("input_limit", "A project input exceeded the bounded read limit during inspection.")
@@ -279,6 +343,14 @@ func (r *inputReader) read(name string, limit int) ([]byte, error) {
 		return nil, blocked("input_changed_during_check", "A project input changed size during inspection.")
 	}
 	return contents, r.recheckFiles()
+}
+
+func addInspectionUsage(counter *int64, amount int64) bool {
+	if amount < 0 || *counter < 0 || amount > math.MaxInt64-*counter {
+		return false
+	}
+	*counter += amount
+	return true
 }
 
 func sameInputStamp(a, b unix.Stat_t) bool {

@@ -78,6 +78,7 @@ type fileSampleHooks struct {
 	afterOpen        func()
 	afterRead        func(int)
 	beforeFinalCheck func()
+	beforeReturn     func()
 }
 
 // ObserveFileSamples explicitly reads at most three merged 32 KiB windows per
@@ -91,66 +92,15 @@ type fileSampleHooks struct {
 // At most 258 handles are retained, plus one temporary directory recheck handle.
 // Metadata rechecks do not establish one atomic content snapshot across writers
 // or targets, nor continuous inode identity since the saved observations.
-// Cancellation returns no report; future persistent read-budget accounting must
-// account for attempted reads separately, including canceled requests.
+// Cancellation returns no report. ObserveFileSamplesWithUsage also returns
+// attempted read accounting, including canceled requests.
 func (s *Scanner) ObserveFileSamples(ctx context.Context, targets []SavedFileTarget) (FileSampleReport, error) {
 	return s.observeFileSamples(ctx, targets, fileSampleHooks{})
 }
 
 func (s *Scanner) observeFileSamples(ctx context.Context, targets []SavedFileTarget, hooks fileSampleHooks) (FileSampleReport, error) {
-	if err := boundedSampleRequest(targets); err != nil {
-		return FileSampleReport{}, err
-	}
-	ctx, cancel := context.WithTimeout(ctx, fileSampleTimeout)
-	defer cancel()
-	if err := ctx.Err(); err != nil {
-		return FileSampleReport{}, err
-	}
-	if s.closed.Load() {
-		return FileSampleReport{}, errors.New("scanner closed")
-	}
-	r := FileSampleReport{Status: "samples_observed", Source: "live_file_samples", EvidenceSource: "caller_supplied_saved_records", Contract: FileSampleContract, Targets: []FileSampleResult{}}
-	var budget fileSampleBudget
-	for _, target := range targets {
-		if err := ctx.Err(); err != nil {
-			return FileSampleReport{}, err
-		}
-		item := FileSampleResult{Target: target, Status: "samples_observed", Message: "Selected sample ranges were read and the held path metadata was rechecked. Equal samples do not prove equal file contents.", Ranges: []FileSampleRange{}}
-		// The display path may have lost invalid UTF-8 in a JSON round trip.
-		// Only PathBytes identifies the selected filesystem name.
-		item.Target.File.Path = string(target.File.PathBytes)
-		before := budget
-		err := validateSampleTarget(target)
-		if err == nil {
-			err = conflictingSampleIdentity(target, targets)
-		}
-		if err == nil {
-			item.RepeatedSavedIdentity = repeatedSampleIdentity(target, targets)
-			err = s.sampleFile(ctx, target, &budget, &item, hooks)
-		}
-		if ctx.Err() != nil {
-			return FileSampleReport{}, ctx.Err()
-		}
-		item.RequestedBytes, item.ReadBytes = budget.requested-before.requested, budget.read-before.read
-		if err != nil {
-			item.Status, item.SHA256, r.Status = "blocked", "", "blocked"
-			var failure liveError
-			if errors.As(err, &failure) {
-				item.Code, item.Message = failure.code, failure.message
-			} else {
-				item.Code, item.Message = "path_unavailable", "The selected path is missing, inaccessible, a symlink or otherwise unsupported. No sample digest is available."
-			}
-		}
-		r.Targets = append(r.Targets, item)
-	}
-	if err := ctx.Err(); err != nil {
-		return FileSampleReport{}, err
-	}
-	if s.closed.Load() {
-		return FileSampleReport{}, errors.New("scanner closed")
-	}
-	r.RequestedBytes, r.ReadBytes, r.CheckedAt = budget.requested, budget.read, time.Now().UTC()
-	return r, nil
+	report, _, err := s.observeFileSamplesWithUsage(ctx, targets, hooks)
+	return report, err
 }
 
 // Bound caller-controlled evidence before constructing maps or opening paths.

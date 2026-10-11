@@ -2,6 +2,8 @@
 
 Human-readable output is the default. Add `--json` to finite noninteractive commands for one JSON object on stdout, on both success and failure. Normal JSON responses leave stderr empty; failure to write the response is reported on stderr. `daemon` is a long-running foreground text command; observe it with `status --json` from another process. `review` is a guided text command and rejects JSON before reading input or opening state.
 
+See [foreground worker supervision](supervisor.md) for a separately selected supervisor, including when a systemd user manager is unavailable.
+
 ```sh
 rydd capabilities --json
 rydd status --json
@@ -328,6 +330,23 @@ Each file includes `logical_bytes`, `allocated_bytes`, `observed_at`, `modified_
 `roots` contains up to 100 enabled roots, with pending/running job counts, directory error counts, last root error and last root-directory pass time. `roots_truncated` indicates omitted root diagnostics. Root pass times cover direct children, not complete subtrees; empty queues do not prove coverage, and saved errors do not establish current availability. Observation timestamps describe freshness without inventing whole-tree completion percentages.
 
 Pages use a cursor based on size and entry ID rather than an increasing offset. Each invocation uses one short SQLite read snapshot, capped at five seconds, returning at most one extra file to determine whether a next page exists. Index-backed file pagination bounds returned data, while root diagnostic counts still depend on inventory size. Concurrent scanning can change ordering between pages; this is not a frozen export and changes can cause omissions/repeats across invocations. Missing/empty inventories, exhausted pages and invalid cursors produce explicit empty reports or standard errors. A returned `next_cursor` should be passed unchanged with the same state directory. Selected-directory measurement is described below; the first review-candidate category is described below.
+
+## Candidate page size summary
+
+Add `--page-size-summary` to `report --candidates` to summarize the folders visible on that saved page:
+
+```sh
+rydd report --candidates -d /path/to/project --page-size-summary
+rydd report --candidates -d /path/to/project --page-size-summary --json
+```
+
+The option accepts only `true` or `false`, once. It requires candidate mode even when false. Default and explicit false preserve the existing report. The JSON report adds `candidate_size_summary` only when the option is true; saved findings and cleanup selections keep their existing format.
+
+The summary uses the same inventory snapshot as the findings and measures at most twenty folders. It includes only the exact rows left visible after scope and dismissal filtering. Hidden findings are not replaced. An empty visible page reports zero page totals. It can still have a continuation cursor and does not establish an empty inventory.
+
+Logical size counts measured paths. Separate hardlink paths can contribute more than once. Partial, stale and unknown evidence stays qualified. Overlapping folder paths, missing quantities or addition overflow make the affected total unknown. With visible folders, allocated size is shown only for one folder with complete, known saved allocation; multiple folders have no combined allocation total because shared objects across folders have not been checked.
+
+These are historical measurements. The command reads no source file contents and verifies no current state, physical allocation or storage you can free. It records no approval or cleanup decision. Use the existing page cursor and candidate options to continue; each page is a separate saved snapshot.
 
 ## Guided manual review
 
@@ -1357,3 +1376,15 @@ rydd hashes --store-budget --json
 This exclusive mode loads no configuration, observes no current clock, reads no selected bodies and recovers no work. `hashes.saved_budget` is null before activation. Afterward its stored day, high-water and day/lifetime counters describe the shared record. Separate `saved_clock_projection_*` fields include newer saved consent clocks without writing them. Day usage counters refer to the stored day. Current permission, configured-limit evaluation and physical-I/O claims remain false; the view calculates no current remaining quota. Ordinary `hashes`, groups and saved choices keep their existing formats.
 
 Successful explicit run results add optional `store_read_budget` and `configured_daily_reserved_byte_limit` fields. Invalid execution limits use `hash_execution_limits_invalid`; a legacy run on an activated store uses `hash_store_budget_required`; incompatible shared accounting uses `hash_store_budget_invalid`. When shared validation identifies a corrupt fresh job, consent, progress record or keeper choice, its existing specific error code remains available; the command still refuses the whole view. Capabilities advertise `configured_hash_store_daily_reservations`, `saved_hash_store_budget` and the exact scoped contract. Other stores, sampling, metadata, configuration, SQLite reads and physical-device traffic are excluded. This adds no cleanup permission or automatic continuation.
+
+## Saved sample accounting
+
+Use `rydd --data-dir ABSOLUTE_PRIVATE_BASE samples --show BATCH_ID` to inspect one exact existing sample batch. Add `--json` for the versioned machine view. The batch ID must contain exactly 64 lower-case hexadecimal characters. Supply the global private data directory explicitly; this command does not discover configuration or a default home directory. It does not create a missing store.
+
+The view shows the saved batch, its optional attempt and the local reservation budget. It excludes historical target paths, sampled digests and payloads. Known zero usage is reported as zero. Interrupted or unsettled usage is unknown, represented by `null` in the machine view. The full reserved allowance remains charged. Unknown and unsettled charges are subsets of that allowance; do not add them again.
+
+The attempt's reservation day is distinct from the budget's saved UTC day and clock high-water. These saved values need not refer to today. The command does not calculate remaining quota, establish current read permission, prove that an unsettled process is active or verify present contents. The budget covers this one private sample store. Another store has a different accounting identity and local limits; hash-store accounting and physical device I/O remain separate.
+
+Opening validation and the explicit view each take a coherent snapshot. The view does not span both snapshots in one transaction. Reader closure, cancellation and output are checked under a cooperative five-second operation context. The scalar reply is capped at 16 KiB. Failed or canceled output returns failure; already-written bytes can remain.
+
+This command reads saved sample accounting only. It opens no historical inventory or source path, loads no configuration, samples no admission clock, recovers no attempt and starts no sampling. Private SQLite/WAL metadata I/O can occur. The command grants no read consent or cleanup permission. The library-only sample reservation foundation has no sampling CLI or background dispatcher.

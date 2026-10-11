@@ -1,0 +1,21 @@
+# Root notice review candidate
+
+This pure API assembles a separate historical root-notice review candidate. The normal candidate archive still contains exactly `rydd` and `BUILDINFO.json`.
+
+`internal/packaging.AssembleRootNoticeCandidate` accepts the fixed twenty-row catalog and twenty complete byte slices. The catalog names two Go toolchain texts and eighteen dependency root texts from the dated notice inventory. The function uses only in-memory bytes and the Go standard library. It does not open a source, fetch a URL, build a product, write an output or publish a release.
+
+The function checks each catalog field, exact length and SHA256 digest. It copies each admitted slice before serialization. Callers must not change the input catalog or slices concurrently. Short, extra, changed or over-limit inputs refuse the whole candidate. No text is selected by a keyword filter. CRLF, non-UTF8 bytes and a missing final newline are preserved.
+
+The uncompressed USTAR result has twenty regular notice members in numerical order `01` through `20`, followed by `INDEX.json` and `LIMITS.txt`. It has no directory, link, PAX or extra member records. Every member has mode `0644`, UID/GID zero, empty owner names and epoch modification time. Equal admitted byte inputs produce equal archive bytes.
+
+The exact notice inputs total 34,954 bytes; the largest is 10,505 bytes. Admission limits are 16 KiB per original and 64 KiB in total. The index is at most 16 KiB and the qualification text at most 4 KiB. The complete archive buffer is at most 128 KiB. A five-second cooperative fence checks context cancellation and separate wall/elapsed chronology. It does not promise a hard entered-call deadline or a process memory bound.
+
+Capture and text assessment are separate gates. The selected files are historical retained copies. Digest equality identifies those retained bytes; it does not authenticate current cache contents or upstream origin. The assembler marks only its exact complete root-text byte input as verified. It leaves whole-root clause assessment, current target closure, retained compiled code, asset applicability and embedded/per-file notice completeness unaccepted.
+
+Reviewers must examine every complete retained text and record unresolved references before accepting any clause ledger. This candidate does not select the project license, decide compatibility, establish legal compliance, approve distribution materials or accept a release. Earlier matched-line assessments, remaining omitted contexts and truncated tails retain their original bounds and dates.
+
+A separate complete-text assessment covers only two retained generated Darwin FTS texts: 258,548 bytes for amd64 and 268,569 bytes for arm64. They retain Apple APSL 2.0 references and Berkeley four-condition redistribution notices, including advertising acknowledgment and non-endorsement clauses, with NeXT, Berkeley Software Design and AT&T/UNIX System Laboratories attribution. The referenced full APSL license is not reproduced in these texts. Neither text mentions musl or logos; that absence answers no question outside these two files. They are not added to the fixed twenty-row root catalog. Upstream origin, compiled-target applicability, other embedded texts and legal or distribution decisions remain unresolved.
+
+Generated tests use a private trusted-hash seam for synthetic complete texts. The public API always supplies the fixed catalog pins. Passing synthetic tests cannot prove an actual fixed-pin capture or a public distribution bundle.
+
+Focused formatting, normal tests, race tests and vet passed. Generated native macOS tests passed all six parents and twenty-six descendants without skips. A separate public API check used the exact fixed retained 34,954-byte payload and matched all twenty-two members of the independent 58,880-byte archive oracle. Both outcome reviews checked source and executable identities, complete results and direct zero exits. These checks establish the tested assembler behavior; they do not authenticate upstream origin, settle unresolved references or accept distribution materials.

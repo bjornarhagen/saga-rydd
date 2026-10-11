@@ -15,6 +15,15 @@ import (
 // store. The artifact is private and can contain private history and unused-page
 // remnants. It is not a sanitized report or an executable restore record.
 func ExportPlanStore(ctx context.Context, base, destination string) (result ExportResult, err error) {
+	return exportPlanStore(ctx, base, destination, nil)
+}
+
+// A nil starter retains the real production backup. The private dependency seam
+// lets generated process fixtures wrap genuine steps without a global hook.
+func exportPlanStore(ctx context.Context, base, destination string, start backupStarter) (result ExportResult, err error) {
+	if start == nil {
+		start = startBackup
+	}
 	result.Contract = Contract
 	result.Destination = destination
 	if ctx == nil {
@@ -115,7 +124,7 @@ func ExportPlanStore(ctx context.Context, base, destination string) (result Expo
 			return nil
 		}
 		var copyErr error
-		destinationClosed, copyErr = transfer(raw, filepath.Join(stage.path, "plans.sqlite3"), p, e, startBackup)
+		destinationClosed, copyErr = transfer(raw, filepath.Join(stage.path, "plans.sqlite3"), p, e, start)
 		return phaseError("export backup", copyErr)
 	})
 	result.EngineClosureKnown = sourceClosed && destinationClosed

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -13,6 +14,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestTopologyStreamingOracle(t *testing.T) {
@@ -299,5 +302,119 @@ func TestTopologyReadinessRetainsReceiptErrorAtExpiry(t *testing.T) {
 			t.Fatal("readiness swallowed stronger status failure", err, calls)
 		}
 		cancel()
+	}
+}
+
+func TestTopologyOracleLeafHeldIdentityAndCancellation(t *testing.T) {
+	for _, name := range []string{"stable", "same_body_different_inode", "symlink_replacement", "fifo_replacement", "read_time_mutation", "cancel_before_open", "cancel_after_read"} {
+		t.Run(name, func(t *testing.T) {
+			base := t.TempDir()
+			leaf := filepath.Join(base, "f0000000")
+			want := (topology{"wide", 256}).body(0)
+			if err := os.WriteFile(leaf, want, 0600); err != nil {
+				t.Fatal(err)
+			}
+			info, err := os.Lstat(leaf)
+			if err != nil {
+				t.Fatal(err)
+			}
+			parentInfo, err := os.Lstat(base)
+			if err != nil {
+				t.Fatal(err)
+			}
+			parent, parentStamp, err := openOracleDirectory(base, parentInfo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := parent.Close(); err != nil {
+					t.Error(err)
+				}
+			}()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			opened, read := false, false
+			hooks := oracleLeafHooks{
+				beforeOpen: func() {
+					opened = true
+					switch name {
+					case "same_body_different_inode":
+						replacement := filepath.Join(base, "replacement")
+						if err := os.WriteFile(replacement, want, 0600); err != nil {
+							t.Fatal(err)
+						}
+						if err := os.Rename(replacement, leaf); err != nil {
+							t.Fatal(err)
+						}
+						current, err := os.Lstat(leaf)
+						if err != nil || os.SameFile(info, current) {
+							t.Fatal("fixture did not replace the inode", err)
+						}
+					case "symlink_replacement":
+						if err := os.Rename(leaf, filepath.Join(base, "retained-original")); err != nil {
+							t.Fatal(err)
+						}
+						if err := os.Symlink("retained-original", leaf); err != nil {
+							t.Fatal(err)
+						}
+					case "fifo_replacement":
+						if err := os.Remove(leaf); err != nil {
+							t.Fatal(err)
+						}
+						if err := unix.Mkfifo(leaf, 0600); err != nil {
+							t.Fatal(err)
+						}
+					}
+				},
+				afterRead: func() {
+					read = true
+					if name == "read_time_mutation" {
+						f, err := os.OpenFile(leaf, os.O_WRONLY|os.O_APPEND, 0)
+						if err != nil {
+							t.Fatal(err)
+						}
+						n, writeErr := f.Write([]byte{1})
+						closeErr := f.Close()
+						if n != 1 || writeErr != nil || closeErr != nil {
+							t.Fatal(n, writeErr, closeErr)
+						}
+					}
+					if name == "cancel_after_read" {
+						cancel()
+					}
+				},
+			}
+			if name == "cancel_before_open" {
+				cancel()
+			}
+			got, err := readOracleLeafWithHooks(ctx, parent, base, filepath.Base(leaf), parentStamp, info, want, hooks)
+			if name == "stable" {
+				if err != nil || !bytes.Equal(got, want) || !opened || !read {
+					t.Fatal("stable leaf refused", got, err, opened, read)
+				}
+				return
+			}
+			if !errors.Is(err, errOracle) || got != nil {
+				t.Fatal("changed or canceled leaf accepted", got, err)
+			}
+			switch name {
+			case "cancel_before_open":
+				if opened || read || !errors.Is(err, context.Canceled) {
+					t.Fatal("cancellation entered the leaf open", opened, read, err)
+				}
+			case "cancel_after_read":
+				if !opened || !read || !errors.Is(err, context.Canceled) {
+					t.Fatal("terminal cancellation escaped", opened, read, err)
+				}
+			case "read_time_mutation":
+				if !opened || !read {
+					t.Fatal("fixture did not mutate after the bounded read", opened, read)
+				}
+			default:
+				if !opened || read {
+					t.Fatal("replacement reached body reading", opened, read)
+				}
+			}
+		})
 	}
 }

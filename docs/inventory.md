@@ -51,6 +51,18 @@ The worker supplies an entry-inspection rate. A throttle-window deadline produce
 
 Metadata scans still open no ordinary file contents. Separate library requests can capture exact saved evidence, observe bounded samples or calculate a full SHA-256 hash. Capture and observation requests do not themselves supply consent or cleanup permission. Explicit CLI full-file approval and one-step continuation use the separate consent gate below. `rydd hashes [--work WORK_ID | --groups] [--json]` reads existing historical observations or matching completed groups and their whole-selection budget. Background integration remains pending.
 
+### Per-call sample read usage
+
+The inventory library offers `Scanner.ObserveFileSamplesWithUsage(ctx, targets)` when the caller needs attempted read accounting alongside a sample report:
+
+```go
+report, usage, err := scanner.ObserveFileSamplesWithUsage(ctx, targets)
+```
+
+Retain `usage` before handling `err`. Its fixed `FileReadUsage` value survives ordinary error and cancellation returns. `RequestedBytes` counts issued source-read requests, including failed and short reads; `ReadBytes` counts bytes returned by those requests. `Elapsed` includes validation and cleanup. A call-level error returns no report or sample digest. A refused individual target can instead appear as a blocked item in a returned report; its digest is omitted.
+
+The existing two-return `ObserveFileSamples` API and report JSON stay unchanged. Both APIs retain the same exact-target and no-follow metadata checks, 1–20 target limit, at most three merged 32 KiB windows per file and cooperative five-second deadline. An entered filesystem call can outlast that deadline. No source bytes are returned. Equal samples do not prove equal contents or an atomic snapshot. Usage measures issued requests and returned bytes, not physical disk I/O, a durable reservation, daily quota, consent or cleanup permission.
+
 The durable hashing store keeps one frozen selection of 1–20 files, with at most 1 MiB of evidence, in a separate private `hashes/hashes.sqlite3` database. Its writer holds an exclusive lock for its lifetime. Inventory rebuilds do not remove hashing records. The store accepts no imported SHA state, caller-supplied offset, usage receipt or final digest.
 
 ```mermaid
@@ -203,3 +215,19 @@ Fresh dispatch refuses a still-valid approval if it cannot outlast the remaining
 Uninitialized seeds have nil observations. Initialized members retain independently cloned actual `SavedFreshHashWork`, raw paths and optional attempt usage pointers. Only complete settled heads with full digests/check times can yield `historical_hashes_match` or `historical_hashes_differ`. Missing/pending/running/unknown unfinished work is incomplete; invalidated work blocks its pairs. Preserve each pair and count under aggregate blocked/incomplete/differing/matching precedence. Existing strict corruption checks remain read failures. No original digest or unknown usage becomes fresh evidence, and earlier whole-job unknown charges do not erase later complete heads.
 
 This derivation changes no record identity/schema/persistence/permission/clock/accounting/recovery or source access. Reports remain saved sequential historical evidence, with authority/verification fields false and savings null. Current equality, allocation/shared-block savings and cleanup remain separate gates.
+
+### Durable generated sample accounting
+
+The separate sample-store library freezes one exact batch of 1–20 ordinary-file targets from saved inventory. One attempt reserves the full merged-window allowance before calling the sampler: at most 96 KiB per file and 1,966,080 bytes for the batch. Its fixed reservation policy applies to that private store only. Existing full-hash consent does not authorize this operation; production sampling consent and background dispatch remain pending.
+
+`OpenSampleWriter` can initialize this separate schema-1 store. `CreateBatch` preserves exact ordered evidence and rejects a different batch. `RunSamples` checks saved inventory and current source bindings, then settles known requested/returned usage after ordinary failures and cancellation under bounded cleanup. A refused target carries no sample digest; a call-level failure returns no sample report. A confirmed settlement can survive a lost reply; durable accounting alone does not prove a sample report was returned.
+
+The one-shot attempt cannot be repeated. Explicit `Recover` converts an unsettled attempt to `interrupted_unknown`: its complete allowance stays charged, while actual requested bytes, returned bytes and elapsed time remain unknown. Recovery opens no source and reads no admission clock. Unknown and outstanding allowances are subsets of the full reservation charge; adding them again would double-count the charge. UTC day counters use the original reservation day and saved clock high-water, with backward-clock admission refused.
+
+`OpenSampleReader` opens existing accounting without initialization, migration or recovery. Opening validation and a later explicit `Snapshot` are separate coherent read transactions. Snapshots evaluate no current read permission and contain no persisted sample report, digest or source content. Database and sidecar limits are cooperative admission checks; they do not reserve disk space. Creating another store creates another identity and local budget. Shared sample/hash quotas, physical I/O, production source authority and cleanup remain separate.
+
+### Per-call project-input read usage
+
+`Scanner.InspectWithUsage(ctx, targets)` and `InspectTreeWithUsage(ctx, targets)` return `(InspectionReport, FileReadUsage, error)`. Retain the usage value before handling the error. Requested bytes count every actual package.json/package-lock.json read allowance, including the existing EOF/growth sentinel; returned bytes remain recorded after short reads, read errors, later refusals and cancellation. Elapsed observation includes the existing close attempts and final checks. Close-error behavior remains the same as the original inspection APIs.
+
+These variants preserve the old inspection report JSON, source checks, input limits and caller-context ownership. The current CLI inspection supplies its existing five-second context. Tree enumeration and link metadata are outside the byte counters, as are configuration, SQLite and log reads. A blocked target carries no usable input or tree evidence. Cancellation or a call-level error returns no usable report. The counters describe issued reads and returned bytes; they grant no read consent and establish no persistent, shared or physical I/O quota.
