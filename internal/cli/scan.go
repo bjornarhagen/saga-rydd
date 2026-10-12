@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -308,4 +309,389 @@ func printScanReport(out io.Writer, r ScanReport) {
 	}
 	fmt.Fprintf(out, "\nView the saved report:\n  rydd --data-dir %s report -d %s\n", shellQuote(base), shellQuote(r.Directory))
 	fmt.Fprintf(out, "\nReview saved node_modules candidates:\n  rydd --data-dir %s review -d %s\n", shellQuote(base), shellQuote(r.Directory))
+}
+
+// Refresh is selected before any storage or source operation. Flag operands
+// remain operands, even when their spelling is --refresh or --json.
+func scanRefreshArgs(args []string) ([]string, bool, error) {
+	filtered := make([]string, 0, len(args))
+	seen, selected, positional := false, false, false
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			filtered = append(filtered, args[i:]...)
+			break
+		}
+		if a == "-d" || a == "--d" || a == "-directory" || a == "--directory" || a == "-s" || a == "--s" || a == "-sleep" || a == "--sleep" {
+			filtered = append(filtered, a)
+			if i+1 < len(args) {
+				i++
+				filtered = append(filtered, args[i])
+			}
+			continue
+		}
+		if a == "--refresh" || strings.HasPrefix(a, "--refresh=") {
+			if seen || positional {
+				return nil, false, usageError{errors.New("scan accepts --refresh once, before operands")}
+			}
+			seen = true
+			selected = true
+			if a != "--refresh" {
+				value := strings.TrimPrefix(a, "--refresh=")
+				if value != "true" && value != "false" {
+					return nil, false, usageError{errors.New("--refresh accepts only true or false")}
+				}
+				selected = value == "true"
+			}
+			continue
+		}
+		if a == "" || a[0] != '-' {
+			positional = true
+		}
+		filtered = append(filtered, a)
+	}
+	return filtered, selected, nil
+}
+
+type scanRefreshOptions struct {
+	path      string
+	delay     int
+	requested *bool
+}
+
+func parseScanRefreshOptions(args []string) (scanRefreshOptions, error) {
+	var o scanRefreshOptions
+	f := flag.NewFlagSet("scan", flag.ContinueOnError)
+	f.SetOutput(io.Discard)
+	f.StringVar(&o.path, "d", "", "")
+	f.StringVar(&o.path, "directory", "", "")
+	f.IntVar(&o.delay, "s", 10, "")
+	f.IntVar(&o.delay, "sleep", 10, "")
+	compact := f.Bool("compact", false, "")
+	detailed := f.Bool("detailed", false, "")
+	now := f.Bool("now", false, "")
+	if err := f.Parse(args); err != nil {
+		return o, usageError{err}
+	}
+	seen := map[string]bool{}
+	f.Visit(func(v *flag.Flag) { seen[v.Name] = true })
+	if (seen["compact"] && seen["detailed"]) || f.NArg() != 0 || o.path == "" || o.delay < 0 || o.delay > 60000 || (*now && (seen["s"] || seen["sleep"])) || (seen["d"] && seen["directory"]) || (seen["s"] && seen["sleep"]) {
+		return o, usageError{errors.New("scan accepts --refresh, -d PATH and -s 0–60000 milliseconds or --now; do not combine aliases")}
+	}
+	if *now {
+		o.delay = 0
+	}
+	if seen["compact"] {
+		o.requested = compact
+	}
+	if seen["detailed"] {
+		value := !*detailed
+		o.requested = &value
+	}
+	return o, nil
+}
+
+func validateScanRefreshArgs(args []string) error {
+	filtered, selected, err := scanRefreshArgs(args)
+	if err != nil || !selected {
+		return err
+	}
+	_, err = parseScanRefreshOptions(filtered)
+	return err
+}
+
+// Test seams are private, nil by default, and called only by the selected route.
+// They do not add work or change the original scan API.
+type scanRefreshHooks struct {
+	afterActivation func(*state.Store, *state.ManualRefreshActivation, *state.ManualRefreshReceipt) error
+	afterCommit     func(*state.ManualRefreshReceipt) error
+	closeStore      func(*state.Store) error
+}
+
+func scanWithRefresh(ctx context.Context, args []string, paths config.Paths, progress io.Writer) (ScanReport, *state.ManualRefreshReceipt, error) {
+	filtered, selected, err := scanRefreshArgs(args)
+	if err != nil {
+		return ScanReport{}, nil, err
+	}
+	if !selected {
+		r, err := scan(ctx, filtered, paths, progress)
+		return r, nil, err
+	}
+	return scanSelectedRefresh(ctx, filtered, paths, progress, scanRefreshHooks{})
+}
+
+func scanSelectedRefresh(ctx context.Context, args []string, paths config.Paths, progress io.Writer, hooks scanRefreshHooks) (r ScanReport, receipt *state.ManualRefreshReceipt, retErr error) {
+	o, err := parseScanRefreshOptions(args)
+	if err != nil {
+		return r, nil, err
+	}
+	root, err := directoryPath(o.path)
+	if err != nil {
+		return r, nil, err
+	}
+	info, err := os.Stat(root)
+	if err != nil {
+		return r, nil, err
+	}
+	if !info.IsDir() {
+		return r, nil, usageError{errors.New("scan target must be a directory")}
+	}
+	r.Directory, r.DirectoryBytes, r.StateDir, r.SleepMS = root, []byte(root), manualState(paths, root), o.delay
+	r.Mode = "resume"
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return r, nil, err
+	}
+	var excludes []string
+	cfg, err := config.Load(paths.ConfigFile, home)
+	if err == nil {
+		excludes = cfg.Excludes
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return r, nil, err
+	}
+	for _, dir := range []string{paths.StateDir, filepath.Join(paths.StateDir, "manual")} {
+		if err = localfs.EnsurePrivateDir(dir); err != nil {
+			return r, nil, err
+		}
+	}
+	w, err := state.OpenWriter(ctx, r.StateDir)
+	if err != nil {
+		return r, nil, err
+	}
+	defer func() {
+		var closeErr error
+		if hooks.closeStore != nil {
+			closeErr = hooks.closeStore(w)
+		} else {
+			closeErr = w.Close()
+		}
+		retErr = errors.Join(retErr, closeErr)
+		if ctx.Err() != nil {
+			retErr = errors.Join(retErr, ctx.Err())
+		}
+		if receipt != nil {
+			retErr = errors.Join(retErr, scanRefreshReceiptBound(receipt))
+		}
+	}()
+	session, known, err := w.PreflightManualRefresh(ctx, []byte(root), o.requested)
+	receipt = known
+	if err != nil {
+		return r, receipt, err
+	}
+	r.Compact, err = w.ConfigureCompact(ctx, o.requested)
+	if err != nil {
+		return r, receipt, err
+	}
+	if err = w.SyncRoots(ctx, []string{root}); err != nil {
+		return r, receipt, err
+	}
+	nextReceipt, err := w.RequestManualRefresh(ctx, session)
+	receipt = keepScanRefreshReceipt(receipt, nextReceipt)
+	if err != nil {
+		return r, receipt, err
+	}
+	if receipt == nil {
+		return r, nil, errors.New("manual refresh request returned no receipt")
+	}
+	display := &reviewOutput{writer: progress}
+	fmt.Fprintf(display, "Scanning folder:\n%q\n", root)
+	printWrapped(display, fmt.Sprintf("Entry delay: %d ms. Press Ctrl+C to stop. Progress already saved is kept.", o.delay), "")
+	printWrapped(display, "Refresh requested. Saved work finishes before one additional metadata pass.", "")
+	if display.err != nil {
+		return r, receipt, display.err
+	}
+	scanner, err := inventory.New([]string{root}, excludes, []string{paths.StateDir, paths.ConfigFile}, inventory.WithEntryDelay(time.Duration(o.delay)*time.Millisecond))
+	if err != nil {
+		return r, receipt, err
+	}
+	defer scanner.Close()
+	if _, err = w.RecoverJobs(ctx, time.Now()); err != nil {
+		return r, receipt, err
+	}
+	var activation *state.ManualRefreshActivation
+	lastProgress := time.Now()
+	for {
+		if err = ctx.Err(); err != nil {
+			return r, receipt, err
+		}
+		if receipt.Phase == "pending" {
+			nextReceipt, nextActivation, err := w.TryActivateManualRefresh(ctx, session, time.Now())
+			receipt = keepScanRefreshReceipt(receipt, nextReceipt)
+			activation = nextActivation
+			if err != nil {
+				return r, receipt, err
+			}
+			if activation != nil {
+				r.Mode = "new_pass"
+				if hooks.afterActivation != nil {
+					if err = hooks.afterActivation(w, activation, receipt); err != nil {
+						return r, receipt, err
+					}
+				}
+				printWrapped(display, "Starting the selected refresh pass.", "")
+				if display.err != nil {
+					return r, receipt, display.err
+				}
+			}
+		}
+		blocked, err := w.WALBlocked(ctx, state.WALBackpressureBytes)
+		if err != nil {
+			return r, receipt, err
+		}
+		if blocked {
+			r.Outcome = "wal_backpressure"
+			break
+		}
+		j, err := w.ClaimJob(ctx, []string{state.ScanKind}, time.Now(), time.Minute)
+		if err != nil {
+			return r, receipt, err
+		}
+		if j == nil {
+			worked, err := w.RetireCompact(ctx)
+			if err != nil {
+				return r, receipt, err
+			}
+			if worked {
+				r.RetirementBatches++
+			} else {
+				worked, err = w.RetireSubtrees(ctx)
+				if err != nil {
+					return r, receipt, err
+				}
+				if worked {
+					r.SubtreeRetirementBatches++
+				} else {
+					worked, err = w.ReduceAllocations(ctx)
+					if err != nil {
+						return r, receipt, err
+					}
+					if worked {
+						r.AllocationBatches++
+					}
+				}
+			}
+			if worked {
+				timer := time.NewTimer(time.Duration(max(o.delay, 1)) * time.Millisecond)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return r, receipt, ctx.Err()
+				case <-timer.C:
+				}
+				continue
+			}
+			nextReceipt, err := w.FinalizeManualRefresh(ctx, session)
+			receipt = keepScanRefreshReceipt(receipt, nextReceipt)
+			if err != nil {
+				return r, receipt, err
+			}
+			if receipt.Phase == "pending" {
+				// Maintenance just drained. Admission, not broad seeding, decides
+				// whether the one selected pass can start now.
+				nextReceipt, nextActivation, err := w.TryActivateManualRefresh(ctx, session, time.Now())
+				receipt = keepScanRefreshReceipt(receipt, nextReceipt)
+				activation = nextActivation
+				if err != nil {
+					return r, receipt, err
+				}
+				if activation != nil {
+					r.Mode = "new_pass"
+					if hooks.afterActivation != nil {
+						if err = hooks.afterActivation(w, activation, receipt); err != nil {
+							return r, receipt, err
+						}
+					}
+					continue
+				}
+			}
+			r.Outcome = "pending_retry"
+			if receipt.Phase == "completed" {
+				r.Outcome = "queue_drained"
+			}
+			break
+		}
+		chunk, cancel := context.WithTimeout(ctx, 10*time.Second)
+		type nextResult struct {
+			batch state.ScanBatch
+			err   error
+		}
+		done := make(chan nextResult, 1)
+		go func() { b, e := scanner.Next(chunk, *j); done <- nextResult{b, e} }()
+		var batch state.ScanBatch
+		var nextErr error
+		select {
+		case next := <-done:
+			batch, nextErr = next.batch, next.err
+		case <-chunk.Done():
+			nextErr = chunk.Err()
+		}
+		cancel()
+		if nextErr != nil {
+			cleanup, finish := context.WithTimeout(context.Background(), time.Second)
+			finishErr := w.FinishJob(cleanup, *j, false, j.Cursor, time.Unix(0, 1), nextErr.Error())
+			finish()
+			return r, receipt, errors.Join(nextErr, finishErr)
+		}
+		if activation != nil && j.ID == receipt.ActivatedRootJobID && string(j.Path) == "." {
+			nextReceipt, commitErr := w.CommitManualRefreshScan(ctx, activation, *j, batch)
+			receipt = keepScanRefreshReceipt(receipt, nextReceipt)
+			err = commitErr
+		} else {
+			err = w.CommitScan(ctx, *j, batch)
+		}
+		if err != nil {
+			return r, receipt, err
+		}
+		if receipt.RootListingEOFWitness {
+			activation = nil
+		}
+		r.Batches++
+		if hooks.afterCommit != nil {
+			if err = hooks.afterCommit(receipt); err != nil {
+				return r, receipt, err
+			}
+		}
+		if time.Since(lastProgress) >= time.Second {
+			fmt.Fprintf(display, "Saved %d batches.\n", r.Batches)
+			lastProgress = time.Now()
+			if display.err != nil {
+				return r, receipt, display.err
+			}
+		}
+	}
+	r.Inventory, err = w.Summary(ctx)
+	if err != nil {
+		return r, receipt, err
+	}
+	if _, err = w.Checkpoint(ctx); err != nil {
+		return r, receipt, err
+	}
+	return r, receipt, nil
+}
+
+func keepScanRefreshReceipt(known, next *state.ManualRefreshReceipt) *state.ManualRefreshReceipt {
+	if next != nil {
+		return next
+	}
+	return known
+}
+
+func scanRefreshReceiptBound(receipt *state.ManualRefreshReceipt) error {
+	data, err := json.Marshal(receipt)
+	if err != nil || len(data) > 1024 {
+		return errors.New("manual refresh receipt exceeds its 1024-byte reply bound")
+	}
+	return nil
+}
+
+func scanRefreshReplyMessage(receipt *state.ManualRefreshReceipt) string {
+	return fmt.Sprintf("Manual refresh request %d for inventory %s, root %d: %s. Reply failure does not undo saved evidence. Keep this identity; a later explicit refresh can create another request.", receipt.RequestGeneration, receipt.InventoryIncarnationID, receipt.RootID, receipt.Phase)
+}
+
+func printScanRefreshReceipt(out io.Writer, receipt *state.ManualRefreshReceipt) {
+	fmt.Fprintf(out, "\nManual refresh: %s\n", receipt.Phase)
+	printField(out, "Request generation", fmt.Sprint(receipt.RequestGeneration))
+	printField(out, "Inventory incarnation", receipt.InventoryIncarnationID)
+	printField(out, "Root ID", fmt.Sprint(receipt.RootID))
+	printWrapped(out, "Completion describes a historical metadata pass. It does not prove current coverage, inactivity or safe cleanup.", "")
 }

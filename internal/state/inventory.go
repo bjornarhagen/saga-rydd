@@ -63,6 +63,10 @@ func (s *Store) CommitScan(ctx context.Context, j Job, b ScanBatch) error {
 }
 
 func (s *Store) commitScan(ctx context.Context, j Job, b ScanBatch, adaptive *AdaptiveRevisitScope, now time.Time) error {
+	return s.commitScanWithManualRefresh(ctx, j, b, adaptive, now, nil)
+}
+
+func (s *Store) commitScanWithManualRefresh(ctx context.Context, j Job, b ScanBatch, adaptive *AdaptiveRevisitScope, now time.Time, witness *manualRefreshWitness) error {
 	if s.readOnly {
 		return errors.New("state is read-only")
 	}
@@ -86,6 +90,11 @@ func (s *Store) commitScan(ctx context.Context, j Job, b ScanBatch, adaptive *Ad
 		return err
 	}
 	defer tx.Rollback()
+	if witness != nil {
+		if err := witness.prepare(s, ctx, tx, j, b); err != nil {
+			return err
+		}
+	}
 	due := time.Unix(0, 1) // Continue this open directory before starting a child.
 	if b.Fault != "" {
 		due = now.Add(time.Hour)
@@ -111,6 +120,9 @@ func (s *Store) commitScan(ctx context.Context, j Job, b ScanBatch, adaptive *Ad
 			if _, err = tx.ExecContext(ctx, "UPDATE roots SET last_error=? WHERE id=?", b.Fault, j.RootID); err != nil {
 				return err
 			}
+		}
+		if witness != nil {
+			return witness.commit()
 		}
 		return tx.Commit()
 	}
@@ -175,6 +187,12 @@ func (s *Store) commitScan(ctx context.Context, j Job, b ScanBatch, adaptive *Ad
 		if err != nil {
 			return err
 		}
+	}
+	if witness != nil {
+		if err := witness.record(b); err != nil {
+			return err
+		}
+		return witness.commit()
 	}
 	return tx.Commit()
 }

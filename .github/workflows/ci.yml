@@ -79,6 +79,7 @@ jobs:
           cmp "$legacy_source/go.mod" go.mod
           cmp "$legacy_source/go.sum" go.sum
           export RYDD_CPU_CHARGES_OLD_CLI="$legacy_binary"
+          export RYDD_REFRESH_OLD_CLI="$legacy_binary"
           "$legacy_binary" --json --version > "$legacy_output/version.json"
           RYDD_OLD_CLI_EXPECT_TARGET="$legacy_target" python3 - <<'PY_VERSION'
           import hashlib, json, os, stat
@@ -141,7 +142,7 @@ jobs:
               print(file=stream)
           print(json.dumps(receipt, sort_keys=True))
           PY_VERSION
-          go test -json -mod=readonly -timeout=2m ./internal/state -run '^TestCPUChargesOldCLIRefusesActivatedStore$' -count=1 | tee "$legacy_output/test.jsonl"
+          go test -json -mod=readonly -timeout=2m ./internal/state ./internal/cli -run '^(TestCPUChargesOldCLIRefusesActivatedStore|TestScanRefreshOldCLICannotCreateSelectedWitness)$' -count=1 | tee "$legacy_output/test.jsonl"
           python3 - <<'PY_RESULT'
           import json, os
           from pathlib import Path
@@ -156,7 +157,26 @@ jobs:
           assert sum(record['Action'] == 'pass' for record in selected) == 1
           assert not any(record['Action'] in ('skip', 'fail') for record in selected)
           assert any(record.get('Action') == 'pass' and 'Test' not in record for record in records)
+          refresh_parent = 'TestScanRefreshOldCLICannotCreateSelectedWitness'
+          refresh_package = 'github.com/bjornarhagen/saga-rydd/internal/cli'
+          refresh_tests = (
+              refresh_parent,
+              refresh_parent + '/missing_first_generation',
+              refresh_parent + '/first_generation_without_selected_eof',
+          )
+          refresh_rows = [record for record in records if record.get('Package') == refresh_package and record.get('Test', '').split('/')[0] == refresh_parent]
+          assert {record['Test'] for record in refresh_rows} == set(refresh_tests)
+          for test in refresh_tests:
+              rows = [record for record in refresh_rows if record['Test'] == test]
+              assert sum(record['Action'] == 'run' for record in rows) == 1
+              assert sum(record['Action'] == 'pass' for record in rows) == 1
+              assert not any(record['Action'] in ('skip', 'fail') for record in rows)
+          for package in ('github.com/bjornarhagen/saga-rydd/internal/state', refresh_package):
+              rows = [record for record in records if record.get('Package') == package and 'Test' not in record]
+              assert sum(record.get('Action') == 'pass' for record in rows) == 1
+              assert not any(record.get('Action') in ('skip', 'fail') for record in rows)
           print('Exact pre-extension native CLI fixture ran and passed; no skip accepted.')
+          print('Exact manual-refresh old-CLI parent and two descendants ran and passed; no skip accepted.')
           PY_RESULT
       - name: Exact pre-period schema-15 source
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5

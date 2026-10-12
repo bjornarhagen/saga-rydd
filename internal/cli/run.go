@@ -24,6 +24,7 @@ Usage: rydd [--data-dir /absolute/path] <command>
 
 Commands:
   scan -d PATH [-s MS | --now] [--compact | --detailed] [--json]                Foreground metadata scan (default delay 10 ms)
+  scan -d PATH --refresh[=true|false]                  Finish saved work, then one additional metadata pass
   init --root /path [--root /another] [--exclude /path]  Create config and state
   config check                                         Validate configuration
   exclude --list / --add ABSOLUTE_PATH / --remove ABSOLUTE_PATH [--json]
@@ -216,6 +217,12 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 			return 2
 		}
 	}
+	if remaining[0] == "scan" {
+		if err := validateScanRefreshArgs(remaining[1:]); err != nil {
+			fmt.Fprintln(errOut, err)
+			return 2
+		}
+	}
 	paths, err := config.ResolvePaths(*dataDir)
 	if err != nil {
 		fmt.Fprintln(errOut, err)
@@ -282,8 +289,26 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 		}
 	case "scan":
 		var r ScanReport
-		r, err = scan(ctx, remaining[1:], paths, out)
+		var refresh *state.ManualRefreshReceipt
+		r, refresh, err = scanWithRefresh(ctx, remaining[1:], paths, out)
 		rootAdmissionDirectory = r.DirectoryBytes
+		if refresh != nil {
+			if err == nil {
+				checked := &reviewOutput{writer: out}
+				printScanReport(checked, r)
+				printScanRefreshReceipt(checked, refresh)
+				err = checked.err
+				if err == nil {
+					err = ctx.Err()
+				}
+			}
+			if err != nil {
+				fmt.Fprintln(errOut, err)
+				fmt.Fprintln(errOut, scanRefreshReplyMessage(refresh))
+				return 1
+			}
+			return 0
+		}
 		if err == nil {
 			printScanReport(out, r)
 		}

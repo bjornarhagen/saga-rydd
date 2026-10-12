@@ -37,11 +37,14 @@ Read each qualified observation before choosing a suggested command. Guidance ex
 rydd scan -d /path/to/project          # 10 ms between entry inspections
 rydd scan -d /path/to/project -s 25    # slower, 25 ms
 rydd scan -d /path/to/project --now    # no deliberate delay
+rydd scan -d /path/to/project --refresh # finish saved work, then one additional pass
 rydd report -d /path/to/project
 rydd report -d /path/to/project --candidates --json
 ```
 
 No initialization is needed for a manual scan. It runs in the foreground and saves a separate inventory per selected folder; your configured background roots remain unchanged. Ctrl+C stops it; rerun the same command to finish pending work before revisiting completed folders. Once all scan jobs and saved maintenance/calculations finish, the next invocation starts a fresh pass. The interrupted directory itself restarts its listing. Filesystem protections and configured exclusions still apply. No file contents are read or deleted. `--now` can produce substantial metadata I/O. `-s` spaces child-entry inspections, not every filesystem operation.
+
+Use `--refresh` to request one additional pass after saved work finishes. Its saved receipt describes historical progress. An interrupted active request without its saved root-listing completion becomes `unknown`; ordinary scans can finish the remaining work before another explicit request. See [manual refresh](docs/cli.md#explicit-manual-refresh).
 
 ### Try compact dependency inventory
 
