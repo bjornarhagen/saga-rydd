@@ -17,7 +17,7 @@ rydd --data-dir /absolute/fixture/state status --json
 
 Put global `--data-dir` before the command. `--json` can go before or after the command. Only `review` prompts. `capabilities --json` works without initialization and lists supported commands, effects, arguments, features and error codes. Its `noninteractive: true` describes machine output; `interactive_text_commands` lists `review`, whose command entry has `json: false`. Unimplemented duplicates and cleanup are explicitly false.
 
-Every JSON response has `api_version: 1`, `ok` and `command`. Success fields depend on the command; status preserves its existing fields and adds `dispatch_budget` and `scanner_metadata_budget`. Failures have `error.code` and a human-readable `error.message`. Match codes, not message text. Consumers must tolerate additional fields; incompatible contract changes require a new API version.
+JSON responses have `api_version`, `ok` and `command`. Version 1 remains the default; only successful same-size reports with the Cargo filter enabled use version 2. Errors remain version 1. Success fields depend on the command; status preserves its existing fields and adds `dispatch_budget` and `scanner_metadata_budget`. Failures have `error.code` and a human-readable `error.message`. Match codes, not message text. Consumers must tolerate additional fields; incompatible contract changes require a new API version.
 
 | Exit status | Meaning |
 | --- | --- |
@@ -477,13 +477,30 @@ Manifest, lockfile and artifact bodies are not opened; no Cargo process, configu
 
 Minimum size is a positive integer number of bytes, default 1048576 (1 MiB). `--limit` is 1–200 raw saved regular-file rows per page, default 20, plus one lookahead. It does not limit whole size bands. `--min-size-bytes` requires `--same-size`; `--candidates` and its age filter cannot be combined with this mode. Providing both mode flags is refused even when one is explicitly false. A scoped report requires the exact existing manual scan; it never falls through to configured inventory.
 
-One read transaction selects bounded raw rows through the existing size index, then filters disabled roots, saved skip reasons, dependency trees named `node_modules`, compact-parent overlaps and invalid saved paths. This also excludes detailed dependency inventory. Other generated categories remain future work. Parent-pass freshness is qualified per member; stale descendants and ancestor freshness are not verified. No source path is opened, configuration loaded, worker contacted or database migrated.
+One read transaction selects bounded raw rows through the existing size index, then filters disabled roots, saved skip reasons, dependency trees named `node_modules`, compact-parent overlaps and invalid saved paths. This also excludes detailed dependency inventory. The optional Cargo filter below adds one saved-layout category. Parent-pass freshness is qualified per member; stale descendants and ancestor freshness are not verified. No source path is opened, configuration loaded, worker contacted or database migrated.
 
 The cursor binds its version, inventory incarnation, minimum bytes, last raw size and entry ID. Continuation first seeks remaining IDs in the current size band, then smaller sizes using the remaining allowance. There is no whole-band count or whole-inventory grouping. Rebuilding the inventory or changing the minimum refuses continuation. Each page reads a new saved snapshot; scans may add, remove or reorder observations between pages.
 
 Bands contain page-local `files`, `known_objects`, `repeated_saved_objects`, `unknown_identities` and `conflicting_identities`. Known aliases use saved device/inode with qualified change/generation evidence; conflicting stamps or allocation values remain uncertain. No count establishes live inode continuity, independent storage or reclaimable space. `continues_before`/`continues_after` describe raw size-band boundaries, which can include excluded rows. Boundary singletons are retained so a split pair remains visible. Interior unique-size files are omitted. Empty filtered pages can still return a cursor, and exhaustion does not prove complete scan coverage or absence of duplicates.
 
 The human view shows each saved file ID. These IDs identify rows on this page; the human display does not freeze a selection. `hash --select` requires the complete standard JSON page and rechecks its exact selected rows. Schema 9 is required for durable inventory identity. Full-file hashing needs the separate explicit read-consent workflow below. Keeper selection and cleanup remain unavailable.
+
+### Optional Cargo target visibility filter
+
+```sh
+rydd report --same-size --exclude-cargo-target -d /path/to/project
+rydd report --same-size --exclude-cargo-target -d /path/to/project --json
+```
+
+`--exclude-cargo-target` hides ordinary saved files below a supported outermost Cargo default `target` layout. It uses saved root, ancestor, marker, parent-listing and identity evidence in the same page transaction. Debug is checked before release; the first eligible profile supplies the layout evidence. It reads no file contents and invokes no Cargo command. The filter has no age cutoff. A supported layout can contain unique or manually edited files; recognition does not prove generated-only content, regeneration or safe cleanup. Missing, conflicting or uncertain evidence does not exclude the row through this Cargo filter. Other ordinary same-size exclusions still apply.
+
+The selector is once-only and accepts a bare flag or lowercase `=true` or `=false`. Its presence, including explicit false, requires true `--same-size`. It cannot be combined with candidate, page-size-summary, dismissal, age, build-output or Go-cache report options. Absent or false keeps the original version 1 report, human output and cursor behavior. True can use configured inventory or an exact existing manual scan, with no fallback or initialization for a missing manual scope.
+
+Successful filtered JSON uses `api_version: 2` and adds `report.same_size.cargo_target_exclusion` with policy `cargo_default_target_saved_layout_v1`. Human output shows page-local hidden, unrecognized, unknown and ancestor-limit counts. The 1–200 raw-row limit and lookahead are unchanged; hidden rows consume that allowance, so an empty page can continue. The version 2 cursor binds this policy, inventory and minimum size. Default and filtered cursors cannot be exchanged. Continuation commands keep the selector and quote the selected paths and cursor.
+
+The optional summary separates actual added `*_query_calls` from logical `*_evidence_requests`, which include reused positive proof. Query counters count added `QueryContext` attempts and exclude base-page queries, inventory-identity queries and statement preparation. They do not measure SQLite or operating-system I/O. `reused_proof_rows` counts successful exclusions that reuse one exact folder proof within that saved transaction. Every selected leaf is checked again. At most 256 ancestors are considered per row, with the existing cooperative five-second reader deadline; these limits do not bound SQLite or operating-system I/O or guarantee hard latency. Read, checked-close, cancellation and selected reply-write failures return nonzero. No source or saved records are changed.
+
+`hash --select --from` accepts only standard version 1 same-size pages. It refuses filtered version 2 pages before creating hash storage. `capabilities --json` advertises `same_size_cargo_filter` and `same_size_cargo_filter_contract`; neither grants read consent or cleanup authority.
 
 ## Saved directory-size reports
 

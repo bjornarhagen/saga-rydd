@@ -219,16 +219,26 @@ type buildOutputEntry struct {
 	kind, parent, device, inode, skip, parentError                string
 }
 
-func readBuildOutputEntry(ctx context.Context, tx *sql.Tx, rootID int64, path string) (buildOutputEntry, bool, error) {
-	var e buildOutputEntry
-	err := tx.QueryRowContext(ctx, `SELECT e.id,substr(e.parent,1,4097),substr(e.kind,1,33),substr(e.device,1,1025),substr(e.inode,1,1025),e.mtime_ns,e.ctime_ns,e.generation,e.observed_at_ns,
+const buildOutputEntryQuery = `SELECT e.id,substr(e.parent,1,4097),substr(e.kind,1,33),substr(e.device,1,1025),substr(e.inode,1,1025),e.mtime_ns,e.ctime_ns,e.generation,e.observed_at_ns,
  substr(e.skip_reason,1,4097),COALESCE(p.generation,0),COALESCE(p.complete,0),substr(COALESCE(p.last_error,''),1,4097)
- FROM entries e LEFT JOIN directories p ON p.root_id=e.root_id AND p.path=e.parent WHERE e.root_id=? AND e.path=?`, rootID, []byte(path)).Scan(&e.id, &e.parent, &e.kind, &e.device, &e.inode, &e.modified, &e.changed, &e.generation, &e.observed, &e.skip, &e.parentGeneration, &e.parentComplete, &e.parentError)
+ FROM entries e LEFT JOIN directories p ON p.root_id=e.root_id AND p.path=e.parent WHERE e.root_id=? AND e.path=?`
+
+type buildOutputScanner interface{ Scan(...any) error }
+
+func scanBuildOutputEntry(row buildOutputScanner) (buildOutputEntry, bool, error) {
+	var e buildOutputEntry
+	err := row.Scan(&e.id, &e.parent, &e.kind, &e.device, &e.inode, &e.modified, &e.changed, &e.generation, &e.observed, &e.skip, &e.parentGeneration, &e.parentComplete, &e.parentError)
 	if errors.Is(err, sql.ErrNoRows) {
 		return e, false, nil
 	}
 	return e, err == nil, err
 }
+
+func readBuildOutputEntry(ctx context.Context, tx *sql.Tx, rootID int64, path string) (buildOutputEntry, bool, error) {
+	return scanBuildOutputEntry(tx.QueryRowContext(ctx, buildOutputEntryQuery, rootID, []byte(path)))
+}
+
+type buildOutputEntryReader func(context.Context, *sql.Tx, int64, string) (buildOutputEntry, bool, error)
 
 type buildOutputRequired struct {
 	role, path, kind string
@@ -238,6 +248,11 @@ type buildOutputRequired struct {
 
 func readBuildOutputRequired(ctx context.Context, tx *sql.Tx, rootID int64, role, path, kind string) (buildOutputRequired, error) {
 	e, exists, err := readBuildOutputEntry(ctx, tx, rootID, path)
+	return buildOutputRequired{role: role, path: path, kind: kind, entry: e, exists: exists}, err
+}
+
+func readBuildOutputRequiredWithReader(ctx context.Context, tx *sql.Tx, rootID int64, role, path, kind string, readEntry buildOutputEntryReader) (buildOutputRequired, error) {
+	e, exists, err := readEntry(ctx, tx, rootID, path)
 	return buildOutputRequired{role: role, path: path, kind: kind, entry: e, exists: exists}, err
 }
 
@@ -281,6 +296,12 @@ func buildOutputEvidenceCode(required []buildOutputRequired, cutoff int64) int {
 }
 
 func readBuildOutputFinding(ctx context.Context, tx *sql.Tx, rootID, entryID int64, root, relative []byte, cutoff int64) (BuildOutputFinding, int, error) {
+	return readBuildOutputFindingWithReader(ctx, tx, rootID, entryID, root, relative, cutoff, readBuildOutputEntry)
+}
+
+// Only the opted-in saved-page filter supplies a transaction-owned reader.
+// Ordinary build-output reports retain their direct queries and typed decoder.
+func readBuildOutputFindingWithReader(ctx context.Context, tx *sql.Tx, rootID, entryID int64, root, relative []byte, cutoff int64, readEntry buildOutputEntryReader) (BuildOutputFinding, int, error) {
 	if filepath.Base(string(relative)) != "target" {
 		return BuildOutputFinding{}, buildNotTarget, nil
 	}
@@ -299,7 +320,7 @@ func readBuildOutputFinding(ctx context.Context, tx *sql.Tx, rootID, entryID int
 		{"manifest", filepath.Join(filepath.Dir(string(relative)), "Cargo.toml"), "file"},
 		{"lockfile", filepath.Join(filepath.Dir(string(relative)), "Cargo.lock"), "file"},
 	} {
-		m, err := readBuildOutputRequired(ctx, tx, rootID, spec.role, spec.path, spec.kind)
+		m, err := readBuildOutputRequiredWithReader(ctx, tx, rootID, spec.role, spec.path, spec.kind, readEntry)
 		if err != nil {
 			return BuildOutputFinding{}, 0, err
 		}
@@ -330,7 +351,7 @@ func readBuildOutputFinding(ctx context.Context, tx *sql.Tx, rootID, entryID int
 			{"dependencies", filepath.Join(profilePath, "deps"), "directory"},
 			{"fingerprints", filepath.Join(profilePath, ".fingerprint"), "directory"},
 		} {
-			m, err := readBuildOutputRequired(ctx, tx, rootID, spec.role, spec.path, spec.kind)
+			m, err := readBuildOutputRequiredWithReader(ctx, tx, rootID, spec.role, spec.path, spec.kind, readEntry)
 			if err != nil {
 				return BuildOutputFinding{}, 0, err
 			}

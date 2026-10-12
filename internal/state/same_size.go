@@ -47,20 +47,21 @@ type SameSizeBand struct {
 }
 
 type SameSizeReport struct {
-	GeneratedAt               time.Time             `json:"generated_at"`
-	Source                    string                `json:"source"`
-	InventoryID               string                `json:"inventory_id"`
-	CurrentStateVerified      bool                  `json:"current_state_verified"`
-	ContentVerified           bool                  `json:"content_verified"`
-	EstimatedReclaimableBytes *int64                `json:"estimated_reclaimable_bytes"`
-	MinimumBytes              int64                 `json:"minimum_bytes"`
-	Limit                     int                   `json:"limit"`
-	EntriesExamined           int                   `json:"entries_examined"`
-	Bands                     []SameSizeBand        `json:"bands"`
-	NextCursor                string                `json:"next_cursor,omitempty"`
-	PageCoverage              string                `json:"page_coverage"`
-	Diagnostics               []SelectionDiagnostic `json:"selection_diagnostics"`
-	Notes                     []string              `json:"notes"`
+	GeneratedAt               time.Time                     `json:"generated_at"`
+	Source                    string                        `json:"source"`
+	InventoryID               string                        `json:"inventory_id"`
+	CurrentStateVerified      bool                          `json:"current_state_verified"`
+	ContentVerified           bool                          `json:"content_verified"`
+	EstimatedReclaimableBytes *int64                        `json:"estimated_reclaimable_bytes"`
+	MinimumBytes              int64                         `json:"minimum_bytes"`
+	Limit                     int                           `json:"limit"`
+	EntriesExamined           int                           `json:"entries_examined"`
+	Bands                     []SameSizeBand                `json:"bands"`
+	NextCursor                string                        `json:"next_cursor,omitempty"`
+	PageCoverage              string                        `json:"page_coverage"`
+	Diagnostics               []SelectionDiagnostic         `json:"selection_diagnostics"`
+	Notes                     []string                      `json:"notes"`
+	CargoTargetExclusion      *SameSizeCargoTargetExclusion `json:"cargo_target_exclusion,omitempty"`
 }
 
 type sameSizeCursor struct {

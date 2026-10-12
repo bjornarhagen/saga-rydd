@@ -111,6 +111,7 @@ Commands:
   report -d PATH [--json]                             Saved directory size
   report [--limit N] [--cursor TOKEN] [--json]           Largest observed files
   report --same-size [--min-size-bytes N] [--limit N] [--cursor TOKEN]    Saved size bands; contents unchecked
+    --exclude-cargo-target[=true|false]                 Optional saved-layout filter; can hide unique files
   capabilities [--json]                                Discover commands and supported features
 
 Options: --help, --version; --json on finite commands
@@ -386,7 +387,7 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 		var r savedReportDispatch
 		r, err = dispatchSavedReport(ctx, remaining[1:], paths)
 		if err == nil {
-			if r.BuildOutput != nil || r.GoCache != nil || r.CandidateSizeSummary != nil {
+			if r.BuildOutput != nil || r.GoCache != nil || r.CandidateSizeSummary != nil || selectedCargoSameSizeReport(r.reportResult) {
 				checked := &reviewOutput{writer: out}
 				printSavedReport(checked, r)
 				err = checked.err
@@ -396,6 +397,8 @@ func runHuman(ctx context.Context, args []string, in io.Reader, out, errOut io.W
 						category = "Go build-cache"
 					} else if r.CandidateSizeSummary != nil {
 						category = "Historical candidate page size"
+					} else if selectedCargoSameSizeReport(r.reportResult) {
+						category = "Filtered same-size"
 					}
 					err = fmt.Errorf("%s report reply was canceled; no saved records or source files were changed: %w", category, ctx.Err())
 				}

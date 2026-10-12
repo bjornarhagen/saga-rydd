@@ -171,6 +171,8 @@ This is the first filter for duplicate discovery. It groups saved regular-file m
 
 Page-local counts distinguish known device/inode objects, repeated saved aliases and unknown or conflicting identities. A size band can cross pages; boundary labels preserve even a single candidate at an edge. Use the returned cursor with the same minimum and data directory. A rebuilt inventory or changed minimum refuses the cursor. Scans can change membership between pages, so this is not a frozen export. Same-size reports do not provide verified duplicates, keeper choices or savings estimates.
 
+Add `--exclude-cargo-target` to hide files beneath supported saved Cargo default `target` layouts. This optional filter has no age cutoff and can hide unique or manually edited files. Missing or uncertain evidence does not hide a row through this filter. Hidden rows still count toward the page limit. Filtered JSON uses version 2 and a separate cursor; `hash --select` accepts only the ordinary version 1 report. See the [Cargo visibility filter](docs/cli.md#optional-cargo-target-visibility-filter).
+
 A separate hashing store supports bounded full hashing with private checkpoints and conservative byte reservations. `rydd hashes [--work WORK_ID] [--json]` reads its existing saved observations, consent records and whole-selection budget. This command does not create, recover or resume work. Explicit consent and one-step reads are described below; worker integration remains pending. See [durable hashing limits](docs/inventory.md#explicit-file-observations-and-durable-hashing).
 
 To group matching completed observations from that saved selection:

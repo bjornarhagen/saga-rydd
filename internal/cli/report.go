@@ -36,6 +36,8 @@ func report(ctx context.Context, args []string, paths config.Paths) (reportResul
 	f.Var(&pageSizeSummary, "page-size-summary", "summarize historical sizes of visible candidates on one saved page")
 	includeDismissed := f.Bool("include-dismissed", false, "include exact dismissed findings for inspection")
 	sameSize := f.Bool("same-size", false, "read bounded saved same-size file bands; contents unchecked")
+	var excludeCargo cargoSameSizeMode
+	f.Var(&excludeCargo, "exclude-cargo-target", "hide supported saved Cargo target layouts from one same-size page")
 	minimumBytes := f.Int64("min-size-bytes", state.SameSizeMinimumBytes, "minimum same-size file bytes")
 	directory := f.String("directory", "", "measure a saved directory subtree")
 	f.StringVar(directory, "d", "", "directory alias")
@@ -74,6 +76,9 @@ func report(ctx context.Context, args []string, paths config.Paths) (reportResul
 			pageSet = true
 		}
 	})
+	if excludeCargo.set && (!*sameSize || candidatesSet || pageSizeSummary.set || dismissalSet || ageSet) {
+		return reportResult{}, usageError{errors.New("--exclude-cargo-target requires --same-size and cannot be combined with candidates, page size, dismissal, age or other category options")}
+	}
 	if pageSizeSummary.set && !*candidates {
 		return reportResult{}, usageError{errors.New("--page-size-summary requires --candidates and cannot be combined with other report modes")}
 	}
@@ -98,7 +103,7 @@ func report(ctx context.Context, args []string, paths config.Paths) (reportResul
 	if directorySet && pageSet && !*candidates && !*sameSize {
 		return reportResult{}, usageError{errors.New("directory size reports cannot be combined with --limit or --cursor")}
 	}
-	if pageSizeSummary.value {
+	if pageSizeSummary.value || excludeCargo.value {
 		if err := ctx.Err(); err != nil {
 			return reportResult{}, err
 		}
@@ -131,6 +136,13 @@ func report(ctx context.Context, args []string, paths config.Paths) (reportResul
 	}
 	if pageSizeSummary.value {
 		return readCandidateSizePage(ctx, s, scanPaths, *directory, *cursor, *minimumAge, *includeDismissed)
+	}
+	if excludeCargo.value {
+		command := fmt.Sprintf("%s report --same-size --exclude-cargo-target --min-size-bytes %d --limit %d", commandPrefix(scanPaths), *minimumBytes, *limit)
+		if directorySet {
+			command += " -d " + shellQuote(*directory)
+		}
+		return readCargoSameSizePage(ctx, s, *limit, *cursor, *minimumBytes, command)
 	}
 	defer s.Close()
 	if *sameSize {
