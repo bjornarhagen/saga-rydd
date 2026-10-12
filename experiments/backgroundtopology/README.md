@@ -46,6 +46,14 @@ The harness checks healthy-root progress, pause without saved progress, actual S
 
 Private command receipts, source roots, oracles and state remain in the output directory. Keep them outside version control. Only reviewed aggregate evidence belongs in [results](results/README.md).
 
+## Small native Linux CI pilot
+
+The separate Ubuntu CI job runs both shapes with 4,096 primary files and 512 healthy files per shape. It builds fresh native Linux amd64 product/helper binaries with the pinned Go toolchain and CGO disabled. Each shape has its own output directory, a 600-second sample and fifteen-second stop grace. The existing sixteen-GiB preflight, fast profile and harness deadlines are unchanged. Twelve-minute step limits and the twenty-five-minute job limit can refuse slower executions; they do not guarantee that the longer cooperative harness bounds will finish.
+
+`scripts/check-topology-pilot.py` accepts only the declared profile, current source/build/executable associations and complete lifecycle evidence. An exit-zero helper or a partial result alone is insufficient. Both checked shapes must retain genuine oracle, pause, SIGKILL, restart, healthy-root progress and direct-child reaping evidence. Complete results require their cached-total/daily-job checks; partial results retain their completion limits. A partial result can retain one bounded final observer reply interrupted at the sample deadline, immediately before a successful stop. The checker reports that reply as unvalidated; the existing receipt does not establish its arguments or exit status. The saved sample summaries do not record a job count. The checker validates present job pages and their contiguous numbering, but cannot prove that all trailing pages are present; its summary keeps job-page completeness unverified. Scanner counters can reset after restart, and UTC-day counters can roll over. The checker does not turn those observations into lifetime or physical-I/O measurements.
+
+The job prints only fixed scalar summaries. Raw helper output, source roots, state, receipts and oracles remain in ignored runner storage and are not uploaded. Generated rejection fixtures check malformed, oversized and contradictory evidence before the pilots run. A successful job establishes only these small native Linux profiles. Million-file execution, production defaults, hourly resource targets, physical/provider behavior and representative soak remain open.
+
 ## Result limits
 
 Worker CPU excludes generator, oracle and CLI observer costs, which are recorded separately. Generator/oracle RSS is the helper process lifetime high-water through each phase; observer RSS is the maximum individual observer child, not combined simultaneous memory. Database/WAL peaks are sampled lower bounds. Scanner API charges do not measure physical I/O. Report and control latencies are observations of individual CLI calls, not a guaranteed response time or hourly resource bound.

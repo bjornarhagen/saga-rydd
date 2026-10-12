@@ -20,6 +20,66 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  topology-pilot:
+    name: Native Linux background topology pilots
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+      - name: Prepare pinned modules
+        run: go mod download
+      - name: Fresh native Linux pilot binaries and checker fixtures
+        timeout-minutes: 3
+        env:
+          GOPROXY: 'off'
+          GOSUMDB: 'off'
+          CGO_ENABLED: '0'
+        run: |
+          set -eu
+          test "$RUNNER_OS:$RUNNER_ARCH" = 'Linux:X64'
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          umask 077
+          mkdir -p .local
+          mkdir .local/ci-topology-binaries
+          go build -mod=readonly -buildvcs=true -trimpath -o .local/ci-topology-binaries/rydd ./cmd/rydd
+          go build -mod=readonly -buildvcs=true -trimpath -o .local/ci-topology-binaries/helper ./experiments/backgroundtopology
+          python3 -B scripts/check-topology-pilot-test.py
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+      - name: Wide topology pilot - 4096 generated files
+        timeout-minutes: 12
+        run: |
+          set -eu
+          umask 077
+          pilot_binary="$GITHUB_WORKSPACE/.local/ci-topology-binaries/rydd"
+          pilot_helper="$GITHUB_WORKSPACE/.local/ci-topology-binaries/helper"
+          pilot_output="$GITHUB_WORKSPACE/.local/ci-topology-wide"
+          if ! "$pilot_helper" -binary "$pilot_binary" -output "$pilot_output" -shape wide -files 4096 -seconds 600 > "$GITHUB_WORKSPACE/.local/ci-topology-wide.stdout" 2> "$GITHUB_WORKSPACE/.local/ci-topology-wide.stderr"; then
+            echo 'Wide topology helper failed; private fixture output retained.' >&2
+            exit 1
+          fi
+          python3 -B scripts/check-topology-pilot.py --output "$pilot_output" --binary "$pilot_binary" --helper "$pilot_helper" --shape wide --revision "$GITHUB_SHA"
+      - name: Deep topology pilot - 4096 generated files
+        timeout-minutes: 12
+        run: |
+          set -eu
+          umask 077
+          pilot_binary="$GITHUB_WORKSPACE/.local/ci-topology-binaries/rydd"
+          pilot_helper="$GITHUB_WORKSPACE/.local/ci-topology-binaries/helper"
+          pilot_output="$GITHUB_WORKSPACE/.local/ci-topology-deep"
+          if ! "$pilot_helper" -binary "$pilot_binary" -output "$pilot_output" -shape deep -files 4096 -seconds 600 > "$GITHUB_WORKSPACE/.local/ci-topology-deep.stdout" 2> "$GITHUB_WORKSPACE/.local/ci-topology-deep.stderr"; then
+            echo 'Deep topology helper failed; private fixture output retained.' >&2
+            exit 1
+          fi
+          python3 -B scripts/check-topology-pilot.py --output "$pilot_output" --binary "$pilot_binary" --helper "$pilot_helper" --shape deep --revision "$GITHUB_SHA"
+
   native:
     name: Native checks (${{ matrix.os }})
     strategy:
