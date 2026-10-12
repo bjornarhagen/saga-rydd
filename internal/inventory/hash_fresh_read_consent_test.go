@@ -97,6 +97,10 @@ func TestHashFreshReadApprovalExactBindingFixedLifetimeAndClonedSavedEvidence(t 
 		if job.ReadConsent == nil || !reflect.DeepEqual(*job.ReadConsent, c) {
 			t.Fatal("saved job lost recoverable fresh approval ID", job)
 		}
+		paired, e := reader.FreshJobForReadApproval(context.Background(), c.ID)
+		if e != nil || !reflect.DeepEqual(paired, job) {
+			t.Fatal("paired consent lookup changed the complete saved job snapshot", paired, job, e)
+		}
 		if !reflect.DeepEqual(hashStoreSnapshot(t, reader), before) {
 			t.Fatal("schema5 consent changed original approval, charge or work")
 		}
@@ -109,6 +113,21 @@ func TestHashFreshReadApprovalExactBindingFixedLifetimeAndClonedSavedEvidence(t 
 	got, e := w.FreshReadApproval(context.Background(), c.ID)
 	if e != nil || !reflect.DeepEqual(got, c) {
 		t.Fatal("returned consent shared mutable source binding", got, e)
+	}
+	paired, e := w.FreshJobForReadApproval(context.Background(), c.ID)
+	if e != nil || paired.ReadConsent == nil {
+		t.Fatal("paired consent lookup failed", paired, e)
+	}
+	paired.ReadConsent.Approval.SourceLocator.RootPathBytes[0] = 'x'
+	paired.Record.Request.Targets[0].Target.File.PathBytes[0] = 'y'
+	paired, e = w.FreshJobForReadApproval(context.Background(), c.ID)
+	if e != nil || paired.ReadConsent == nil || !reflect.DeepEqual(*paired.ReadConsent, c) || !reflect.DeepEqual(paired.Record, f.job.Record) || !reflect.DeepEqual(paired.Work, f.job.Work) {
+		t.Fatal("paired snapshot shared mutable consent or job binding", paired, e)
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if paired, e := w.FreshJobForReadApproval(canceled, c.ID); !errors.Is(e, context.Canceled) || !reflect.DeepEqual(paired, SavedFreshJob{}) {
+		t.Fatal("canceled paired lookup returned partial saved evidence", paired, e)
 	}
 	w.now = func() time.Time { return c.Approval.CreatedAt.Add(time.Hour) }
 	retry := approveFreshReadFixture(t, f)
@@ -195,6 +214,9 @@ func TestHashFreshReadApprovalRequiresExactTupleConfirmationAndBoundedCaps(t *te
 		}
 		if got, e := w.FreshReadApproval(context.Background(), id); !errors.Is(e, ErrHashFreshReadApprovalMissing) || got.ID != "" {
 			t.Fatal("invalid fresh ID resolved original permission", got, e)
+		}
+		if got, e := w.FreshJobForReadApproval(context.Background(), id); !errors.Is(e, ErrHashFreshReadApprovalMissing) || !reflect.DeepEqual(got, SavedFreshJob{}) {
+			t.Fatal("invalid fresh ID returned a partial paired job", got, e)
 		}
 		if got, e := w.RevokeFreshRead(context.Background(), id); !errors.Is(e, ErrHashFreshReadApprovalMissing) || got.ID != "" {
 			t.Fatal("invalid fresh revocation touched original approval", got, e)
@@ -637,6 +659,9 @@ func TestHashFreshReadCorruptionCannotReturnPartialConsentOrJob(t *testing.T) {
 			}
 			if got, e := w.FreshReadApproval(context.Background(), id); !errors.Is(e, ErrHashFreshReadCorrupt) || got.ID != "" {
 				t.Fatal("corrupt consent returned partial authority", kind, got, e)
+			}
+			if got, e := w.FreshJobForReadApproval(context.Background(), id); !errors.Is(e, ErrHashFreshReadCorrupt) || !reflect.DeepEqual(got, SavedFreshJob{}) {
+				t.Fatal("corrupt consent returned a partial paired job", kind, got, e)
 			}
 			if got, e := w.FreshJob(context.Background(), f.job.ID); !errors.Is(e, ErrHashFreshReadCorrupt) || got.ID != "" {
 				t.Fatal("corrupt consent returned positive partial job", kind, got, e)

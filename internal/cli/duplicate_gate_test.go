@@ -12,11 +12,146 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bjornarhagen/saga-rydd/internal/config"
 	"github.com/bjornarhagen/saga-rydd/internal/inventory"
 	"golang.org/x/sys/unix"
 )
+
+const duplicateGateSnapshotByteLimit = 16 << 10
+
+// Keep mutable saved evidence visible even when the immutable request fills
+// the raw reply's prefix. This projects the same once-only public saved view.
+func duplicateGateSavedJobFailureSnapshot(code int, raw, diagnostic, jobID, consentID string, ordinal int) string {
+	bounded := func(body string) string {
+		if len(body) <= duplicateGateSnapshotByteLimit {
+			return body
+		}
+		const suffix = "\n[saved-job snapshot truncated at 16384 bytes]"
+		return body[:duplicateGateSnapshotByteLimit-len(suffix)] + suffix
+	}
+	var saved struct {
+		Version int    `json:"api_version"`
+		Command string `json:"command"`
+		OK      bool   `json:"ok"`
+		Hash    struct {
+			Mode string `json:"mode"`
+			Job  struct {
+				ID          string                          `json:"id"`
+				Progress    []inventory.SavedFreshHashWork  `json:"progress"`
+				FreshBudget *inventory.HashBudget           `json:"fresh_budget"`
+				ReadConsent *inventory.HashFreshReadConsent `json:"read_consent"`
+			} `json:"job"`
+		} `json:"hash"`
+	}
+	err := json.Unmarshal([]byte(raw), &saved)
+	j := saved.Hash.Job
+	if err != nil || code != 0 || diagnostic != "" || saved.Version != APIVersion || saved.Command != "hash" || !saved.OK || saved.Hash.Mode != "show" || j.ID != jobID || j.ReadConsent == nil || j.ReadConsent.ID != consentID || j.ReadConsent.Approval.JobID != jobID || len(j.Progress) > inventory.FileSampleTargetLimit {
+		return bounded(fmt.Sprintf("exit=%d snapshot projection unavailable (decode=%v): stdout=%s stderr=%s", code, err, raw, diagnostic))
+	}
+	type head struct {
+		Ordinal          int                    `json:"ordinal"`
+		HistoricalWorkID string                 `json:"historical_work_id"`
+		Role             string                 `json:"role"`
+		Status           string                 `json:"status"`
+		Sequence         int64                  `json:"sequence"`
+		DurableOffset    int64                  `json:"durable_offset"`
+		CheckedAt        time.Time              `json:"checked_at"`
+		SHA256           string                 `json:"sha256,omitempty"`
+		Code             string                 `json:"code,omitempty"`
+		LatestAttempt    *inventory.HashAttempt `json:"latest_attempt,omitempty"`
+	}
+	projection := struct {
+		Exit            int                   `json:"exit"`
+		ExpectedOrdinal int                   `json:"expected_ordinal"`
+		ExpectedHead    *head                 `json:"expected_head,omitempty"`
+		JobID           string                `json:"job_id"`
+		Progress        []head                `json:"progress"`
+		FreshBudget     *inventory.HashBudget `json:"fresh_budget"`
+		ReadConsent     struct {
+			ID                             string                             `json:"id"`
+			Status                         string                             `json:"status"`
+			ClockHighWater                 time.Time                          `json:"clock_high_water"`
+			ExpiresAt                      time.Time                          `json:"expires_at"`
+			ExpiredObserved                bool                               `json:"expired_observed"`
+			Revocation                     *inventory.HashFreshReadRevocation `json:"revocation,omitempty"`
+			CurrentReadPermissionEvaluated bool                               `json:"current_read_permission_evaluated"`
+		} `json:"read_consent"`
+	}{Exit: code, ExpectedOrdinal: ordinal, JobID: j.ID, FreshBudget: j.FreshBudget}
+	for _, p := range j.Progress {
+		projection.Progress = append(projection.Progress, head{p.Ordinal, p.HistoricalWorkID, p.Role, p.Status, p.Sequence, p.DurableOffset, p.CheckedAt, p.SHA256, p.Code, p.LatestAttempt})
+	}
+	for i := range projection.Progress {
+		if projection.Progress[i].Ordinal == ordinal {
+			projection.ExpectedHead = &projection.Progress[i]
+		}
+	}
+	c := j.ReadConsent
+	projection.ReadConsent.ID, projection.ReadConsent.Status = c.ID, c.Status
+	projection.ReadConsent.ClockHighWater, projection.ReadConsent.ExpiresAt = c.ClockHighWater, c.Approval.ExpiresAt
+	projection.ReadConsent.ExpiredObserved, projection.ReadConsent.Revocation = c.ExpiredObserved, c.Revocation
+	projection.ReadConsent.CurrentReadPermissionEvaluated = c.CurrentReadPermissionEvaluated
+	body, err := json.Marshal(projection)
+	if err != nil {
+		return bounded(fmt.Sprintf("exit=%d snapshot projection unavailable: %v", code, err))
+	}
+	return bounded(string(body))
+}
+
+func TestDuplicateGateSavedJobFailureSnapshotKeepsMutableEvidence(t *testing.T) {
+	const jobID, consentID = "fixture-job", "fixture-consent"
+	progress := []inventory.SavedFreshHashWork{{Ordinal: 1, HistoricalWorkID: "3", Role: "keeper", Status: "complete", Sequence: 1, DurableOffset: 4097}, {Ordinal: 2, HistoricalWorkID: "4", Role: "copy", Status: "complete", Sequence: 1, DurableOffset: 4097, PathBytes: []byte("unneeded frozen path")}}
+	consent := inventory.HashFreshReadConsent{ID: consentID, Status: "recorded", Approval: inventory.HashFreshReadApproval{JobID: jobID}}
+	for _, kind := range []string{"mutable_heads", "wrong_binding", "output_bound"} {
+		t.Run(kind, func(t *testing.T) {
+			heads := append([]inventory.SavedFreshHashWork(nil), progress...)
+			expectedJob := jobID
+			if kind == "wrong_binding" {
+				expectedJob = "another-job"
+			}
+			if kind == "output_bound" {
+				heads[1].Code = strings.Repeat("x", duplicateGateSnapshotByteLimit*2)
+			}
+			mutable, err := json.Marshal(struct {
+				Progress    []inventory.SavedFreshHashWork `json:"progress"`
+				FreshBudget *inventory.HashBudget          `json:"fresh_budget"`
+				ReadConsent inventory.HashFreshReadConsent `json:"read_consent"`
+			}{heads, &inventory.HashBudget{TotalReservedBytes: 8194, TotalReadBytes: 8194}, consent})
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw := fmt.Sprintf(`{"api_version":%d,"command":"hash","ok":true,"hash":{"mode":"show","job":{"id":%q,"record":{"request":{"omitted":%q}},%s}}}`, APIVersion, jobID, strings.Repeat("x", duplicateGateSnapshotByteLimit*2), mutable[1:len(mutable)-1])
+			if strings.Contains(raw[:duplicateGateSnapshotByteLimit], `"progress"`) {
+				t.Fatal("fixture did not place mutable evidence beyond the old raw prefix")
+			}
+			got := duplicateGateSavedJobFailureSnapshot(0, raw, "", expectedJob, consentID, 2)
+			if len(got) > duplicateGateSnapshotByteLimit {
+				t.Fatal("failure snapshot exceeded its unchanged byte cap", len(got))
+			}
+			switch kind {
+			case "mutable_heads":
+				var value struct {
+					ExpectedHead inventory.SavedFreshHashWork   `json:"expected_head"`
+					Progress     []inventory.SavedFreshHashWork `json:"progress"`
+					FreshBudget  inventory.HashBudget           `json:"fresh_budget"`
+					ReadConsent  inventory.HashFreshReadConsent `json:"read_consent"`
+				}
+				if err := json.Unmarshal([]byte(got), &value); err != nil || value.ExpectedHead.Ordinal != 2 || value.ExpectedHead.HistoricalWorkID != "4" || value.ExpectedHead.Status != "complete" || value.ExpectedHead.Sequence != 1 || value.ExpectedHead.DurableOffset != 4097 || len(value.Progress) != 2 || value.FreshBudget.TotalReadBytes != 8194 || value.ReadConsent.ID != consentID || strings.Contains(got, `"record"`) || strings.Contains(got, `"path_bytes"`) {
+					t.Fatal("compact snapshot lost mutable saved evidence or retained immutable paths", got, err)
+				}
+			case "wrong_binding":
+				if !strings.Contains(got, "snapshot projection unavailable") {
+					t.Fatal("wrong saved job binding produced a positive projection", got)
+				}
+			case "output_bound":
+				if !strings.HasSuffix(got, "[saved-job snapshot truncated at 16384 bytes]") {
+					t.Fatal("bounded output omitted its truncation qualification", got)
+				}
+			}
+		})
+	}
+}
 
 // This acceptance fixture uses only generated files. Every inventory row,
 // original observation and fresh observation is produced by the public CLI;
@@ -185,11 +320,7 @@ func TestDuplicateGateCLIKnownGroupsExactRolesAndFreshAccounting(t *testing.T) {
 		if code != 0 || diagnostic != "" {
 			t.Logf("fresh step failed at expected ordinal %d", i+1)
 			snapshotCode, snapshotRaw, snapshotDiagnostic := f.run(context.Background(), "hash", "--show-job", job.ID, "--json")
-			snapshot := fmt.Sprintf("exit=%d stdout=%s stderr=%s", snapshotCode, snapshotRaw, snapshotDiagnostic)
-			const snapshotByteLimit = 16 << 10
-			if len(snapshot) > snapshotByteLimit {
-				snapshot = snapshot[:snapshotByteLimit] + "\n[saved-job snapshot truncated at 16384 bytes]"
-			}
+			snapshot := duplicateGateSavedJobFailureSnapshot(snapshotCode, snapshotRaw, snapshotDiagnostic, job.ID, c.ID, i+1)
 			t.Logf("failure-only read-only saved-job snapshot: %s", snapshot)
 		}
 		r := hashFreshRunCLIReport(t, code, raw, diagnostic).Result

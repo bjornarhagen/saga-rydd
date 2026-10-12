@@ -257,33 +257,43 @@ func (s *HashStore) freshReadStorage(ctx context.Context) error {
 // FreshReadApproval reopens saved consent without evaluating the current wall
 // clock, configuration, inventory or source. Original IDs are rejected first.
 func (s *HashStore) FreshReadApproval(ctx context.Context, id string) (HashFreshReadConsent, error) {
+	job, err := s.FreshJobForReadApproval(ctx, id)
+	if err != nil {
+		return HashFreshReadConsent{}, err
+	}
+	return *job.ReadConsent, nil
+}
+
+// FreshJobForReadApproval returns the validated saved job and its exact consent
+// from the same committed read-only snapshot. It evaluates no current permission.
+func (s *HashStore) FreshJobForReadApproval(ctx context.Context, id string) (SavedFreshJob, error) {
 	if !ValidHashFreshReadApprovalID(id) {
-		return HashFreshReadConsent{}, ErrHashFreshReadApprovalMissing
+		return SavedFreshJob{}, ErrHashFreshReadApprovalMissing
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err := s.acquire(ctx, false); err != nil {
-		return HashFreshReadConsent{}, err
+		return SavedFreshJob{}, err
 	}
 	defer s.mu.Unlock()
 	if err := s.checkHashStorage(nil); err != nil {
-		return HashFreshReadConsent{}, err
+		return SavedFreshJob{}, err
 	}
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return HashFreshReadConsent{}, err
+		return SavedFreshJob{}, err
 	}
 	defer tx.Rollback()
 	jobID, err := hashFreshReadApprovalJob(ctx, tx, id)
 	if err != nil {
-		return HashFreshReadConsent{}, err
+		return SavedFreshJob{}, err
 	}
 	job, err := s.readFreshJob(ctx, tx, jobID)
 	if err != nil {
-		return HashFreshReadConsent{}, err
+		return SavedFreshJob{}, err
 	}
 	if job.ReadConsent == nil || job.ReadConsent.ID != id {
-		return HashFreshReadConsent{}, ErrHashFreshReadCorrupt
+		return SavedFreshJob{}, ErrHashFreshReadCorrupt
 	}
 	if err = tx.Commit(); err == nil {
 		err = s.checkHashStorage(nil)
@@ -292,9 +302,9 @@ func (s *HashStore) FreshReadApproval(ctx context.Context, id string) (HashFresh
 		err = ctx.Err()
 	}
 	if err != nil {
-		return HashFreshReadConsent{}, err
+		return SavedFreshJob{}, err
 	}
-	return *job.ReadConsent, nil
+	return job, nil
 }
 
 func hashFreshReadApprovalJob(ctx context.Context, db hashQuery, id string) (string, error) {

@@ -29,13 +29,11 @@ func hashRunFreshJob(ctx context.Context, paths config.Paths, id string) (HashFr
 	if err != nil {
 		return HashFreshStepReport{}, hashFreshJobMissing(err, "existing hash storage is required; no storage was initialized")
 	}
-	c, err := reader.FreshReadApproval(ctx, id)
-	var job inventory.SavedFreshJob
+	job, err := reader.FreshJobForReadApproval(ctx, id)
+	var c inventory.HashFreshReadConsent
 	var request *inventory.KeeperChoiceFreshRequest
 	if err == nil {
-		job, err = reader.FreshJob(ctx, c.Approval.JobID)
-	}
-	if err == nil {
+		c = *job.ReadConsent
 		request, err = reader.PrepareKeeperChoiceFreshRequest(ctx, job.Record.Request.ChoiceID)
 	}
 	if err == nil && (request.ID() != job.Record.Request.RequestID || job.ReadConsent == nil || job.ReadConsent.ID != id) {

@@ -94,6 +94,34 @@ Root and independent review read the 46 distinct complete matching-line bodies, 
 
 The full-file hashes and offsets remain observations from the reviewed reader. Filtered matching lines cannot reconstruct the 318,924 nonmatching source bytes or supply missing neighboring clauses. This closes only the declared matching-line assessment. Complete multiline notices, original-input provenance, applicable licenses, code retained by the linker, legal compatibility and the distribution notice bundle remain open.
 
+## Selected Darwin netdb complete-text assessment
+
+The 2026-10-12 retained-source assessment covers the complete declared extents of two generated Darwin netdb files from `modernc.org/libc v1.75.7`. The [static source-notice catalog](netdb-notice-catalog.json) preserves all 48 distinct exact notice-group bodies, their byte lengths and SHA-256 digests, and each file's occurrence counts. Source names are relative to the module root.
+
+| Source | Source bytes | Complete notice groups | Distinct bodies in this file | Full source SHA-256 |
+| --- | ---: | ---: | ---: | --- |
+| `netdb/netdb_darwin_amd64.go` | 331,419 | 98 | 40 | `88a06f155a1fa0e55acd6d3ae1d03623687c6df2a66e3f83e0347b3de592dc5d` |
+| `netdb/netdb_darwin_arm64.go` | 330,519 | 99 | 43 | `48dc354d92f8d8cf0edbc1f27d39f100bac94c18c6676d53f319263d6e05a60a` |
+
+The two source files total 661,938 bytes. Their 197 notice-group occurrences contain 48 distinct bodies totaling 108,552 unique bytes; shared bodies count once in that total. The scan covers all source bytes and excludes Go string and rune literals. A group joins adjacent lexical comment lines without a blank line and can include preceding inline technical context. These group counts differ from individual license-header counts because one group can contain several notices.
+
+| Observed notice wording | amd64 occurrences | arm64 occurrences |
+| --- | ---: | ---: |
+| Ordinary Apple APSL 2.0 header | 7 | 8 |
+| Apple OSREFERENCE APSL 2.0 header | 138 | 132 |
+| Regents four-condition redistribution notice | 10 | 10 |
+| WIDE Project three-condition redistribution notice | 2 | 2 |
+| Digital Equipment permission grant | 1 | 1 |
+| LLVM license-reference fragment | 1 | 1 |
+
+The Apple headers require compliance with the referenced APSL 2.0 license and obtaining and reading it before use. OSREFERENCE headers add restrictions concerning unlawful or unlicensed Apple operating-system copies and circumvention or violation of Apple operating-system license agreements. The full referenced APSL text remains unresolved.
+
+The Regents notices include source retention, reproduction in binary-distribution materials, a Berkeley acknowledgment in advertising mentioning features or use, and prior permission for endorsement using University or contributor names. The WIDE notices include source retention, binary reproduction and prior permission for endorsement using project or contributor names. The Digital Equipment grant requires its copyright and permission notices in all copies and prior written permission for use of its name in distribution advertising or publicity. These notices also preserve their warranty and liability disclaimers.
+
+The LLVM fragment names Apache License v2.0 with LLVM Exceptions and carries `SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception`. Its full referenced license and exception terms remain unresolved. Copyright-only NeXT and Apple wording is also preserved; it adds no independent permission conditions in the observed statements.
+
+This catalog records embedded source wording and its associations with the two retained files. The other 91 historical source carriers, upstream authenticity, compiled-target applicability, full referenced licenses, legal compatibility, project-license choice, notice packaging and release acceptance remain open. The fixed twenty-row root-notice catalog and existing candidate archives keep their separate scope.
+
 ## Selected asynchronous-state and plans-export project review
 
 The separate 2026-10-10 project review selected exactly fifty integration changes before the adaptive-revisit readiness correction. Complete selected bodies total 693,041 bytes: thirty test files contain 417,699 bytes and twenty other files contain 275,342 bytes. The held reader checked exact source identities and retained a complete 29,176-byte fixed-term report. Root and independent review reproduced every selected hash and the complete report; no matching line was truncated or omitted.

@@ -1300,6 +1300,152 @@ func TestSameSizeCargoProofReuseScopeSnapshotAndObserverIsolation(t *testing.T) 
 			t.Fatal("working observer data mutated reused proof", r, err)
 		}
 	})
+	t.Run("observer_raw_path_copies", func(t *testing.T) {
+		for _, profile := range []string{"debug", "release"} {
+			t.Run(profile, func(t *testing.T) {
+				s := newBuildOutputFixture(t)
+				root, project := "/cargo-fixture/root-\xfe", "project-\xff"
+				sameSizeCargoExec(t, s, "UPDATE roots SET path=? WHERE id=1", []byte(root))
+				addBuildOutputProject(t, s, project, profile)
+				parent := filepath.Join(project, "target", profile, "deps")
+				for _, name := range []string{"a", "b", "c"} {
+					buildOutputPut(t, s.db, filepath.Join(parent, name), parent, "file", name, 5, 2<<20, 4096)
+				}
+				sameSizeCargoExec(t, s, "UPDATE entries SET device='0',inode=CAST(id AS TEXT)")
+				observations := 0
+				var want BuildOutputFinding
+				r, err := s.sameSizeCargoCandidates(context.Background(), 200, "", 1, sameSizeCargoHooks{beforeExcluded: func(seen *sameSizeCargoIdentities, f *BuildOutputFinding) {
+					observations++
+					if seen.count < 2 || len(f.Markers) != 7 || f.Profile != profile || f.Path != filepath.Join(root, project, "target") || !bytes.Equal(f.PathBytes, []byte(f.Path)) || f.Actions == nil || len(f.Actions) != 0 {
+						t.Fatal("raw-path observer did not receive the complete original finding", observations, f)
+					}
+					for _, marker := range f.Markers {
+						if !bytes.Equal(marker.PathBytes, []byte(marker.Path)) || !bytes.Contains(marker.PathBytes, []byte{0xfe}) || !bytes.Contains(marker.PathBytes, []byte{0xff}) {
+							t.Fatal("observer path bytes were changed or text-encoded", observations, marker)
+						}
+					}
+					if observations == 1 {
+						// Keep an independent cold observation, including every scalar,
+						// marker and mutable body, for both later cache callbacks.
+						want = *f
+						want.PathBytes = append([]byte(nil), f.PathBytes...)
+						want.Markers = append([]BuildOutputMarker(nil), f.Markers...)
+						for i := range want.Markers {
+							want.Markers[i].PathBytes = append([]byte(nil), f.Markers[i].PathBytes...)
+						}
+						want.Actions = make([]string, len(f.Actions))
+						copy(want.Actions, f.Actions)
+					} else if !reflect.DeepEqual(*f, want) {
+						t.Fatal("a prior raw-path callback changed the cached finding", observations, f)
+					}
+					seen.values[1].kind = "observer conflict"
+					f.PathBytes[0] = 'X'
+					for i := range f.Markers {
+						// Even the target finding and target marker must have
+						// independent byte bodies inside this one callback.
+						if !bytes.Equal(f.Markers[i].PathBytes, []byte(want.Markers[i].Path)) {
+							t.Fatal("observer path bodies alias inside one callback", observations, i)
+						}
+						f.Markers[i].PathBytes[0] = 'Y'
+						f.Markers[i] = BuildOutputMarker{Path: "observer conflict", PathBytes: f.Markers[i].PathBytes}
+					}
+					f.Markers = append(f.Markers, BuildOutputMarker{Role: "observer conflict"})
+					f.Actions = append(f.Actions, "observer action")
+					f.Actions[0] = "observer conflict"
+					f.Path, f.Profile = "observer conflict", "observer conflict"
+				}})
+				c := r.CargoTargetExclusion
+				layoutCalls := 2
+				if profile == "release" {
+					layoutCalls = 3
+				}
+				if err != nil || observations != 3 || c == nil || r.EntriesExamined != 3 || len(r.Bands) != 0 || c.ExcludedRows != 3 || c.ReusedProofRows != 2 || c.RootQueryCalls != 1 || c.MembershipBatchQueryCalls != 3 || c.LayoutBatchQueryCalls != layoutCalls || c.MarkerQualificationBatchQueryCalls != 1 {
+					t.Fatal("raw-path mutations changed recognition or cache reuse", r, err)
+				}
+			})
+		}
+	})
+}
+
+func TestSameSizeCargoProofReuseIdentityReplayParity(t *testing.T) {
+	// Keep the former nested loop as an independent parity oracle. The proof
+	// owns unique shared pairs; each replay begins with one fresh file tuple.
+	reference := func(seen *sameSizeCargoIdentities, proof *sameSizeCargoProof) (uint16, bool) {
+		for index, identity := range proof.shared.values[:proof.shared.count] {
+			found := false
+			for _, prior := range seen.values[:seen.count] {
+				if prior.device == identity.device && prior.inode == identity.inode {
+					if prior != identity {
+						return proof.firstDemand[index], false
+					}
+					found = true
+					break
+				}
+			}
+			if found {
+				continue
+			}
+			if seen.count == len(seen.values) {
+				return proof.firstDemand[index], false
+			}
+			seen.values[seen.count], seen.count = identity, seen.count+1
+		}
+		return 0, true
+	}
+	newProof := func(count int) sameSizeCargoProof {
+		proof := sameSizeCargoProof{}
+		proof.shared.count = count
+		for i := 0; i < count; i++ {
+			proof.shared.values[i] = sameSizeCargoIdentity{device: 7, inode: uint64(i + 1), changed: 11, modified: 13, allocated: 17, kind: "file"}
+			proof.firstDemand[i] = uint16(i + 1)
+		}
+		return proof
+	}
+	check := func(t *testing.T, proof sameSizeCargoProof, leaf sameSizeCargoIdentity, demand uint16, matches bool) {
+		t.Helper()
+		retained, tags := proof.shared, proof.firstDemand
+		want := sameSizeCargoIdentities{count: 1}
+		want.values[0] = leaf
+		got := want
+		wantDemand, wantMatches := reference(&want, &proof)
+		gotDemand, gotMatches := sameSizeCargoReplayIdentities(&got, &proof)
+		if wantDemand != demand || wantMatches != matches || gotDemand != wantDemand || gotMatches != wantMatches || got != want || proof.shared != retained || proof.firstDemand != tags {
+			t.Fatal("linear replay changed ordered demand, complete identity scratch or immutable proof", gotDemand, wantDemand, gotMatches, wantMatches, got.count, want.count)
+		}
+	}
+	sharedCount := sameSizeCargoAncestorLimit + 4
+	t.Run("no_alias", func(t *testing.T) {
+		check(t, newProof(sharedCount), sameSizeCargoIdentity{device: 9, inode: 1, changed: 11, modified: 13, allocated: 17, kind: "file"}, 0, true)
+	})
+	t.Run("full_identity_capacity", func(t *testing.T) {
+		check(t, newProof(len(sameSizeCargoIdentities{}.values)-1), sameSizeCargoIdentity{device: 9, inode: 1, changed: 11, modified: 13, allocated: 17, kind: "file"}, 0, true)
+	})
+	for _, position := range []struct {
+		name  string
+		index int
+	}{{"first", 0}, {"middle", sharedCount / 2}, {"last", sharedCount - 1}} {
+		for _, difference := range []string{"equal", "changed", "modified", "allocated", "kind"} {
+			t.Run(position.name+"/"+difference, func(t *testing.T) {
+				proof := newProof(sharedCount)
+				leaf := proof.shared.values[position.index]
+				switch difference {
+				case "changed":
+					leaf.changed++
+				case "modified":
+					leaf.modified++
+				case "allocated":
+					leaf.allocated++
+				case "kind":
+					proof.shared.values[position.index].kind = "directory"
+				}
+				demand := proof.firstDemand[position.index]
+				if difference == "equal" {
+					demand = 0
+				}
+				check(t, proof, leaf, demand, difference == "equal")
+			})
+		}
+	}
 }
 
 func TestSameSizeCargoDefaultParity(t *testing.T) {

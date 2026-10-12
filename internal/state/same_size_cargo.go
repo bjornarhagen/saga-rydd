@@ -840,38 +840,47 @@ type sameSizeCargoProof struct {
 	ancestorRequests, layoutRequests, qualificationRequests int
 }
 
-func sameSizeCargoCloneFinding(finding BuildOutputFinding) BuildOutputFinding {
-	cloned := finding
-	cloned.PathBytes = append([]byte(nil), finding.PathBytes...)
-	cloned.Markers = make([]BuildOutputMarker, len(finding.Markers))
-	copy(cloned.Markers, finding.Markers)
-	for i := range cloned.Markers {
-		cloned.Markers[i].PathBytes = append([]byte(nil), finding.Markers[i].PathBytes...)
+// The saved-layout recognizer creates each PathBytes from its exact Path
+// string. Keep that immutable string once in the proof, without a duplicate
+// byte body. Marker and action containers remain independently owned. The
+// recognizer supplies no measurement or reclaimable pointers.
+func sameSizeCargoFreezeFinding(finding BuildOutputFinding) BuildOutputFinding {
+	frozen := finding
+	frozen.PathBytes = nil
+	frozen.Markers = make([]BuildOutputMarker, len(finding.Markers))
+	copy(frozen.Markers, finding.Markers)
+	for i := range frozen.Markers {
+		frozen.Markers[i].PathBytes = nil
 	}
 	if finding.Actions != nil {
-		cloned.Actions = make([]string, len(finding.Actions))
-		copy(cloned.Actions, finding.Actions)
+		frozen.Actions = make([]string, len(finding.Actions))
+		copy(frozen.Actions, finding.Actions)
 	}
-	// The saved-layout recognizer supplies no measurement or reclaimable
-	// pointers. Its produced finding's only mutable bodies are copied above.
-	return cloned
+	return frozen
 }
 
-// Cached tuples were validated together. Replay them in their original order
-// against this row's fresh leaf, retaining the first conflicting demand.
+// Each observer gets separate mutable bytes for the finding and every marker.
+// String-to-byte conversion preserves raw path bytes without text encoding.
+func sameSizeCargoThawFinding(frozen BuildOutputFinding) BuildOutputFinding {
+	working := sameSizeCargoFreezeFinding(frozen)
+	working.PathBytes = []byte(frozen.Path)
+	for i := range working.Markers {
+		working.Markers[i].PathBytes = []byte(frozen.Markers[i].Path)
+	}
+	return working
+}
+
+// add never appends a repeated device/inode pair, so the copied shared proof
+// contains unique pairs. Each replay starts with only this row's fresh leaf.
+// Earlier shared tuples cannot collide with later ones; compare each tuple
+// only with that leaf, preserving identity order and the first failed demand.
 func sameSizeCargoReplayIdentities(seen *sameSizeCargoIdentities, proof *sameSizeCargoProof) (uint16, bool) {
+	leaf := seen.values[0]
 	for index, identity := range proof.shared.values[:proof.shared.count] {
-		found := false
-		for _, prior := range seen.values[:seen.count] {
-			if prior.device == identity.device && prior.inode == identity.inode {
-				if prior != identity {
-					return proof.firstDemand[index], false
-				}
-				found = true
-				break
+		if leaf.device == identity.device && leaf.inode == identity.inode {
+			if leaf != identity {
+				return proof.firstDemand[index], false
 			}
-		}
-		if found {
 			continue
 		}
 		if seen.count == len(seen.values) {
@@ -923,7 +932,7 @@ func sameSizeCargoReplayProof(ctx context.Context, entries *sameSizeCargoEntryRe
 		return false, err
 	}
 	if hooks.beforeExcluded != nil {
-		finding := sameSizeCargoCloneFinding(proof.finding)
+		finding := sameSizeCargoThawFinding(proof.finding)
 		hooks.beforeExcluded(&seen, &finding)
 	}
 	if err = ctx.Err(); err != nil {
@@ -1159,7 +1168,7 @@ func sameSizeCargoExcluded(ctx context.Context, tx *sql.Tx, entries *sameSizeCar
 	}
 	if reusable && !hooks.disableProofReuse {
 		proof := &sameSizeCargoProof{rootID: f.RootID, root: string(raw.root), parent: filepath.Dir(leafPath), target: target,
-			finding: sameSizeCargoCloneFinding(finding), ancestorRequests: counters.AncestorEvidenceRequests - ancestorStart,
+			finding: sameSizeCargoFreezeFinding(finding), ancestorRequests: counters.AncestorEvidenceRequests - ancestorStart,
 			layoutRequests: counters.LayoutMarkerEvidenceRequests - layoutStart, qualificationRequests: counters.MarkerQualificationEvidenceRequests - qualificationStart}
 		proof.shared.count = seen.count - 1
 		copy(proof.shared.values[:], seen.values[1:seen.count])
