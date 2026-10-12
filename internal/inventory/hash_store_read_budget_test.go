@@ -38,6 +38,94 @@ func requireStoreReadBudget(t *testing.T, s *HashStore) *HashStoreReadBudget {
 	}
 	return b
 }
+
+type hashStoreReadBudgetCensusTransaction struct {
+	*sql.Tx
+	censuses int
+}
+
+func (q *hashStoreReadBudgetCensusTransaction) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	// This raw-cardinality query occurs once at the start of each complete
+	// namespace census, independently of the number of saved jobs or attempts.
+	if query == "SELECT count(*) FROM (SELECT id FROM hash_meta LIMIT 2)" {
+		q.censuses++
+	}
+	return q.Tx.QueryRowContext(ctx, query, args...)
+}
+
+func TestHashStoreReadBudgetAdvanceUsesOneValidatedCensus(t *testing.T) {
+	for _, namespace := range []string{"original", "fresh"} {
+		for _, clock := range []string{"forward", "rollback"} {
+			t.Run(namespace+"/"+clock, func(t *testing.T) {
+				ctx := context.Background()
+				var store *HashStore
+				if namespace == "original" {
+					f, req := hashReadFixture(t, fullHashContents(128))
+					consent := hashReadApprove(t, f, req)
+					if _, err := f.store.runConsented(ctx, consent.ID, f.source, f.scanner, dailyOriginalHooks(f, 64)); err != nil {
+						t.Fatal(err)
+					}
+					store = f.store
+				} else {
+					f := freshRunFiles(t, 65, 2, "2", "1")
+					store = f.open(t)
+					if run, err := store.runFreshConsented(ctx, f.consent.ID, f.fresh.m.f.scanner, dailyFreshHooks(store, 130)); !errors.Is(err, ErrHashDeferred) || run.ReservedBytes != 0 {
+						t.Fatal("fixture did not preserve original and fresh namespaces", run, err)
+					}
+				}
+				before := requireStoreReadBudget(t, store)
+				if before.Day != before.ProjectedDay || before.MaxNow != before.ProjectedMaxNow {
+					t.Fatal("fixture must begin with one validated reservation day", before)
+				}
+				now := before.ProjectedMaxNow.Truncate(24 * time.Hour).Add(24 * time.Hour)
+				if clock == "rollback" {
+					now = before.ProjectedMaxNow.Add(-time.Second)
+				}
+				tx, err := store.db.BeginTx(ctx, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer tx.Rollback()
+				query := &hashStoreReadBudgetCensusTransaction{Tx: tx}
+				got, err := store.advanceHashStoreReadBudget(ctx, query, now)
+				if query.censuses != 1 || got == nil || clock == "forward" && err != nil || clock == "rollback" && !errors.Is(err, ErrHashReadClockRollback) {
+					t.Fatal("advancement repeated a census or lost its clock refusal", query.censuses, got, err)
+				}
+				want := *before
+				want.MaxNow = before.ProjectedMaxNow
+				if now.After(want.MaxNow) {
+					want.MaxNow = now
+					want.Day = now.Format(time.DateOnly)
+					want.ReservedBytes, want.RequestedBytes, want.ReadBytes = 0, 0, 0
+					want.UnknownReservedBytes, want.OutstandingReservedBytes, want.ProjectedReservedBytes = 0, 0, 0
+				}
+				want.ProjectedMaxNow, want.ProjectedDay = want.MaxNow, want.MaxNow.Format(time.DateOnly)
+				if !reflect.DeepEqual(*got, want) {
+					t.Fatal("same-snapshot advancement changed namespace usage or projection", got, want)
+				}
+				if err = tx.Commit(); err != nil {
+					t.Fatal(err)
+				}
+				if saved := requireStoreReadBudget(t, store); !reflect.DeepEqual(saved, got) {
+					t.Fatal("committed advancement differs from a fresh validated read", saved, got)
+				}
+			})
+		}
+	}
+}
+
+func TestHashStoreReadBudgetPairedLoaderLegacyAndCanceled(t *testing.T) {
+	f := hashStoreFixture(t, fullHashContents(128))
+	ctx := context.Background()
+	if got, accounting, err := f.store.readHashStoreReadBudgetAccounting(ctx, f.store.db); err != nil || got != nil || !reflect.DeepEqual(accounting, hashStoreReadAccounting{}) {
+		t.Fatal("untracked legacy store returned an accounting witness", got, accounting, err)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if got, accounting, err := f.store.readHashStoreReadBudgetAccounting(canceled, f.store.db); !errors.Is(err, context.Canceled) || got != nil || !reflect.DeepEqual(accounting, hashStoreReadAccounting{}) {
+		t.Fatal("canceled paired read returned an accounting witness", got, accounting, err)
+	}
+}
 func TestHashStoreReadBudgetOriginalQuantumTailEmptyAndChangingCap(t *testing.T) {
 	ctx := context.Background()
 	f, req := hashReadFixture(t, fullHashContents(65))
@@ -364,6 +452,16 @@ func TestHashStoreReadBudgetRefusesBoundedCorruption(t *testing.T) {
 			}
 			if b, e := f.store.StoreReadBudget(context.Background()); !errors.Is(e, ErrHashStoreReadBudgetCorrupt) || b != nil {
 				t.Fatal("corrupt shared report accepted", b, e)
+			}
+			tx, e := f.store.db.BeginTx(context.Background(), nil)
+			if e != nil {
+				t.Fatal(e)
+			}
+			paired, accounting, pairedErr := f.store.readHashStoreReadBudgetAccounting(context.Background(), tx)
+			advanced, advanceErr := f.store.advanceHashStoreReadBudget(context.Background(), tx, f.store.now())
+			rollbackErr := tx.Rollback()
+			if paired != nil || !reflect.DeepEqual(accounting, hashStoreReadAccounting{}) || !errors.Is(pairedErr, ErrHashStoreReadBudgetCorrupt) || advanced != nil || !errors.Is(advanceErr, ErrHashStoreReadBudgetCorrupt) || rollbackErr != nil {
+				t.Fatal("paired advancement bypassed corruption or exposed accounting", paired, accounting, pairedErr, advanced, advanceErr, rollbackErr)
 			}
 			if e = f.store.Close(); e != nil {
 				t.Fatal(e)
@@ -836,6 +934,16 @@ func TestHashStoreReadBudgetRetainsSpecificNamespaceCorruption(t *testing.T) {
 			got, err := w.StoreReadBudget(context.Background())
 			if got != nil || !errors.Is(err, ErrHashStoreReadBudgetCorrupt) || !errors.Is(err, namespace) {
 				t.Fatal("shared validation lost namespace refusal or exposed a partial report", got, err)
+			}
+			tx, err := w.db.BeginTx(context.Background(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			paired, accounting, pairedErr := w.readHashStoreReadBudgetAccounting(context.Background(), tx)
+			advanced, advanceErr := w.advanceHashStoreReadBudget(context.Background(), tx, before.MaxNow)
+			rollbackErr := tx.Rollback()
+			if paired != nil || !reflect.DeepEqual(accounting, hashStoreReadAccounting{}) || !errors.Is(pairedErr, ErrHashStoreReadBudgetCorrupt) || !errors.Is(pairedErr, namespace) || advanced != nil || !errors.Is(advanceErr, ErrHashStoreReadBudgetCorrupt) || !errors.Is(advanceErr, namespace) || rollbackErr != nil {
+				t.Fatal("paired loader or advancement lost namespace corruption", paired, accounting, pairedErr, advanced, advanceErr, rollbackErr)
 			}
 			var reserved, total int64
 			if err = w.db.QueryRow("SELECT reserved_bytes,total_reserved_bytes FROM hash_store_read_budget WHERE id=1").Scan(&reserved, &total); err != nil || reserved != before.ReservedBytes || total != before.TotalReservedBytes {

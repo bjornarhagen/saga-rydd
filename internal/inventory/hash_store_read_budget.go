@@ -66,6 +66,11 @@ type hashStoreReadAccounting struct {
 	totalOutstanding int64
 }
 
+type hashStoreReadBudgetTransaction interface {
+	hashQuery
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
 func validHashExecutionLimits(l HashReadExecutionLimits) bool {
 	return l.RequestedBytesPerSecond >= 1 && l.RequestedBytesPerSecond <= 1<<30 && l.DailyReservedByteLimit >= 1 && l.DailyReservedByteLimit <= 1<<50
 }
@@ -283,16 +288,23 @@ func (a hashStoreReadAccounting) projection(day string) (HashStoreReadBudget, er
 	return b, nil
 }
 func (s *HashStore) readHashStoreReadBudget(ctx context.Context, db hashQuery) (*HashStoreReadBudget, error) {
+	b, _, err := s.readHashStoreReadBudgetAccounting(ctx, db)
+	return b, err
+}
+
+// The accounting belongs to this exact read snapshot. An advancement can use
+// it before its first write; later transactions and finalizers must read anew.
+func (s *HashStore) readHashStoreReadBudgetAccounting(ctx context.Context, db hashQuery) (*HashStoreReadBudget, hashStoreReadAccounting, error) {
 	v, err := hashReadSchemaVersion(ctx, db)
 	if err != nil {
-		return nil, err
+		return nil, hashStoreReadAccounting{}, err
 	}
 	if v < 7 {
-		return nil, nil
+		return nil, hashStoreReadAccounting{}, nil
 	}
 	var count int
 	if err = db.QueryRowContext(ctx, "SELECT count(*) FROM (SELECT id FROM hash_store_read_budget LIMIT 2)").Scan(&count); err != nil || count != 1 {
-		return nil, hashStoreReadBudgetFailure(ctx, err)
+		return nil, hashStoreReadAccounting{}, hashStoreReadBudgetFailure(ctx, err)
 	}
 	var id int64
 	var store, day string
@@ -301,26 +313,26 @@ func (s *HashStore) readHashStoreReadBudget(ctx context.Context, db hashQuery) (
 	err = db.QueryRowContext(ctx, `SELECT CASE WHEN typeof(id)='integer' THEN id ELSE -1 END,substr(CAST(store_id AS BLOB),1,65),substr(CAST(day AS BLOB),1,11),CASE WHEN typeof(max_now_ns)='integer' THEN max_now_ns ELSE -1 END,CASE WHEN typeof(reserved_bytes)='integer' THEN reserved_bytes ELSE -1 END,CASE WHEN typeof(total_reserved_bytes)='integer' THEN total_reserved_bytes ELSE -1 END,typeof(store_id)='text' AND typeof(day)='text' FROM hash_store_read_budget`).Scan(&id, &store, &day, &high, &reserved, &total, &valid)
 	stamp := time.Unix(0, high).UTC()
 	if err != nil || !valid || id != 1 || !hashStoreDigest(store) || !hashDay(day) || !validHashReadClock(stamp) || stamp.Format(time.DateOnly) != day || reserved < 0 || total < reserved {
-		return nil, hashStoreReadBudgetFailure(ctx, err)
+		return nil, hashStoreReadAccounting{}, hashStoreReadBudgetFailure(ctx, err)
 	}
 	a, err := s.hashStoreReadAccounting(ctx, db)
 	if err != nil {
-		return nil, err
+		return nil, hashStoreReadAccounting{}, err
 	}
 	// A charged namespace clock advances only in its reservation TX, which
 	// also saves the shared clock. Only zero-total initialization and saved
 	// consent observations can legitimately be newer than this singleton.
 	for _, n := range a.budgets {
 		if n.TotalReservedBytes > 0 && n.MaxNow.After(stamp) {
-			return nil, ErrHashStoreReadBudgetCorrupt
+			return nil, hashStoreReadAccounting{}, ErrHashStoreReadBudgetCorrupt
 		}
 	}
 	b, err := a.projection(day)
 	if err != nil {
-		return nil, err
+		return nil, hashStoreReadAccounting{}, err
 	}
 	if b.StoreID != store || b.ReservedBytes != reserved || b.TotalReservedBytes != total {
-		return nil, ErrHashStoreReadBudgetCorrupt
+		return nil, hashStoreReadAccounting{}, ErrHashStoreReadBudgetCorrupt
 	}
 	b.MaxNow = stamp
 	if stamp.After(b.ProjectedMaxNow) {
@@ -328,7 +340,10 @@ func (s *HashStore) readHashStoreReadBudget(ctx context.Context, db hashQuery) (
 		b.ProjectedDay = day
 		b.ProjectedReservedBytes = reserved
 	}
-	return &b, ctx.Err()
+	if err = ctx.Err(); err != nil {
+		return &b, hashStoreReadAccounting{}, err
+	}
+	return &b, a, nil
 }
 
 // StoreReadBudget reads one bounded saved-only snapshot. It never initializes,
@@ -355,7 +370,7 @@ func (s *HashStore) StoreReadBudget(ctx context.Context) (*HashStoreReadBudget, 
 	return b, ctx.Err()
 }
 
-func writeHashStoreReadBudget(ctx context.Context, tx *sql.Tx, b HashStoreReadBudget) error {
+func writeHashStoreReadBudget(ctx context.Context, tx hashStoreReadBudgetTransaction, b HashStoreReadBudget) error {
 	_, err := tx.ExecContext(ctx, `INSERT INTO hash_store_read_budget VALUES(1,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET day=excluded.day,max_now_ns=excluded.max_now_ns,reserved_bytes=excluded.reserved_bytes,total_reserved_bytes=excluded.total_reserved_bytes`, b.StoreID, b.Day, b.MaxNow.UnixNano(), b.ReservedBytes, b.TotalReservedBytes)
 	return err
 }
@@ -412,8 +427,8 @@ func (s *HashStore) prepareHashStoreReadBudget(ctx context.Context, tx *sql.Tx, 
 // Advance only shared admission time; use saved namespace usage to recapture
 // day counters. Metadata lifecycle commands may legitimately be newer than the
 // stored shared clock. That projection is folded in before another dispatch.
-func (s *HashStore) advanceHashStoreReadBudget(ctx context.Context, tx *sql.Tx, now time.Time) (*HashStoreReadBudget, error) {
-	b, err := s.readHashStoreReadBudget(ctx, tx)
+func (s *HashStore) advanceHashStoreReadBudget(ctx context.Context, tx hashStoreReadBudgetTransaction, now time.Time) (*HashStoreReadBudget, error) {
+	b, a, err := s.readHashStoreReadBudgetAccounting(ctx, tx)
 	if err != nil || b == nil {
 		return b, err
 	}
@@ -424,8 +439,7 @@ func (s *HashStore) advanceHashStoreReadBudget(ctx context.Context, tx *sql.Tx, 
 	if now.After(high) {
 		high = now
 	}
-	a, err := s.hashStoreReadAccounting(ctx, tx)
-	if err != nil {
+	if err = ctx.Err(); err != nil {
 		return nil, err
 	}
 	a.high = high

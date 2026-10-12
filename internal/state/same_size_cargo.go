@@ -233,6 +233,7 @@ type sameSizeCargoEntryReader struct {
 	tx                                 *sql.Tx
 	ctx                                context.Context
 	statements                         [6]*sql.Stmt
+	proofLeafStatement                 *sql.Stmt
 	active                             *sameSizeCargoActiveCursor
 	plan                               [sameSizeCargoAncestorLimit + 1]sameSizeCargoRequest
 	sealedCount                        int
@@ -270,7 +271,18 @@ func sameSizeCargoStageRole(stage sameSizeCargoStage) int64 {
 // payload expressions below retain the original scalar projection and types.
 // The largest shape has 517 arguments, below the portable 999-argument bound.
 func sameSizeCargoBatchQuery(stage sameSizeCargoStage) (string, error) {
-	if sameSizeCargoStageSize(stage) == 0 {
+	return sameSizeCargoQueryShape(stage, sameSizeCargoStageSize(stage))
+}
+
+func sameSizeCargoValidShape(stage sameSizeCargoStage, maximum int) bool {
+	regular := sameSizeCargoStageSize(stage)
+	return regular != 0 && (maximum == regular || stage == sameSizeCargoMembershipStage && maximum == 1)
+}
+
+// A proof hit reads only its new leaf. Its five-argument shape shares the
+// original projection, transport headers and saved-key joins with cold reads.
+func sameSizeCargoQueryShape(stage sameSizeCargoStage, maximum int) (string, error) {
+	if !sameSizeCargoValidShape(stage, maximum) {
 		return "", errors.New("invalid Cargo cursor stage")
 	}
 	if stage == sameSizeCargoRootStage {
@@ -285,7 +297,7 @@ func sameSizeCargoBatchQuery(stage sameSizeCargoStage) (string, error) {
 	var query strings.Builder
 	if stage == sameSizeCargoMembershipStage {
 		query.WriteString("WITH base(root_id,leaf,count) AS (VALUES(?1,?2,?3)),geometry(ordinal,path_end,expected_parent) AS (VALUES ")
-		for i := 0; i < sameSizeCargoStageSize(stage); i++ {
+		for i := 0; i < maximum; i++ {
 			if i != 0 {
 				query.WriteByte(',')
 			}
@@ -294,7 +306,7 @@ func sameSizeCargoBatchQuery(stage sameSizeCargoStage) (string, error) {
 		query.WriteString("), requests AS (SELECT g.ordinal,CASE WHEN g.path_end=-1 THEN CAST('.' AS BLOB) ELSE substr(b.leaf,1,g.path_end) END AS path,g.expected_parent,0 AS role FROM geometry g,base b WHERE g.ordinal<b.count) ")
 	} else {
 		query.WriteString("WITH requests(ordinal,path,expected_parent,role) AS (VALUES ")
-		for i := 0; i < sameSizeCargoStageSize(stage); i++ {
+		for i := 0; i < maximum; i++ {
 			if i != 0 {
 				query.WriteByte(',')
 			}
@@ -326,11 +338,18 @@ func closeSameSizeCargoStatement(owner **sql.Stmt, closeStatement func(*sql.Stmt
 	return stmt.Close()
 }
 func (reader *sameSizeCargoEntryReader) statement(ctx context.Context, stage sameSizeCargoStage) (*sql.Stmt, error) {
-	if sameSizeCargoStageSize(stage) == 0 {
+	return reader.statementShape(ctx, stage, sameSizeCargoStageSize(stage))
+}
+func (reader *sameSizeCargoEntryReader) statementShape(ctx context.Context, stage sameSizeCargoStage, maximum int) (*sql.Stmt, error) {
+	if !sameSizeCargoValidShape(stage, maximum) {
 		return nil, errors.New("invalid Cargo cursor stage")
 	}
-	if reader.statements[stage] == nil {
-		query, err := sameSizeCargoBatchQuery(stage)
+	owner := &reader.statements[stage]
+	if stage == sameSizeCargoMembershipStage && maximum == 1 {
+		owner = &reader.proofLeafStatement
+	}
+	if *owner == nil {
+		query, err := sameSizeCargoQueryShape(stage, maximum)
 		if err != nil {
 			return nil, err
 		}
@@ -338,9 +357,9 @@ func (reader *sameSizeCargoEntryReader) statement(ctx context.Context, stage sam
 		if err != nil {
 			return nil, err
 		}
-		reader.statements[stage] = stmt
+		*owner = stmt
 	}
-	return reader.statements[stage], nil
+	return *owner, nil
 }
 func (reader *sameSizeCargoEntryReader) rootStatement(ctx context.Context) (*sql.Stmt, error) {
 	return reader.statement(ctx, sameSizeCargoRootStage)
@@ -379,18 +398,29 @@ func (reader *sameSizeCargoEntryReader) close() error {
 		}
 		err = errors.Join(err, closeSameSizeCargoStatement(&reader.statements[i], closeStatement))
 	}
+	err = errors.Join(err, closeSameSizeCargoStatement(&reader.proofLeafStatement, reader.closeStatement))
 	if ctx != nil {
 		err = errors.Join(err, ctx.Err())
 	}
 	return err
 }
 func (reader *sameSizeCargoEntryReader) open(ctx context.Context, stage sameSizeCargoStage, rootID int64, leaf []byte, requests []sameSizeCargoRequest) error {
+	return reader.openShape(ctx, stage, rootID, leaf, requests, sameSizeCargoStageSize(stage))
+}
+func (reader *sameSizeCargoEntryReader) openProofLeaf(ctx context.Context, rootID int64, leaf []byte) error {
+	path := string(leaf)
+	request := sameSizeCargoRequest{path: path, parent: sameSizeCargoExpectedParent(path), role: sameSizeCargoMemberRole}
+	return reader.openShape(ctx, sameSizeCargoMembershipStage, rootID, leaf, []sameSizeCargoRequest{request}, 1)
+}
+func (reader *sameSizeCargoEntryReader) openShape(ctx context.Context, stage sameSizeCargoStage, rootID int64, leaf []byte, requests []sameSizeCargoRequest, maximum int) error {
 	if reader.active != nil {
 		return errors.Join(errors.New("Cargo cursor crosses a stage boundary"), reader.closeCursor(ctx))
 	}
-	maximum := sameSizeCargoStageSize(stage)
-	if maximum == 0 || len(requests) == 0 || len(requests) > maximum {
+	if !sameSizeCargoValidShape(stage, maximum) || len(requests) == 0 || len(requests) > maximum {
 		return errors.New("invalid Cargo request count")
+	}
+	if stage == sameSizeCargoMembershipStage && maximum == 1 && (requests[0].path != string(leaf) || requests[0].parent != sameSizeCargoExpectedParent(string(leaf))) {
+		return errors.New("invalid Cargo proof leaf request")
 	}
 	role := sameSizeCargoStageRole(stage)
 	for _, request := range requests {
@@ -419,7 +449,7 @@ func (reader *sameSizeCargoEntryReader) open(ctx context.Context, stage sameSize
 			reader.sealedCount = 0
 		}
 	}()
-	stmt, err := reader.statement(ctx, stage)
+	stmt, err := reader.statementShape(ctx, stage, maximum)
 	if err != nil {
 		return err
 	}
@@ -893,8 +923,7 @@ func sameSizeCargoReplayIdentities(seen *sameSizeCargoIdentities, proof *sameSiz
 
 func sameSizeCargoReplayProof(ctx context.Context, entries *sameSizeCargoEntryReader, raw sameSizeRawFile, proof *sameSizeCargoProof, counters *SameSizeCargoTargetExclusion, hooks sameSizeCargoHooks) (bool, error) {
 	leafPath := string(raw.relative)
-	request := sameSizeCargoRequest{path: leafPath, parent: sameSizeCargoExpectedParent(leafPath), role: sameSizeCargoMemberRole}
-	if err := entries.open(ctx, sameSizeCargoMembershipStage, raw.file.RootID, raw.relative, []sameSizeCargoRequest{request}); err != nil {
+	if err := entries.openProofLeaf(ctx, raw.file.RootID, raw.relative); err != nil {
 		return false, err
 	}
 	var seen sameSizeCargoIdentities

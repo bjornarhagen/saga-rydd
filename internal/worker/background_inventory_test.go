@@ -292,6 +292,34 @@ func TestWorkerCompactBackgroundBeyondReportLimit(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	if !drained {
+		// Observe one saved-only page after the unchanged fixture bound. This
+		// separate read does not establish a maintenance phase or a timeout cause.
+		pageCtx, pageCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		page, pageErr := reader.NextInventoryRetirementPage(pageCtx, 0)
+		pageCancel()
+		errorClass := "none"
+		if pageErr != nil {
+			errorClass = "error"
+			if errors.Is(pageErr, context.DeadlineExceeded) {
+				errorClass = "deadline"
+			} else if errors.Is(pageErr, context.Canceled) {
+				errorClass = "canceled"
+			}
+			page = state.InventoryRetirementPage{}
+		}
+		projection := struct {
+			ErrorClass    string `json:"error_class"`
+			PageAvailable bool   `json:"page_available"`
+			RootID        int64  `json:"root_id"`
+			Cursor        int64  `json:"cursor"`
+			More          bool   `json:"more"`
+		}{errorClass, pageErr == nil, page.RootID, page.Cursor, page.More}
+		encoded, encodeErr := json.Marshal(projection)
+		if encodeErr != nil || len(encoded) > 8<<10 {
+			t.Log("failure-only saved maintenance page projection unavailable")
+		} else {
+			t.Log("failure-only saved maintenance page:", string(encoded))
+		}
 		// This terminal-only receive never waits or steals a later successful
 		// waitExit. startCancelable closes done after its one buffered result.
 		var workerEnded, workerResultMissing, workerError, workerCanceled, workerTimedOut bool

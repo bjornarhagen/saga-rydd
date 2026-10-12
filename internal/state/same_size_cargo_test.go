@@ -108,7 +108,7 @@ func (s *sameSizeCargoObservedHeaderScanner) Scan(value any) error {
 }
 
 func sameSizeCargoTestOwnersEmpty(reader *sameSizeCargoEntryReader) bool {
-	if reader.active != nil || reader.proof != nil {
+	if reader.active != nil || reader.proof != nil || reader.proofLeafStatement != nil {
 		return false
 	}
 	for _, stmt := range reader.statements {
@@ -326,9 +326,22 @@ func TestSameSizeCargoTransportHeadersRefuseWholeReport(t *testing.T) {
 
 func TestSameSizeCargoBatchQueryIndexedPlans(t *testing.T) {
 	s := sameSizeCargoFixture(t, "debug")
-	for _, stage := range []sameSizeCargoStage{sameSizeCargoRootStage, sameSizeCargoMembershipStage, sameSizeCargoCommonStage, sameSizeCargoDebugStage, sameSizeCargoReleaseStage, sameSizeCargoQualificationStage} {
-		t.Run(fmt.Sprintf("stage=%d", stage), func(t *testing.T) {
-			query, err := sameSizeCargoBatchQuery(stage)
+	for _, shape := range []struct {
+		stage   sameSizeCargoStage
+		maximum int
+	}{
+		{sameSizeCargoRootStage, 1}, {sameSizeCargoMembershipStage, 257},
+		{sameSizeCargoCommonStage, 3}, {sameSizeCargoDebugStage, 4},
+		{sameSizeCargoReleaseStage, 4}, {sameSizeCargoQualificationStage, 7},
+		{sameSizeCargoMembershipStage, 1},
+	} {
+		stage, maximum := shape.stage, shape.maximum
+		name := fmt.Sprintf("stage=%d", stage)
+		if stage == sameSizeCargoMembershipStage && maximum == 1 {
+			name = "proof_leaf"
+		}
+		t.Run(name, func(t *testing.T) {
+			query, err := sameSizeCargoQueryShape(stage, maximum)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -337,9 +350,9 @@ func TestSameSizeCargoBatchQueryIndexedPlans(t *testing.T) {
 			case sameSizeCargoRootStage:
 				args = []any{[]byte("project/Cargo.toml"), []byte("project/Cargo.lock"), int64(1)}
 			case sameSizeCargoMembershipStage:
-				args = make([]any, 3+2*257)
+				args = make([]any, 3+2*maximum)
 				args[0], args[1], args[2] = int64(1), []byte("project/target"), 1
-				for i := 0; i < 257; i++ {
+				for i := 0; i < maximum; i++ {
 					args[3+2*i], args[4+2*i] = 0, ""
 				}
 				args[3], args[4] = len("project/target"), "project"
@@ -1183,6 +1196,175 @@ func TestSameSizeCargoProofReuseHitFailures(t *testing.T) {
 			}
 			if strings.HasPrefix(fault, "cancel_") && !errors.Is(err, context.Canceled) {
 				t.Fatal("hit cancellation cause lost", fault, err)
+			}
+		})
+	}
+}
+
+func TestSameSizeCargoProofLeafStatementAdmission(t *testing.T) {
+	leaf := "project/target/debug/deps/manual-a"
+	request := sameSizeCargoRequest{path: leaf, parent: filepath.Dir(leaf), role: sameSizeCargoMemberRole}
+	for _, tc := range []struct {
+		name     string
+		stage    sameSizeCargoStage
+		maximum  int
+		leaf     string
+		requests []sameSizeCargoRequest
+	}{
+		{"unknown_stage", sameSizeCargoStage(255), 1, leaf, []sameSizeCargoRequest{request}},
+		{"zero_shape", sameSizeCargoMembershipStage, 0, leaf, []sameSizeCargoRequest{request}},
+		{"intermediate_shape", sameSizeCargoMembershipStage, 2, leaf, []sameSizeCargoRequest{request}},
+		{"oversized_shape", sameSizeCargoMembershipStage, 258, leaf, []sameSizeCargoRequest{request}},
+		{"layout_singleton", sameSizeCargoCommonStage, 1, leaf, []sameSizeCargoRequest{request}},
+		{"empty_requests", sameSizeCargoMembershipStage, 1, leaf, nil},
+		{"extra_request", sameSizeCargoMembershipStage, 1, leaf, []sameSizeCargoRequest{request, request}},
+		{"prefix_only", sameSizeCargoMembershipStage, 1, leaf, []sameSizeCargoRequest{{path: "project", parent: ".", role: sameSizeCargoMemberRole}}},
+		{"wrong_parent", sameSizeCargoMembershipStage, 1, leaf, []sameSizeCargoRequest{{path: leaf, parent: "other", role: sameSizeCargoMemberRole}}},
+		{"wrong_role", sameSizeCargoMembershipStage, 1, leaf, []sameSizeCargoRequest{{path: leaf, parent: filepath.Dir(leaf), role: sameSizeCargoLayoutRole}}},
+		{"empty_leaf", sameSizeCargoMembershipStage, 1, "", []sameSizeCargoRequest{{path: "", parent: ".", role: sameSizeCargoMemberRole}}},
+		{"overlong_leaf", sameSizeCargoMembershipStage, 1, strings.Repeat("x", 4097), []sameSizeCargoRequest{{path: strings.Repeat("x", 4097), parent: ".", role: sameSizeCargoMemberRole}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			counters := SameSizeCargoTargetExclusion{}
+			reader := sameSizeCargoEntryReader{counters: &counters}
+			if err := reader.openShape(context.Background(), tc.stage, 1, []byte(tc.leaf), tc.requests, tc.maximum); err == nil || !sameSizeCargoTestOwnersEmpty(&reader) || reader.sealedCount != 0 || !reflect.DeepEqual(counters, SameSizeCargoTargetExclusion{}) {
+				t.Fatal("invalid proof leaf prepared, opened or counted evidence", tc.name, err, counters)
+			}
+			if !sameSizeCargoValidShape(tc.stage, tc.maximum) {
+				if _, err := sameSizeCargoQueryShape(tc.stage, tc.maximum); err == nil {
+					t.Fatal("unsupported SQL shape was admitted", tc.name)
+				}
+			}
+		})
+	}
+	for _, path := range []string{".", "raw-\xff/leaf", strings.Repeat("p", 4096)} {
+		name := "root"
+		if path != "." {
+			name = "raw"
+			if len(path) == 4096 {
+				name = "inclusive_bound"
+			}
+		}
+		t.Run(name, func(t *testing.T) {
+			s := sameSizeCargoFixture(t, "debug")
+			tx, err := s.db.BeginTx(context.Background(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback()
+			reader := sameSizeCargoEntryReader{tx: tx}
+			if err := reader.openProofLeaf(context.Background(), 1, []byte(path)); err != nil || reader.proofLeafStatement == nil || reader.statements[sameSizeCargoMembershipStage] != nil || reader.active == nil || reader.active.stage != sameSizeCargoMembershipStage || reader.active.count != 1 || reader.plan[0].path != path || reader.plan[0].parent != sameSizeCargoExpectedParent(path) {
+				t.Fatal("bounded leaf did not seal its exact raw request", name, err)
+			}
+			if err := reader.close(); err != nil || !sameSizeCargoTestOwnersEmpty(&reader) || reader.sealedCount != 0 {
+				t.Fatal("admitted leaf retained an owner or plan", name, err)
+			}
+		})
+	}
+}
+
+func TestSameSizeCargoProofLeafStatementOwnership(t *testing.T) {
+	s := sameSizeCargoFixture(t, "debug")
+	tx, err := s.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	counters := SameSizeCargoTargetExclusion{}
+	reader := sameSizeCargoEntryReader{tx: tx, counters: &counters}
+	var proofStmt *sql.Stmt
+	for _, path := range []string{"project/target/debug/deps/manual-a", "project/target/debug/deps/manual-b"} {
+		if err := reader.openProofLeaf(context.Background(), 1, []byte(path)); err != nil {
+			t.Fatal(err)
+		}
+		if proofStmt == nil {
+			proofStmt = reader.proofLeafStatement
+		}
+		if proofStmt == nil || reader.proofLeafStatement != proofStmt || reader.statements[sameSizeCargoMembershipStage] != nil {
+			t.Fatal("proof leaf changed owner or prepared the cold shape")
+		}
+		if _, exists, err := readSameSizeCargoEntry(context.Background(), &reader, 1, path); err != nil || !exists {
+			t.Fatal("actual five-bind leaf failed its original decoder", path, exists, err)
+		}
+		if err := reader.finish(context.Background()); err != nil || reader.active != nil || reader.sealedCount != 0 {
+			t.Fatal("proof leaf did not finish its sole row", err)
+		}
+	}
+	if _, exists, err := readSameSizeCargoEntry(context.Background(), &reader, 1, "project/target"); err != nil || !exists {
+		t.Fatal("cold owner could not coexist with proof leaf", exists, err)
+	}
+	memberStmt := reader.statements[sameSizeCargoMembershipStage]
+	if memberStmt == nil || memberStmt == proofStmt || reader.proofLeafStatement != proofStmt || counters.MembershipBatchQueryCalls != 3 {
+		t.Fatal("two fixed shapes shared an owner or changed query accounting", counters)
+	}
+	closes := map[*sql.Stmt]int{}
+	reader.closeStatement = func(stmt *sql.Stmt) error {
+		closes[stmt]++
+		if stmt == proofStmt && reader.proofLeafStatement != nil || stmt == memberStmt && reader.statements[sameSizeCargoMembershipStage] != nil {
+			t.Fatal("statement owner survived into its checked close")
+		}
+		return stmt.Close()
+	}
+	if err := reader.close(); err != nil || !sameSizeCargoTestOwnersEmpty(&reader) || closes[proofStmt] != 1 || closes[memberStmt] != 1 || len(closes) != 2 {
+		t.Fatal("separate statement owners were not closed once", closes, err)
+	}
+	if err := reader.close(); err != nil || closes[proofStmt] != 1 || closes[memberStmt] != 1 {
+		t.Fatal("idempotent close repeated a statement close", closes, err)
+	}
+	if rows, err := proofStmt.QueryContext(context.Background(), int64(1), []byte("project/target"), 1, len("project/target"), "project"); err == nil {
+		rows.Close()
+		t.Fatal("closed proof statement remained usable")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	unprepared := sameSizeCargoEntryReader{tx: tx}
+	if err := unprepared.openProofLeaf(ctx, 1, []byte("project/target")); !errors.Is(err, context.Canceled) || !sameSizeCargoTestOwnersEmpty(&unprepared) || unprepared.sealedCount != 0 {
+		t.Fatal("canceled proof leaf retained a prepared owner", err)
+	}
+}
+
+func TestSameSizeCargoProofLeafStatementCheckedClose(t *testing.T) {
+	for _, fault := range []string{"error", "cancel", "read_and_close_error"} {
+		t.Run(fault, func(t *testing.T) {
+			s := sameSizeCargoFixture(t, "debug")
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			leafCause, rootCause := errors.New("proof leaf statement close"), errors.New("root statement close")
+			closes, checkpoints := [2]int{}, 0
+			committed := false
+			r, err := s.sameSizeCargoCandidates(ctx, 200, "", 1, sameSizeCargoHooks{
+				beforeExcluded: func(*sameSizeCargoIdentities, *BuildOutputFinding) {
+					checkpoints++
+					if fault == "read_and_close_error" && checkpoints == 2 {
+						cancel()
+					}
+				},
+				beforeCommit: func() { committed = true },
+				closeEntryStatement: func(stmt *sql.Stmt) error {
+					closes[0]++
+					closeErr := stmt.Close()
+					if closes[0] != 5 {
+						return closeErr
+					}
+					if fault == "cancel" {
+						cancel()
+						return closeErr
+					}
+					return errors.Join(closeErr, leafCause)
+				},
+				closeRootStatement: func(stmt *sql.Stmt) error {
+					closes[1]++
+					return errors.Join(stmt.Close(), rootCause)
+				},
+			})
+			if closes != [2]int{5, 1} || checkpoints != 2 || committed || !reflect.DeepEqual(r, SameSizeReport{}) || !errors.Is(err, rootCause) {
+				t.Fatal("proof leaf terminal failure escaped report veto or another close", fault, closes, checkpoints, r, err)
+			}
+			if fault != "cancel" && !errors.Is(err, leafCause) || fault != "error" && !errors.Is(err, context.Canceled) {
+				t.Fatal("proof leaf close error or cancellation cause was lost", fault, err)
+			}
+			if next := sameSizeCargoReport(t, s, 200, ""); next.CargoTargetExclusion.ExcludedRows != 2 {
+				t.Fatal("proof leaf terminal failure changed saved data", fault, next)
 			}
 		})
 	}
@@ -2422,11 +2604,26 @@ func TestSameSizeCargoCancellationAndCheckedClose(t *testing.T) {
 		}
 		return tx
 	}
+	readProofLeaf := func(reader *sameSizeCargoEntryReader, path string) (sameSizeCargoEntry, bool, error) {
+		ctx := context.Background()
+		if err := reader.openProofLeaf(ctx, 1, []byte(path)); err != nil {
+			return sameSizeCargoEntry{}, false, err
+		}
+		entry, exists, err := readSameSizeCargoEntry(ctx, reader, 1, path)
+		if reader.active != nil {
+			if exists {
+				err = errors.Join(err, reader.finish(ctx))
+			} else {
+				err = errors.Join(err, reader.closeCursor(ctx))
+			}
+		}
+		return entry, exists && err == nil, err
+	}
 	// Compare raw SQL storage classes and values before either typed decoder.
 	// This test-only cursor checks bounded column metadata and closes on every path.
 	gatedAliases := map[int]string{1: "c02", 2: "c03", 3: "c04", 4: "c05", 9: "c10", 12: "c13", 13: "c14", 14: "c15", 15: "c16", 16: "c17", 17: "c18", 18: "c19", 19: "c20", 20: "c21", 21: "c22", 22: "c23", 23: "c24", 24: "c25", 25: "c26"}
 	memberColumns := []int{0, 13, 14, 15, 16, 17, 18, 5, 6, 7, 8, 19, 10, 11, 20, 21, 22, 23, 24, 25}
-	readProjectedRaw := func(reader *sameSizeCargoEntryReader, path string, role int64) ([]any, error) {
+	readProjectedRaw := func(reader *sameSizeCargoEntryReader, path string, role int64, proofLeaf bool) ([]any, error) {
 		if len(path) > 4096 {
 			// Finite private decoder probes retain the original scalar payload.
 			// They do not send an overlong key through the production transport.
@@ -2513,6 +2710,8 @@ func TestSameSizeCargoCancellationAndCheckedClose(t *testing.T) {
 		var err error
 		if role == sameSizeCargoLayoutRole {
 			_, exists, err = reader.readLayout(context.Background(), reader.tx, 1, path)
+		} else if proofLeaf {
+			_, exists, err = readProofLeaf(reader, path)
 		} else {
 			_, exists, err = readSameSizeCargoEntry(context.Background(), reader, 1, path)
 		}
@@ -2540,7 +2739,11 @@ func TestSameSizeCargoCancellationAndCheckedClose(t *testing.T) {
 	}
 
 	checkRawProjection := func(tx *sql.Tx, reader *sameSizeCargoEntryReader, name, path string) {
-		for _, role := range []int64{sameSizeCargoLayoutRole, sameSizeCargoMemberRole, sameSizeCargoLayoutRole, sameSizeCargoMemberRole} {
+		for _, mode := range []struct {
+			role      int64
+			proofLeaf bool
+		}{{sameSizeCargoLayoutRole, false}, {sameSizeCargoMemberRole, false}, {sameSizeCargoMemberRole, true}, {sameSizeCargoLayoutRole, false}, {sameSizeCargoMemberRole, false}, {sameSizeCargoMemberRole, true}} {
+			role := mode.role
 			query, count := buildOutputEntryQuery, 13
 			if role == sameSizeCargoMemberRole {
 				query, count = originalMemberQuery, 20
@@ -2550,7 +2753,7 @@ func TestSameSizeCargoCancellationAndCheckedClose(t *testing.T) {
 				destinations[i] = &original[i]
 			}
 			directErr := tx.QueryRowContext(context.Background(), query, int64(1), []byte(path)).Scan(destinations...)
-			projected, projectedErr := readProjectedRaw(reader, path, role)
+			projected, projectedErr := readProjectedRaw(reader, path, role, mode.proofLeaf)
 			if (directErr == nil) != (projectedErr == nil) || errors.Is(directErr, sql.ErrNoRows) != errors.Is(projectedErr, sql.ErrNoRows) {
 				t.Fatal("raw role projection error or ownership changed", name, role, directErr, projectedErr)
 			}
@@ -2600,6 +2803,10 @@ func TestSameSizeCargoCancellationAndCheckedClose(t *testing.T) {
 		member, memberExists, memberErr := readSameSizeCargoEntry(context.Background(), &reader, 1, path)
 		if oldExists != memberExists || (oldErr == nil) != (memberErr == nil) || !reflect.DeepEqual(old, member) {
 			t.Fatal("strict membership projection changed", name, old, member, oldErr, memberErr)
+		}
+		proofLeaf, proofExists, proofErr := readProofLeaf(&reader, path)
+		if oldExists != proofExists || (oldErr == nil) != (proofErr == nil) || !reflect.DeepEqual(old, proofLeaf) {
+			t.Fatal("one-row proof membership changed strict corruption decoding", name, old, proofLeaf, oldErr, proofErr)
 		}
 		if err := reader.close(); err != nil {
 			t.Fatal(err)
@@ -2782,6 +2989,10 @@ func TestSameSizeCargoCancellationAndCheckedClose(t *testing.T) {
 			}
 		} else {
 			projected, projectedExists, projectedErr = readSameSizeCargoEntry(context.Background(), &reader, 1, tc.path)
+			proofLeaf, proofExists, proofErr := readProofLeaf(&reader, tc.path)
+			if projectedExists != proofExists || (projectedErr == nil) != (proofErr == nil) || !reflect.DeepEqual(projected, proofLeaf) {
+				t.Fatal("one-row proof changed raw parent bytes or decoded metadata", tc.name, projected, proofLeaf, projectedErr, proofErr)
+			}
 		}
 		if originalErr != nil || projectedErr != nil || !originalExists || !projectedExists || original.parentOutcome != tc.outcome || projected.parentOutcome != tc.outcome || !reflect.DeepEqual(original, projected) {
 			t.Fatal("typed parent outcome changed", tc.name, original, projected, originalErr, projectedErr)
@@ -2925,7 +3136,11 @@ func TestSameSizeCargoCancellationAndCheckedClose(t *testing.T) {
 			}
 			r, err := s.sameSizeCargoCandidates(ctx, 200, "", 1, hooks)
 			cancel()
-			if closes != [2]int{4, 1} || beforeCommit || !reflect.DeepEqual(r, SameSizeReport{}) {
+			wantCloses := [2]int{5, 1}
+			if fault == "read_and_close_error" {
+				wantCloses[0] = 4
+			}
+			if closes != wantCloses || beforeCommit || !reflect.DeepEqual(r, SameSizeReport{}) {
 				t.Fatal("statement terminal error escaped checked close", role, fault, closes, beforeCommit, r, err)
 			}
 			if fault != "close_cancel" && !errors.Is(err, closeErr) {
