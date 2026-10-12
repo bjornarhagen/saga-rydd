@@ -69,6 +69,7 @@ type hashFreshRunHooks struct {
 	pacing                    *hashReadPacer
 	execution                 *HashReadExecutionLimits
 	storeBudgetHooks          *hashStoreReadBudgetHooks
+	beforeStoreBudgetFinish   func()
 	beforeReserveCommit       func()
 	afterReserve              func()
 	beforeSettleCommit        func()
@@ -499,7 +500,7 @@ func (s *HashStore) commitFreshProgress(ctx context.Context, tx *sql.Tx, job Sav
 	}
 	if err != nil {
 		s.poisoned = true
-		return fmt.Errorf("fresh job %s with key %s %s publication is uncertain; close and reopen exact-job recovery: %w", job.ID, job.Record.JobKey, operation, ErrHashRecoveryRequired)
+		return fmt.Errorf("fresh job %s with key %s %s publication is uncertain; close and reopen exact-job recovery: %w", job.ID, job.Record.JobKey, operation, freshHashRecovery(freshHashCommitPhase(operation), err))
 	}
 	s.schemaVersion = publishedVersion
 	if after != nil {
@@ -510,7 +511,7 @@ func (s *HashStore) commitFreshProgress(ctx context.Context, tx *sql.Tx, job Sav
 			return fmt.Errorf("fresh job %s with key %s %s was saved before cancellation; inspect saved state: %w", job.ID, job.Record.JobKey, operation, canceled)
 		}
 		s.poisoned = true
-		return fmt.Errorf("fresh job %s with key %s %s was saved but storage became uncertain; close and inspect: %w", job.ID, job.Record.JobKey, operation, ErrHashRecoveryRequired)
+		return fmt.Errorf("fresh job %s with key %s %s was saved but storage became uncertain; close and inspect: %w", job.ID, job.Record.JobKey, operation, freshHashRecovery(freshRecoveryPostCommitStorage, err))
 	}
 	return nil
 }

@@ -99,7 +99,7 @@ func (s *HashStore) runFreshConsented(ctx context.Context, id string, scanner *S
 	opCtx, opCancel := context.WithTimeout(ctx, 5*time.Second)
 	defer opCancel()
 	if err := s.acquire(opCtx, true); err != nil {
-		return result, err
+		return result, freshHashRecoveryIfRequired(freshRecoveryWriterAdmission, err)
 	}
 	defer s.mu.Unlock()
 	if s.freshRunJobID == "" || s.freshJobRequest == nil || len(s.freshRunBaselines) != len(s.freshJobRequest.report.Targets) {
@@ -134,10 +134,13 @@ func (s *HashStore) runFreshConsented(ctx context.Context, id string, scanner *S
 		result.StoreReadBudget = shared
 		if shared != nil {
 			defer func() {
+				if hooks.beforeStoreBudgetFinish != nil {
+					hooks.beforeStoreBudgetFinish()
+				}
 				if e := s.finishHashStoreReadBudget(opCtx, hooks.pacing, &result.StoreReadBudget, true); e != nil {
 					s.poisoned = true
 					result.Progress.SHA256 = ""
-					result.Status, result.Code, retErr = "recovery_required", "publication_uncertain", ErrHashRecoveryRequired
+					result.Status, result.Code, retErr = "recovery_required", "publication_uncertain", freshHashRecoveryFinalBudget(e, retErr, opCtx.Err())
 				}
 			}()
 			sharedAvailable = max(cap-shared.ReservedBytes, int64(0))
@@ -175,7 +178,7 @@ func (s *HashStore) runFreshConsented(ctx context.Context, id string, scanner *S
 			if e != nil && !errors.Is(e, ErrHashReadExpired) && !errors.Is(e, ErrHashReadClockRollback) && !errors.Is(e, ErrHashReadRevoked) {
 				s.poisoned = true
 				result.Progress.SHA256 = ""
-				result.Status, result.Code, retErr = "recovery_required", "publication_uncertain", ErrHashRecoveryRequired
+				result.Status, result.Code, retErr = "recovery_required", "publication_uncertain", freshHashRecoveryWithEarlier(freshRecoveryClockLatch, e, retErr)
 			}
 		}()
 	}
@@ -186,7 +189,7 @@ func (s *HashStore) runFreshConsented(ctx context.Context, id string, scanner *S
 	for _, progress := range job.Progress {
 		if progress.Status == "running" {
 			s.poisoned = true
-			return result, ErrHashRecoveryRequired
+			return result, freshHashRecovery(freshRecoveryRunningWork, ErrHashRecoveryRequired)
 		}
 	}
 	now := hashReadPacingClock(hooks.pacing, opCtx, s.now().UTC())
@@ -437,7 +440,7 @@ func (s *HashStore) runFreshConsented(ctx context.Context, id string, scanner *S
 		s.poisoned = true
 		result.Progress = hashHistoricalProgress(target, chosen.checkpoint)
 		result.Status, result.Code = "recovery_required", "publication_uncertain"
-		return result, ErrHashRecoveryRequired
+		return result, freshHashRecovery(freshRecoveryUsage, ErrHashFreshProgressCorrupt)
 	}
 	deadline, _ = opCtx.Deadline()
 	settleDeadline := minTime(deadline, time.Now().Add(2*time.Second))
@@ -445,7 +448,7 @@ func (s *HashStore) runFreshConsented(ctx context.Context, id string, scanner *S
 		s.poisoned = true
 		result.Progress = hashHistoricalProgress(target, chosen.checkpoint)
 		result.Status, result.Code = "recovery_required", "publication_uncertain"
-		return result, ErrHashRecoveryRequired
+		return result, freshHashRecovery(freshRecoverySettlementWindow, errFreshHashDeadlineWindow)
 	}
 	settleCtx, settleCancel := context.WithDeadline(context.WithoutCancel(opCtx), settleDeadline)
 	defer settleCancel()
@@ -498,15 +501,17 @@ func (s *HashStore) runFreshConsented(ctx context.Context, id string, scanner *S
 func (s *HashStore) latchFreshRunExpiryWithinDeadline(ctx context.Context, job SavedFreshJob, id string) error {
 	deadline, _ := ctx.Deadline()
 	latchDeadline := minTime(deadline, time.Now().Add(2*time.Second))
+	var cause error = errFreshHashDeadlineWindow
 	if time.Now().Before(latchDeadline) {
 		latchCtx, cancel := context.WithDeadline(context.WithoutCancel(ctx), latchDeadline)
 		defer cancel()
-		if s.latchFreshRunExpiry(latchCtx, job, id) == nil {
+		cause = s.latchFreshRunExpiry(latchCtx, job, id)
+		if cause == nil {
 			return ErrHashReadExpired
 		}
 	}
 	s.poisoned = true
-	return fmt.Errorf("fresh job %s with key %s expiry observation could not be confirmed inside the operation deadline; close and inspect saved state: %w", job.ID, job.Record.JobKey, ErrHashRecoveryRequired)
+	return fmt.Errorf("fresh job %s with key %s expiry observation could not be confirmed inside the operation deadline; close and inspect saved state: %w", job.ID, job.Record.JobKey, freshHashRecovery(freshRecoveryExpiryLatch, cause))
 }
 
 func (s *HashStore) latchFreshRunExpiry(ctx context.Context, job SavedFreshJob, id string) error {
@@ -686,15 +691,18 @@ func (s *HashStore) reserveFreshHashAttempt(ctx context.Context, job SavedFreshJ
 }
 
 func (s *HashStore) settleFreshHashAttempt(ctx, readCtx context.Context, cancelCause context.CancelCauseFunc, job SavedFreshJob, w hashStoredWork, a hashStoredAttempt, next fullHashCheckpoint, status, code string, usage FileReadUsage, hooks hashFreshRunHooks) (int64, bool, error) {
-	fail := func() (int64, bool, error) { s.poisoned = true; return w.offset, false, ErrHashRecoveryRequired }
+	fail := func(phase freshHashRecoveryPhase, cause error) (int64, bool, error) {
+		s.poisoned = true
+		return w.offset, false, freshHashRecoveryPreserve(phase, cause)
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fail()
+		return fail(freshRecoverySettlementBegin, err)
 	}
 	defer tx.Rollback()
 	current, err := s.readFreshJob(ctx, tx, job.ID)
 	if err != nil || current.ReadConsent == nil || current.ReadConsent.ID != job.ReadConsent.ID || !equalHashFreshJobRequests(current.Record.Request, s.freshJobRequest.report) {
-		return fail()
+		return fail(freshRecoverySettlementSnapshot, freshHashRecoveryCauseOr(err, ErrHashFreshRunBinding))
 	}
 	if hooks.beforeSettleCommit != nil {
 		hooks.beforeSettleCommit()
@@ -705,11 +713,11 @@ func (s *HashStore) settleFreshHashAttempt(ctx, readCtx context.Context, cancelC
 	}
 	guardErr := s.observeHashFreshReadConsent(ctx, tx, current.ReadConsent, now)
 	if guardErr != nil && !errors.Is(guardErr, ErrHashReadExpired) && !errors.Is(guardErr, ErrHashReadClockRollback) && !errors.Is(guardErr, ErrHashReadRevoked) {
-		return fail()
+		return fail(freshRecoverySettlementConsent, guardErr)
 	}
 	if _, e := s.advanceHashStoreReadBudget(ctx, tx, now); e != nil {
 		if !errors.Is(e, ErrHashReadClockRollback) {
-			return fail()
+			return fail(freshRecoverySettlementClock, e)
 		}
 		if guardErr == nil {
 			guardErr = e
@@ -724,7 +732,7 @@ func (s *HashStore) settleFreshHashAttempt(ctx, readCtx context.Context, cancelC
 	}
 	blob, err := encodeFreshHashCheckpoint(job, w.id, w.sequence+1, next)
 	if err != nil {
-		return fail()
+		return fail(freshRecoverySettlementSHA, err)
 	}
 	durable := next.offset
 	if !next.complete {
@@ -732,17 +740,17 @@ func (s *HashStore) settleFreshHashAttempt(ctx, readCtx context.Context, cancelC
 	}
 	r, err := tx.ExecContext(ctx, "UPDATE hash_fresh_attempt SET status='settled',requested_bytes=?,read_bytes=?,elapsed_ns=? WHERE job_id=? AND ordinal=? AND status='reserved' AND nonce=? AND base_sequence=? AND from_offset=?", usage.RequestedBytes, usage.ReadBytes, int64(usage.Elapsed), job.ID, w.id, a.nonce, w.sequence, w.offset)
 	if err != nil {
-		return fail()
+		return fail(freshRecoverySettlementAttempt, err)
 	}
 	if n, e := r.RowsAffected(); e != nil || n != 1 {
-		return fail()
+		return fail(freshRecoverySettlementAttempt, freshHashRecoveryCauseOr(e, ErrHashFreshProgressCorrupt))
 	}
 	r, err = tx.ExecContext(ctx, "UPDATE hash_fresh_progress SET status=?,sequence=sequence+1,checked_offset=?,checkpoint=?,error_code=? WHERE job_id=? AND ordinal=? AND status='running' AND sequence=? AND checked_offset=?", status, durable, blob, code, job.ID, w.id, w.sequence, w.offset)
 	if err != nil {
-		return fail()
+		return fail(freshRecoverySettlementProgress, err)
 	}
 	if n, e := r.RowsAffected(); e != nil || n != 1 {
-		return fail()
+		return fail(freshRecoverySettlementProgress, freshHashRecoveryCauseOr(e, ErrHashFreshProgressCorrupt))
 	}
 	b := *current.FreshBudget
 	b.TotalRequestedBytes, err = addHashCounter(b.TotalRequestedBytes, usage.RequestedBytes)
@@ -755,14 +763,17 @@ func (s *HashStore) settleFreshHashAttempt(ctx, readCtx context.Context, cancelC
 			b.ReadBytes, err = addHashCounter(b.ReadBytes, usage.ReadBytes)
 		}
 	}
-	if err != nil || writeFreshHashBudget(ctx, tx, job.ID, b) != nil {
-		return fail()
+	if err == nil {
+		err = writeFreshHashBudget(ctx, tx, job.ID, b)
+	}
+	if err != nil {
+		return fail(freshRecoverySettlementBudget, err)
 	}
 	if _, err = s.readFreshJob(ctx, tx, job.ID); err != nil {
-		return fail()
+		return fail(freshRecoverySettlementConfirm, err)
 	}
 	if err = s.commitFreshProgress(ctx, tx, job, nil, hooks.afterSettleCommit, hooks.settleCommit, "settlement"); err != nil {
-		return fail()
+		return fail(freshRecoverySettlementCommit, err)
 	}
 	return durable, vetoed, nil
 }
