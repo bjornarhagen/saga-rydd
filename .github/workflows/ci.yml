@@ -425,6 +425,53 @@ jobs:
               print(json.dumps({key: measured[key] for key in ('platform', 'profile', 'requested_seconds', 'worker_full_lifetime_usage', 'worker_kernel_io', 'sampled_peak_database_bytes', 'sampled_peak_wal_bytes', 'command_latencies', 'final_saved_summary')}))
           PY
 
+      - name: Qualified native positive CPU-period observation
+        timeout-minutes: 5
+        run: |
+          set -eu
+          umask 077
+          python3 -B - <<'PY'
+          import datetime, json, subprocess
+          from pathlib import Path
+          now = datetime.datetime.now(datetime.timezone.utc)
+          boundary = now.replace(minute=0, second=0, microsecond=0) + datetime.timedelta(hours=1)
+          receipt = {'contract': 'native_positive_period_ci_v1', 'native_profile_observed': False}
+          # Leave launch margin beyond the helper's separate 180-second fence.
+          if (boundary - now).total_seconds() < 240:
+              receipt['outcome'] = 'deferred_utc_boundary'
+              print(json.dumps(receipt, sort_keys=True))
+          else:
+              output = Path('.local/ci-positive-period')
+              output.mkdir(mode=0o700)
+              with (output / 'result.json').open('xb') as stdout, (output / 'stderr.log').open('xb') as stderr:
+                  completed = subprocess.run([
+                      str(Path('dist/backgroundresources').resolve()),
+                      '-binary', str(Path('dist/rydd').resolve()),
+                      '-profile', 'positive_period_partial', '-seconds', '60',
+                      '-roots', '1', '-files-per-root', '1',
+                  ], stdout=stdout, stderr=stderr)
+              if completed.returncode != 0:
+                  raise SystemExit('Native positive-period helper failed; private logs retained.')
+              with (output / 'result.json').open('rb') as stream:
+                  body = stream.read(1048577)
+              assert 0 < len(body) <= 1048576
+              measured = json.loads(body)
+              assert measured['contract'] == 'generated_background_resources_v1'
+              assert measured['profile'] == 'positive_period_partial'
+              assert measured['requested_seconds'] == 60 and measured['generated_roots'] == measured['generated_files'] == 1
+              assert measured['generated_bodies_unchanged'] and measured['paused_progress_unchanged']
+              assert measured['resume_acknowledged'] and measured['worker_graceful_exit_reaped']
+              assert measured['hourly_target_accepted'] is False and measured['physical_power_accepted'] is False
+              assert measured['physical_read_bytes'] is None and measured['system_wakeups'] is None
+              profile = measured['cpu_period_profile']
+              assert all(profile[key] is True for key in ('partial_setup_blocked', 'paused_accounting_unchanged', 'finished_accounting_conserved'))
+              for key in ('ledger_full_lifetime_coverage', 'limit_exhaustion_verified', 'utc_rollover_verified', 'restart_verified'):
+                  assert profile[key] is False
+              receipt.update(outcome='observed', native_profile_observed=True, platform=measured['platform'],
+                             worker_full_lifetime_usage=measured['worker_full_lifetime_usage'], cpu_period_profile=profile)
+              print(json.dumps(receipt, sort_keys=True))
+          PY
+
   native-race:
     name: Native races (${{ matrix.os }} / ${{ matrix.group }})
     strategy:

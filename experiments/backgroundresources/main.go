@@ -48,6 +48,9 @@ type options struct {
 }
 
 func (o options) valid() bool {
+	if o.profile == cpuPeriodPartialProfile {
+		return o.binary != "" && o.seconds == 60 && o.roots == 1 && o.files == 1
+	}
 	return o.binary != "" && o.seconds >= 30 && o.seconds <= 3600 && o.roots >= 1 && o.roots <= 32 && o.files >= 1 && o.files <= 4096 && o.roots*o.files <= 32768 && (o.profile == "defaults_no_power" || o.profile == "short_fixture")
 }
 
@@ -90,41 +93,42 @@ type sample struct {
 }
 
 type result struct {
-	Contract                      string              `json:"contract"`
-	Platform                      string              `json:"platform"`
-	Profile                       string              `json:"profile"`
-	ConfiguredScan                map[string]any      `json:"configured_scan"`
-	ProductionDefaultsExceptPower bool                `json:"production_defaults_except_power"`
-	PowerProbesDisabled           bool                `json:"power_probes_disabled"`
-	RequestedSeconds              int                 `json:"requested_seconds"`
-	Roots                         int                 `json:"generated_roots"`
-	Files                         int                 `json:"generated_files"`
-	SampleIntervalNS              int64               `json:"sampling_interval_ns"`
-	WorkerUsage                   usage               `json:"worker_full_lifetime_usage"`
-	CLIProcesses                  int                 `json:"observer_cli_processes"`
-	CLIUserCPUNS                  int64               `json:"observer_cli_user_cpu_ns"`
-	CLISystemCPUNS                int64               `json:"observer_cli_system_cpu_ns"`
-	Latencies                     map[string]*latency `json:"command_latencies"`
-	PeakDatabaseBytes             int64               `json:"sampled_peak_database_bytes"`
-	PeakWALBytes                  int64               `json:"sampled_peak_wal_bytes"`
-	PhysicalReadBytes             *int64              `json:"physical_read_bytes"`
-	SystemWakeups                 *int64              `json:"system_wakeups"`
-	PhysicalReadMeasurement       string              `json:"physical_read_measurement"`
-	SystemWakeupMeasurement       string              `json:"system_wakeup_measurement"`
-	ObserverOverhead              string              `json:"observer_overhead"`
-	WorkerUsageScope              string              `json:"worker_usage_scope"`
-	CleanupScope                  string              `json:"cleanup_scope"`
-	Samples                       []sample            `json:"samples"`
-	Final                         state.Summary       `json:"final_saved_summary"`
-	BodiesSHA256                  string              `json:"generated_bodies_sha256"`
-	BodiesUnchanged               bool                `json:"generated_bodies_unchanged"`
-	PauseVerified                 bool                `json:"paused_progress_unchanged"`
-	ResumeVerified                bool                `json:"resume_acknowledged"`
-	GracefulExit                  bool                `json:"worker_graceful_exit_reaped"`
-	HourlyTargetAccepted          bool                `json:"hourly_target_accepted"`
-	PhysicalPowerAccepted         bool                `json:"physical_power_accepted"`
-	SampledPeaksAreLowerBounds    bool                `json:"sampled_peaks_are_lower_bounds"`
-	KernelIO                      *kernelIOSummary    `json:"worker_kernel_io,omitempty"`
+	Contract                      string                  `json:"contract"`
+	Platform                      string                  `json:"platform"`
+	Profile                       string                  `json:"profile"`
+	ConfiguredScan                map[string]any          `json:"configured_scan"`
+	ProductionDefaultsExceptPower bool                    `json:"production_defaults_except_power"`
+	PowerProbesDisabled           bool                    `json:"power_probes_disabled"`
+	RequestedSeconds              int                     `json:"requested_seconds"`
+	Roots                         int                     `json:"generated_roots"`
+	Files                         int                     `json:"generated_files"`
+	SampleIntervalNS              int64                   `json:"sampling_interval_ns"`
+	WorkerUsage                   usage                   `json:"worker_full_lifetime_usage"`
+	CLIProcesses                  int                     `json:"observer_cli_processes"`
+	CLIUserCPUNS                  int64                   `json:"observer_cli_user_cpu_ns"`
+	CLISystemCPUNS                int64                   `json:"observer_cli_system_cpu_ns"`
+	Latencies                     map[string]*latency     `json:"command_latencies"`
+	PeakDatabaseBytes             int64                   `json:"sampled_peak_database_bytes"`
+	PeakWALBytes                  int64                   `json:"sampled_peak_wal_bytes"`
+	PhysicalReadBytes             *int64                  `json:"physical_read_bytes"`
+	SystemWakeups                 *int64                  `json:"system_wakeups"`
+	PhysicalReadMeasurement       string                  `json:"physical_read_measurement"`
+	SystemWakeupMeasurement       string                  `json:"system_wakeup_measurement"`
+	ObserverOverhead              string                  `json:"observer_overhead"`
+	WorkerUsageScope              string                  `json:"worker_usage_scope"`
+	CleanupScope                  string                  `json:"cleanup_scope"`
+	Samples                       []sample                `json:"samples"`
+	Final                         state.Summary           `json:"final_saved_summary"`
+	BodiesSHA256                  string                  `json:"generated_bodies_sha256"`
+	BodiesUnchanged               bool                    `json:"generated_bodies_unchanged"`
+	PauseVerified                 bool                    `json:"paused_progress_unchanged"`
+	ResumeVerified                bool                    `json:"resume_acknowledged"`
+	GracefulExit                  bool                    `json:"worker_graceful_exit_reaped"`
+	HourlyTargetAccepted          bool                    `json:"hourly_target_accepted"`
+	PhysicalPowerAccepted         bool                    `json:"physical_power_accepted"`
+	SampledPeaksAreLowerBounds    bool                    `json:"sampled_peaks_are_lower_bounds"`
+	KernelIO                      *kernelIOSummary        `json:"worker_kernel_io,omitempty"`
+	CPUPeriod                     *cpuPeriodProfileResult `json:"cpu_period_profile,omitempty"`
 }
 
 type statusView struct {
@@ -287,12 +291,13 @@ type runner struct {
 	env                    []string
 	worker                 *child
 	result                 result
+	periodProfile          *cpuPeriodProfile
 }
 
 func main() {
 	o := options{}
 	flag.StringVar(&o.binary, "binary", "", "explicit native Rydd executable")
-	flag.StringVar(&o.profile, "profile", "defaults_no_power", "defaults_no_power or short_fixture")
+	flag.StringVar(&o.profile, "profile", "defaults_no_power", "defaults_no_power, short_fixture or positive_period_partial (60 seconds, one root/file)")
 	flag.IntVar(&o.seconds, "seconds", 60, "finite worker duration, 30–3600 seconds")
 	flag.IntVar(&o.roots, "roots", 2, "generated roots, 1–32")
 	flag.IntVar(&o.files, "files-per-root", 256, "generated files per root, 1–4096; at most 32768 total")
@@ -324,6 +329,14 @@ func run(ctx context.Context, o options) (measured result, runErr error) {
 	if !o.valid() {
 		return result{}, errInput
 	}
+	var periodProfile *cpuPeriodProfile
+	if o.profile == cpuPeriodPartialProfile {
+		var err error
+		periodProfile, err = admitCPUPeriodProfile(time.Now())
+		if err != nil {
+			return result{}, err
+		}
+	}
 	binary, err := filepath.Abs(o.binary)
 	if err != nil {
 		return result{}, errInput
@@ -342,6 +355,7 @@ func run(ctx context.Context, o options) (measured result, runErr error) {
 	}
 	fmt.Fprintln(os.Stderr, "Generated fixture and private logs retained at", base)
 	r := &runner{base: base, stateDir: filepath.Join(base, "state"), binary: binary}
+	r.periodProfile = periodProfile
 	for _, name := range []string{"tmp", "runtime"} {
 		if err := os.Mkdir(filepath.Join(base, name), 0700); err != nil {
 			return result{}, errChild
@@ -370,14 +384,32 @@ func run(ctx context.Context, o options) (measured result, runErr error) {
 	if o.profile == "short_fixture" {
 		cfg.Scan.WorkSeconds, cfg.Scan.IntervalSeconds = 1, 5
 	}
+	if periodProfile != nil {
+		configureCPUPeriodProfile(&cfg)
+	}
 	if err := config.Create(filepath.Join(r.stateDir, "config.toml"), base, cfg); err != nil {
 		return result{}, errChild
 	}
 	r.result = result{Contract: "generated_background_resources_v1", Platform: runtime.GOOS + "/" + runtime.GOARCH, Profile: o.profile, ConfiguredScan: scanSettings(cfg.Scan), ProductionDefaultsExceptPower: o.profile == "defaults_no_power", PowerProbesDisabled: true, RequestedSeconds: o.seconds, Roots: o.roots, Files: o.roots * o.files, SampleIntervalNS: int64(sampleInterval), Latencies: map[string]*latency{}, PhysicalReadMeasurement: "unknown", SystemWakeupMeasurement: "unknown", ObserverOverhead: "parent fixture generation, hashing and status sampling excluded from worker CPU/RSS; CLI process CPU reported separately; probes can perturb worker timing", SampledPeaksAreLowerBounds: true}
 	r.result.WorkerUsageScope = "full child lifetime CPU/RSS includes startup, admitted work, controls and idle; elapsed includes launch and output drain; this is not the saved dispatch-window CPU scope"
+	if periodProfile != nil {
+		r.result.CPUPeriod = &cpuPeriodProfileResult{Contract: "generated_positive_cpu_period_partial_v1", NoWorkScope: "experimental inventory setup, scanner API observations and charged dispatch; configuration, state, controls and body-oracle filesystem work excluded", PartialTracking: true, ExpectedWaitReason: periodProfile.reason()}
+		r.result.ConfiguredScan["cpu_session_charges"] = true
+		r.result.ConfiguredScan["cpu_charge_seconds_per_hour"] = 1
+		r.result.ConfiguredScan["cpu_charge_seconds_per_day"] = 1
+	}
 	r.result.CleanupScope = "direct child killed if needed and reaped; descendants are outside the cleanup scope"
 	if _, err := r.command(ctx, "state-init", "state", "init"); err != nil {
 		return result{}, err
+	}
+	if periodProfile != nil {
+		baseline, err := r.status(ctx)
+		if err != nil || !periodProfile.noWork(baseline, false) || baseline.State.Schema != 14 {
+			return result{}, errors.New("positive CPU profile initial saved state is not empty")
+		}
+		if err := periodProfile.checkUTC(time.Now(), true); err != nil {
+			return result{}, err
+		}
 	}
 	workerCtx, workerCancel := context.WithTimeout(ctx, time.Duration(o.seconds+45)*time.Second)
 	defer workerCancel()
@@ -393,17 +425,28 @@ func run(ctx context.Context, o options) (measured result, runErr error) {
 	}()
 	readyCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	_, err = r.untilStatus(readyCtx, func(s statusView) bool {
+		if periodProfile != nil {
+			return s.Worker.Live != nil && s.Worker.State == "running" && s.Worker.Live.PID == r.worker.cmd.Process.Pid && s.Worker.Live.WaitReason == periodProfile.reason() && periodProfile.noWork(s, true)
+		}
 		return s.Worker.Live != nil && s.Worker.State == "running" && s.Worker.Live.PID == r.worker.cmd.Process.Pid
 	})
 	cancel()
 	if err != nil {
 		return result{}, err
 	}
+	if periodProfile != nil {
+		r.result.CPUPeriod.PartialSetupBlocked = true
+	}
 	deadline := r.worker.started.Add(time.Duration(o.seconds) * time.Second)
 	pauseAt := r.worker.started.Add(time.Duration(o.seconds) * time.Second / 2)
 	nextSample := time.Now()
 	paused := false
 	for time.Now().Before(deadline) {
+		if periodProfile != nil {
+			if err := periodProfile.checkUTC(time.Now(), false); err != nil {
+				return result{}, err
+			}
+		}
 		if !paused && !time.Now().Before(pauseAt) {
 			if err := r.pauseCheck(ctx); err != nil {
 				return result{}, err
@@ -443,14 +486,23 @@ func run(ctx context.Context, o options) (measured result, runErr error) {
 	}
 	r.result.WorkerUsage, r.result.GracefulExit = stopped.usage, true
 	final, err := r.status(ctx)
-	if err != nil || final.Worker.State != "not-running" || final.Worker.Live != nil || final.State.RunningJobs != 0 || final.Metadata.TotalCharges == nil || final.Metadata.TotalCharges.OutstandingReserved != 0 || final.CPUFeedback.Status == "pending" {
-		return result{}, errors.New("stopped worker has unresolved progress/accounting")
+	if periodProfile != nil {
+		if err != nil {
+			return result{}, err
+		}
+		if err := r.finishCPUPeriodProfile(ctx, final, stopped.usage); err != nil {
+			return result{}, err
+		}
+	} else {
+		if err != nil || final.Worker.State != "not-running" || final.Worker.Live != nil || final.State.RunningJobs != 0 || final.Metadata.TotalCharges == nil || final.Metadata.TotalCharges.OutstandingReserved != 0 || final.CPUFeedback.Status == "pending" {
+			return result{}, errors.New("stopped worker has unresolved progress/accounting")
+		}
 	}
 	if err := r.sample(ctx, final); err != nil {
 		return result{}, err
 	}
 	r.result.Final = final.State
-	if final.State.Entries < 1 || final.Metadata.TotalCharges.Observed < 1 || !r.sourceObserved() {
+	if periodProfile == nil && (final.State.Entries < 1 || final.Metadata.TotalCharges.Observed < 1 || !r.sourceObserved()) {
 		return result{}, errors.New("generated source work was not observed")
 	}
 	after, err := fixtureDigest(ctx, r.roots, o.files)
@@ -625,6 +677,9 @@ func (r *runner) waitUntil(ctx context.Context, at time.Time) error {
 }
 
 func (r *runner) pauseCheck(ctx context.Context) error {
+	if r.periodProfile != nil {
+		return r.pauseCPUPeriodProfile(ctx)
+	}
 	snapshot, err := r.control(ctx, "pause")
 	if err != nil || !snapshot.Paused {
 		return errors.New("worker pause was not acknowledged")
@@ -702,6 +757,14 @@ func pausedStable(a, b statusView) bool {
 }
 
 func (r *runner) sample(ctx context.Context, s statusView) error {
+	if r.periodProfile != nil {
+		if err := r.periodProfile.checkUTC(time.Now(), false); err != nil {
+			return err
+		}
+		if !r.periodProfile.noWork(s, s.Worker.Live != nil) {
+			return errors.New("positive CPU partial profile admitted inventory or dispatch work")
+		}
+	}
 	if len(r.result.Samples) >= maxSamples {
 		return errors.New("generated fixture sample limit reached")
 	}
