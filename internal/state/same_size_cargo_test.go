@@ -1827,51 +1827,60 @@ func TestSameSizeCargoAncestorAndMemoryBounds(t *testing.T) {
 	}
 }
 
-// Each intrusive heap oracle owns a fresh process, including when this parent
-// runs in the whole state suite. The same test executable retains its normal
-// or race instrumentation, environment and current CPU setting. No explicit
-// garbage-collection setting is changed by this wrapper.
+// Production timing and intrusive heap measurements each own a fresh process,
+// including when this parent runs in the whole state suite. The same executable
+// retains normal/race instrumentation, environment and the current CPU setting.
+// No explicit garbage-collection setting is changed by this wrapper.
 func TestSameSizeCargoFullLayoutRetainedHeap(t *testing.T) {
 	const childEnv = "RYDD_CARGO_FULL_LAYOUT_HEAP_PROFILE"
+	const modeEnv = "RYDD_CARGO_FULL_LAYOUT_RESOURCE_MODE"
 	const testName = "TestSameSizeCargoFullLayoutRetainedHeap"
 	if profile, child := os.LookupEnv(childEnv); child {
 		if profile != "debug" && profile != "release" {
 			t.Fatal("invalid isolated Cargo resource profile")
 		}
-		selector := flag.Lookup("test.run")
-		if selector == nil || selector.Value.String() != "^"+testName+"$/^"+profile+"$" {
-			t.Fatal("isolated Cargo resource selector differs from its profile")
+		mode := os.Getenv(modeEnv)
+		if mode != "timing" && mode != "heap" {
+			t.Fatal("invalid isolated Cargo resource mode")
 		}
-		// The fixed Go test selector admits exactly one original subtest.
-		sameSizeCargoFullLayoutRetainedHeap(t)
+		selector := flag.Lookup("test.run")
+		if selector == nil || selector.Value.String() != "^"+testName+"$/^"+profile+"$/^"+mode+"$" {
+			t.Fatal("isolated Cargo resource selector differs from its profile or mode")
+		}
+		// The fixed selector admits one profile and one independently owned mode.
+		sameSizeCargoFullLayoutRetainedHeap(t, mode)
 		return
 	}
 	for _, profile := range []string{"debug", "release"} {
 		t.Run(profile, func(t *testing.T) {
-			executable, err := os.Executable()
-			if err != nil {
-				t.Fatal("locate isolated Cargo resource executable", err)
-			}
-			// These outer process bounds include generated-fixture setup. The
-			// original report context remains five seconds inside the child.
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			cmd := exec.CommandContext(ctx, executable,
-				"-test.run=^"+testName+"$/^"+profile+"$", "-test.count=1", "-test.v", "-test.timeout=25s",
-				fmt.Sprintf("-test.cpu=%d", runtime.GOMAXPROCS(0)))
-			cmd.Env = append(os.Environ(), childEnv+"="+profile)
-			cmd.WaitDelay = 2 * time.Second
-			var output sameSizeCargoHeapOutput
-			cmd.Stdout, cmd.Stderr = &output, &output
-			err = cmd.Run()
-			if output.body.Len() != 0 {
-				t.Logf("isolated Cargo resource profile=%s:\n%s", profile, output.body.String())
-			}
-			if err = errors.Join(err, ctx.Err()); err != nil {
-				t.Fatal("isolated Cargo resource child failed", err)
-			}
-			if output.truncated {
-				t.Fatal("isolated Cargo resource output exceeded 64 KiB")
+			for _, mode := range []string{"timing", "heap"} {
+				t.Run(mode, func(t *testing.T) {
+					executable, err := os.Executable()
+					if err != nil {
+						t.Fatal("locate isolated Cargo resource executable", err)
+					}
+					// These unchanged process bounds include fixture setup. Modes
+					// cannot warm each other's database or heap observations.
+					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
+					cmd := exec.CommandContext(ctx, executable,
+						"-test.run=^"+testName+"$/^"+profile+"$/^"+mode+"$", "-test.count=1", "-test.v", "-test.timeout=25s",
+						fmt.Sprintf("-test.cpu=%d", runtime.GOMAXPROCS(0)))
+					cmd.Env = append(os.Environ(), childEnv+"="+profile, modeEnv+"="+mode)
+					cmd.WaitDelay = 2 * time.Second
+					var output sameSizeCargoHeapOutput
+					cmd.Stdout, cmd.Stderr = &output, &output
+					err = cmd.Run()
+					if output.body.Len() != 0 {
+						t.Logf("isolated Cargo resource profile=%s mode=%s:\n%s", profile, mode, output.body.String())
+					}
+					if err = errors.Join(err, ctx.Err()); err != nil {
+						t.Fatal("isolated Cargo resource child failed", err)
+					}
+					if output.truncated {
+						t.Fatal("isolated Cargo resource output exceeded 64 KiB")
+					}
+				})
 			}
 		})
 	}
@@ -1898,160 +1907,199 @@ func (output *sameSizeCargoHeapOutput) Write(body []byte) (int, error) {
 	return count, nil
 }
 
-func sameSizeCargoFullLayoutRetainedHeap(t *testing.T) {
+func sameSizeCargoFullLayoutRetainedHeap(t *testing.T, mode string) {
 	for _, profile := range []string{"debug", "release"} {
 		t.Run(profile, func(t *testing.T) {
-			s := newBuildOutputFixture(t)
-			tx, err := s.db.Begin()
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer tx.Rollback()
-			const root = "/cargo-fixture"
-			const prefixCount = 252
-			const targetBytes = 4075
-			componentBytes := targetBytes - len(root) - 1 - (prefixCount - 1) - len("/target")
-			width, longer := componentBytes/prefixCount, componentBytes%prefixCount
-			parent, generation := ".", int64(1)
-			for i := 0; i < prefixCount; i++ {
-				length := width
-				if i < longer {
-					length++
+			t.Run(mode, func(t *testing.T) {
+				s := newBuildOutputFixture(t)
+				tx, err := s.db.Begin()
+				if err != nil {
+					t.Fatal(err)
 				}
-				component := fmt.Sprintf("d%03d", i) + strings.Repeat("x", length-4)
-				if len(component) > 255 {
-					t.Fatal("fixture component exceeds a native filename bound")
+				defer tx.Rollback()
+				const root = "/cargo-fixture"
+				const prefixCount = 252
+				const targetBytes = 4075
+				componentBytes := targetBytes - len(root) - 1 - (prefixCount - 1) - len("/target")
+				width, longer := componentBytes/prefixCount, componentBytes%prefixCount
+				parent, generation := ".", int64(1)
+				for i := 0; i < prefixCount; i++ {
+					length := width
+					if i < longer {
+						length++
+					}
+					component := fmt.Sprintf("d%03d", i) + strings.Repeat("x", length-4)
+					if len(component) > 255 {
+						t.Fatal("fixture component exceeds a native filename bound")
+					}
+					relative := filepath.Join(parent, component)
+					buildOutputPut(t, tx, relative, parent, "directory", "prefix", generation, 0, 0)
+					generation++
+					buildOutputDirectory(t, tx, relative, generation)
+					parent = relative
 				}
-				relative := filepath.Join(parent, component)
-				buildOutputPut(t, tx, relative, parent, "directory", "prefix", generation, 0, 0)
+				for _, name := range []string{"Cargo.toml", "Cargo.lock"} {
+					buildOutputPut(t, tx, filepath.Join(parent, name), parent, "file", "manifest", generation, 0, 0)
+				}
+				target := filepath.Join(parent, "target")
+				if len(filepath.Join(root, target)) != targetBytes {
+					t.Fatal("fixture target path changed")
+				}
+				buildOutputPut(t, tx, target, parent, "directory", "target", generation, 0, 0)
 				generation++
-				buildOutputDirectory(t, tx, relative, generation)
-				parent = relative
-			}
-			for _, name := range []string{"Cargo.toml", "Cargo.lock"} {
-				buildOutputPut(t, tx, filepath.Join(parent, name), parent, "file", "manifest", generation, 0, 0)
-			}
-			target := filepath.Join(parent, "target")
-			if len(filepath.Join(root, target)) != targetBytes {
-				t.Fatal("fixture target path changed")
-			}
-			buildOutputPut(t, tx, target, parent, "directory", "target", generation, 0, 0)
-			generation++
-			buildOutputDirectory(t, tx, target, generation)
-			for _, layout := range []string{"debug", "release"} {
-				path := filepath.Join(target, layout)
-				buildOutputPut(t, tx, path, target, "directory", "profile", generation, 0, 0)
-				buildOutputDirectory(t, tx, path, generation+1)
-				if profile == "debug" || layout == "release" {
-					buildOutputPut(t, tx, filepath.Join(path, ".cargo-lock"), path, "file", "lock", generation+1, 0, 0)
-				}
-				for _, child := range []string{"deps", ".fingerprint"} {
-					childPath := filepath.Join(path, child)
-					buildOutputPut(t, tx, childPath, path, "directory", "child", generation+1, 0, 0)
-					buildOutputDirectory(t, tx, childPath, generation+2)
-				}
-			}
-			parent = filepath.Join(target, profile, "deps")
-			for i := 0; i < 200; i++ {
-				name := fmt.Sprintf("f%06d", i)
-				if profile == "debug" {
-					name = fmt.Sprintf("f%08d", i)
-				}
-				path := filepath.Join(parent, name)
-				if len(filepath.Join(root, path)) != 4096 {
-					t.Fatal("fixture ordinary path is not the admitted byte maximum")
-				}
-				buildOutputPut(t, tx, path, parent, "file", "ordinary", generation+2, 2<<20, 4096)
-			}
-			if _, err = tx.Exec("UPDATE entries SET device='18446744073709551615',inode='18446744073709'||printf('%06d',id)"); err != nil {
-				t.Fatal(err)
-			}
-			if err = tx.Commit(); err != nil {
-				t.Fatal(err)
-			}
-
-			// Both profiles are preflighted. The longest admitted release marker
-			// is 4096 bytes; its debug counterpart is necessarily 4094 bytes.
-			// No actual project exists. Only the generated saved database is read.
-			if len(filepath.Join(root, target, "release", ".fingerprint")) != 4096 {
-				t.Fatal("both-profile preflight maximum changed")
-			}
-			var baseline, peak uint64
-			baselineCalls, observations := 0, 0
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			r, err := s.sameSizeCargoCandidates(ctx, 200, "", 1, sameSizeCargoHooks{
-				afterRawPage: func() {
-					runtime.GC()
-					var stats runtime.MemStats
-					runtime.ReadMemStats(&stats)
-					baseline = stats.HeapAlloc
-					baselineCalls++
-				},
-				beforeExcluded: func(seen *sameSizeCargoIdentities, finding *BuildOutputFinding) {
-					runtime.GC()
-					var stats runtime.MemStats
-					runtime.ReadMemStats(&stats)
-					runtime.KeepAlive(seen)
-					runtime.KeepAlive(finding)
-					if baselineCalls != 1 || seen.count != 261 || len(finding.Markers) != 7 || finding.Profile != profile {
-						t.Fatal("actual full-layout scratch is not retained at the checkpoint")
+				buildOutputDirectory(t, tx, target, generation)
+				for _, layout := range []string{"debug", "release"} {
+					path := filepath.Join(target, layout)
+					buildOutputPut(t, tx, path, target, "directory", "profile", generation, 0, 0)
+					buildOutputDirectory(t, tx, path, generation+1)
+					if profile == "debug" || layout == "release" {
+						buildOutputPut(t, tx, filepath.Join(path, ".cargo-lock"), path, "file", "lock", generation+1, 0, 0)
 					}
-					longest := 0
-					for _, marker := range finding.Markers {
-						if len(marker.PathBytes) > 4096 || len(marker.Device) != 20 || len(marker.Inode) != 20 {
-							t.Fatal("actual retained marker evidence is not bounded maximum-width evidence")
-						}
-						longest = max(longest, len(marker.PathBytes))
+					for _, child := range []string{"deps", ".fingerprint"} {
+						childPath := filepath.Join(path, child)
+						buildOutputPut(t, tx, childPath, path, "directory", "child", generation+1, 0, 0)
+						buildOutputDirectory(t, tx, childPath, generation+2)
 					}
-					wantLongest := 4096
+				}
+				parent = filepath.Join(target, profile, "deps")
+				for i := 0; i < 200; i++ {
+					name := fmt.Sprintf("f%06d", i)
 					if profile == "debug" {
-						wantLongest = 4094
+						name = fmt.Sprintf("f%08d", i)
 					}
-					if longest != wantLongest {
-						t.Fatal("actual selected marker path maximum changed", longest)
+					path := filepath.Join(parent, name)
+					if len(filepath.Join(root, path)) != 4096 {
+						t.Fatal("fixture ordinary path is not the admitted byte maximum")
 					}
-					if stats.HeapAlloc > baseline {
-						peak = max(peak, stats.HeapAlloc-baseline)
+					buildOutputPut(t, tx, path, parent, "file", "ordinary", generation+2, 2<<20, 4096)
+				}
+				if _, err = tx.Exec("UPDATE entries SET device='18446744073709551615',inode='18446744073709'||printf('%06d',id)"); err != nil {
+					t.Fatal(err)
+				}
+				if err = tx.Commit(); err != nil {
+					t.Fatal(err)
+				}
+
+				// Both profiles are preflighted. The longest admitted release marker
+				// is 4096 bytes; its debug counterpart is necessarily 4094 bytes.
+				// No actual project exists. Only the generated saved database is read.
+				if len(filepath.Join(root, target, "release", ".fingerprint")) != 4096 {
+					t.Fatal("both-profile preflight maximum changed")
+				}
+				checkReport := func(r SameSizeReport) (int, int) {
+					c := r.CargoTargetExclusion
+					if c == nil || r.EntriesExamined != 200 || c.ExcludedRows != 200 || c.EligibleRows != 200 || c.RowsWithTargetAncestor != 200 || c.AncestorEvidenceRequests != 200*256 || len(r.Bands) != 0 || r.NextCursor != "" || c.RetainedUnknownRows != 0 || c.RetainedUnrecognizedRows != 0 || c.RetainedAncestorLimitRows != 0 {
+						t.Fatal("full raw page/ancestor/profile fixture was not actually observed", r)
 					}
-					observations++
-				},
+					layoutRequests := 200 * 7
+					layoutBatchCalls := 2
+					actualCalls := 204
+					logicalRequests := 54400
+					if profile == "release" {
+						layoutRequests = 200 * 11
+						layoutBatchCalls = 3
+						actualCalls = 205
+						logicalRequests = 55200
+					}
+					calls := c.RootQueryCalls + c.MembershipBatchQueryCalls + c.LayoutBatchQueryCalls + c.MarkerQualificationBatchQueryCalls
+					requests := c.RootEvidenceRequests + c.LeafEvidenceRequests + c.AncestorEvidenceRequests + c.LayoutMarkerEvidenceRequests + c.MarkerQualificationEvidenceRequests
+					if c.RootQueryCalls != 1 || c.RootEvidenceRequests != 200 || c.ReusedProofRows != 199 || c.MembershipBatchQueryCalls != 200 || c.LayoutBatchQueryCalls != layoutBatchCalls || c.MarkerQualificationBatchQueryCalls != 1 || calls != actualCalls || calls > 55200 || c.LeafEvidenceRequests != 200 || c.LayoutMarkerEvidenceRequests != layoutRequests || c.MarkerQualificationEvidenceRequests != 200*7 || requests != logicalRequests || r.ContentVerified || r.CurrentStateVerified || r.EstimatedReclaimableBytes != nil {
+						t.Fatal("full-page query or authority contract changed", c)
+					}
+					body, err := json.Marshal(c)
+					if err != nil || len(body) > 4096 {
+						t.Fatal("full-page summary exceeded its byte cap", len(body), err)
+					}
+					return calls, requests
+				}
+				if mode == "timing" {
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					started := time.Now()
+					r, runErr := s.SameSizeCandidatesWithOptions(ctx, 200, "", 1, SameSizeOptions{ExcludeCargoDefaultTarget: true})
+					elapsed := time.Since(started)
+					contextErr := ctx.Err()
+					t.Logf("Cargo production timing profile=%s production_elapsed_ns=%d deadline_seconds=5 api_error=%v context_error=%v", profile, elapsed.Nanoseconds(), runErr, contextErr)
+					if runErr != nil || contextErr != nil || elapsed > 5*time.Second {
+						t.Fatal("uninstrumented full-page production observation failed its five-second wall deadline", elapsed, runErr, contextErr)
+					}
+					calls, requests := checkReport(r)
+					t.Logf("Cargo production timing profile=%s physical_query_calls=%d logical_evidence_requests=%d", profile, calls, requests)
+					return
+				}
+				var baseline, peak uint64
+				baselineCalls, observations, collections := 0, 0, 0
+				var collectionElapsed time.Duration
+				measurementStarted := time.Now()
+				measurementPassed := false
+				defer func() {
+					t.Logf("Cargo heap measurement profile=%s passed=%t elapsed_ns=%d forced_gc_elapsed_ns=%d forced_gc_collections=%d baseline_calls=%d checkpoint_count=%d peak_bytes=%d", profile, measurementPassed, time.Since(measurementStarted).Nanoseconds(), collectionElapsed.Nanoseconds(), collections, baselineCalls, observations, peak)
+				}()
+				// This test-only context includes intrusive GC and observation work.
+				// Production deadline acceptance belongs to the separate timing child.
+				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+				defer cancel()
+				r, err := s.sameSizeCargoCandidates(ctx, 200, "", 1, sameSizeCargoHooks{
+					afterRawPage: func() {
+						collectionStarted := time.Now()
+						runtime.GC()
+						collectionElapsed += time.Since(collectionStarted)
+						collections++
+						var stats runtime.MemStats
+						runtime.ReadMemStats(&stats)
+						baseline = stats.HeapAlloc
+						baselineCalls++
+					},
+					beforeExcluded: func(seen *sameSizeCargoIdentities, finding *BuildOutputFinding) {
+						collectionStarted := time.Now()
+						runtime.GC()
+						collectionElapsed += time.Since(collectionStarted)
+						collections++
+						var stats runtime.MemStats
+						runtime.ReadMemStats(&stats)
+						runtime.KeepAlive(seen)
+						runtime.KeepAlive(finding)
+						if baselineCalls != 1 || seen.count != 261 || len(finding.Markers) != 7 || finding.Profile != profile {
+							t.Fatal("actual full-layout scratch is not retained at the checkpoint")
+						}
+						longest := 0
+						for _, marker := range finding.Markers {
+							if len(marker.PathBytes) > 4096 || len(marker.Device) != 20 || len(marker.Inode) != 20 {
+								t.Fatal("actual retained marker evidence is not bounded maximum-width evidence")
+							}
+							longest = max(longest, len(marker.PathBytes))
+						}
+						wantLongest := 4096
+						if profile == "debug" {
+							wantLongest = 4094
+						}
+						if longest != wantLongest {
+							t.Fatal("actual selected marker path maximum changed", longest)
+						}
+						if stats.HeapAlloc > baseline {
+							peak = max(peak, stats.HeapAlloc-baseline)
+						}
+						observations++
+					},
+				})
+				if err != nil {
+					t.Fatal("full-page resource observation failed, including intrusive test GC time", err)
+				}
+				if baselineCalls != 1 || observations != 200 || collections != 201 {
+					t.Fatal("heap measurement did not complete the exact baseline and 200 checkpoints", baselineCalls, observations, collections)
+				}
+				calls, requests := checkReport(r)
+				// Raw rows/report and the stable fixture DB are already held at the
+				// baseline. Include conservative headroom for added fixed notes and
+				// counters. This is live Go heap, not total allocations or SQLite/OS
+				// memory. Intrusive GC has its own finite test-measurement context.
+				const fixedReportAllowance = 16 << 10
+				if peak+fixedReportAllowance > 256<<10 {
+					t.Fatal("actual full-layout extra live heap target exceeded", peak)
+				}
+				measurementPassed = true
+				t.Logf("Cargo resource profile=%s peak_bytes=%d fixed_allowance_bytes=%d physical_query_calls=%d logical_evidence_requests=%d", profile, peak, fixedReportAllowance, calls, requests)
 			})
-			if err != nil {
-				t.Fatal("full-page resource observation failed, including intrusive test GC time", err)
-			}
-			c := r.CargoTargetExclusion
-			if baselineCalls != 1 || observations != 200 || c == nil || r.EntriesExamined != 200 || c.ExcludedRows != 200 || c.EligibleRows != 200 || c.RowsWithTargetAncestor != 200 || c.AncestorEvidenceRequests != 200*256 || len(r.Bands) != 0 || r.NextCursor != "" || c.RetainedUnknownRows != 0 || c.RetainedUnrecognizedRows != 0 || c.RetainedAncestorLimitRows != 0 {
-				t.Fatal("full raw page/ancestor/profile fixture was not actually observed", observations, r)
-			}
-			layoutRequests := 200 * 7
-			layoutBatchCalls := 2
-			actualCalls := 204
-			logicalRequests := 54400
-			if profile == "release" {
-				layoutRequests = 200 * 11
-				layoutBatchCalls = 3
-				actualCalls = 205
-				logicalRequests = 55200
-			}
-			calls := c.RootQueryCalls + c.MembershipBatchQueryCalls + c.LayoutBatchQueryCalls + c.MarkerQualificationBatchQueryCalls
-			requests := c.RootEvidenceRequests + c.LeafEvidenceRequests + c.AncestorEvidenceRequests + c.LayoutMarkerEvidenceRequests + c.MarkerQualificationEvidenceRequests
-			if c.RootQueryCalls != 1 || c.RootEvidenceRequests != 200 || c.ReusedProofRows != 199 || c.MembershipBatchQueryCalls != 200 || c.LayoutBatchQueryCalls != layoutBatchCalls || c.MarkerQualificationBatchQueryCalls != 1 || calls != actualCalls || calls > 55200 || c.LeafEvidenceRequests != 200 || c.LayoutMarkerEvidenceRequests != layoutRequests || c.MarkerQualificationEvidenceRequests != 200*7 || requests != logicalRequests || r.ContentVerified || r.CurrentStateVerified || r.EstimatedReclaimableBytes != nil {
-				t.Fatal("full-page query or authority contract changed", c)
-			}
-			body, err := json.Marshal(c)
-			if err != nil || len(body) > 4096 {
-				t.Fatal("full-page summary exceeded its byte cap", len(body), err)
-			}
-			// Raw rows/report and the stable fixture DB are already held at the
-			// baseline. Include conservative headroom for added fixed notes and
-			// counters. This is live Go heap, not total allocations or SQLite/OS
-			// memory. GC is intrusive and keeps the same finite caller context.
-			const fixedReportAllowance = 16 << 10
-			if peak+fixedReportAllowance > 256<<10 {
-				t.Fatal("actual full-layout extra live heap target exceeded", peak)
-			}
-			t.Logf("Cargo resource profile=%s peak_bytes=%d fixed_allowance_bytes=%d physical_query_calls=%d logical_evidence_requests=%d", profile, peak, fixedReportAllowance, calls, requests)
 		})
 	}
 }
