@@ -219,9 +219,20 @@ func TestProjectInputUsageParity(t *testing.T) {
 				t.Fatal(err)
 			}
 			var observed inspectionReadObservation
-			report, usage, err := s.inspectWithUsage(context.Background(), targets, tree, inspectUsageHooks{afterRead: observed.observe})
+			var closed []string
+			report, usage, err := s.inspectWithUsage(context.Background(), targets, tree, inspectUsageHooks{afterRead: observed.observe, afterInputClose: func(file *os.File, closeErr error) error {
+				if closeErr != nil {
+					t.Fatal("successful inspection input close failed", closeErr)
+				}
+				requireProjectInputClosed(t, file)
+				closed = append(closed, file.Name())
+				return nil
+			}})
 			if err != nil || observed.calls < 2 || observed.read != int64(len(inspectManifest)+len(inspectLock())) || report.CurrentStateVerified || report.Executable || report.RegenerationVerified || report.DependencyContentsChecked || report.LocalDependencyEdits != "unknown" {
 				t.Fatal(report, usage, observed, err)
+			}
+			if strings.Join(closed, ",") != "package.json,package-lock.json" {
+				t.Fatal("successful inspection did not close both real input handles", closed)
 			}
 			requireInspectionUsage(t, usage, observed)
 			old.CheckedAt = time.Time{}
@@ -529,5 +540,196 @@ func TestProjectInputUsageGrowthAndArithmetic(t *testing.T) {
 	legacy, e := other.Inspect(context.Background(), []state.LiveTarget{ordinary})
 	if e != nil || legacy.Status != "inputs_observed" {
 		t.Fatal("legacy nil accounting inherited overflow refusal", legacy, e)
+	}
+}
+
+func projectInputCloseFixture(t *testing.T, tree bool) (*Scanner, state.LiveTarget) {
+	t.Helper()
+	if tree {
+		return treeFixture(t, nil)
+	}
+	return inspectionFixture(t, nil)
+}
+
+func requireProjectInputClosed(t *testing.T, file *os.File) {
+	t.Helper()
+	if _, err := file.Stat(); !errors.Is(err, os.ErrClosed) {
+		t.Fatal("close observer ran before real input handle closure", file.Name(), err)
+	}
+}
+
+func TestProjectInputCheckedCloseVetoEvidence(t *testing.T) {
+	for _, tree := range []bool{false, true} {
+		t.Run(map[bool]string{false: "inputs", true: "tree"}[tree], func(t *testing.T) {
+			for _, kind := range []string{"manifest", "lock", "both"} {
+				t.Run(kind, func(t *testing.T) {
+					s, target := projectInputCloseFixture(t, tree)
+					manifestErr, lockErr := errors.New("generated manifest close fault"), errors.New("generated lock close fault")
+					var observed inspectionReadObservation
+					var closed []string
+					h := inspectUsageHooks{afterRead: observed.observe, afterInputClose: func(file *os.File, closeErr error) error {
+						if closeErr != nil {
+							t.Fatal("generated real close failed before injected fault", closeErr)
+						}
+						requireProjectInputClosed(t, file)
+						closed = append(closed, file.Name())
+						if file.Name() == "package.json" && kind != "lock" {
+							return manifestErr
+						}
+						if file.Name() == "package-lock.json" && kind != "manifest" {
+							return lockErr
+						}
+						return nil
+					}}
+					var usage FileReadUsage
+					inputs, layout, err := s.inspectTargetWithTreeUsage(context.Background(), target, tree, nil, &usage, h)
+					requireInspectionUsage(t, usage, observed)
+					if err == nil || inputs.LockfileVersion != 0 || inputs.LockedPackages != 0 || len(inputs.Files) != 0 || layout != nil || strings.Join(closed, ",") != "package.json,package-lock.json" || usage.ReadBytes != int64(len(inspectManifest)+len(inspectLock())) {
+						t.Fatal("close failure retained evidence, lost reads or skipped another close", inputs, layout, usage, closed, err)
+					}
+					if errors.Is(err, manifestErr) != (kind != "lock") || errors.Is(err, lockErr) != (kind != "manifest") {
+						t.Fatal("independent close causes were lost", kind, err)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestProjectInputCheckedCloseBlockedReportParity(t *testing.T) {
+	for _, tree := range []bool{false, true} {
+		t.Run(map[bool]string{false: "inputs", true: "tree"}[tree], func(t *testing.T) {
+			s, target := projectInputCloseFixture(t, tree)
+			var baseline []byte
+			for _, tracked := range []bool{false, true} {
+				t.Run(map[bool]string{false: "legacy", true: "usage"}[tracked], func(t *testing.T) {
+					var observed inspectionReadObservation
+					closed := 0
+					h := inspectUsageHooks{afterRead: observed.observe, afterInputClose: func(file *os.File, closeErr error) error {
+						if closeErr != nil {
+							t.Fatal(closeErr)
+						}
+						requireProjectInputClosed(t, file)
+						closed++
+						return errors.New("generated input close fault")
+					}}
+					var report InspectionReport
+					var usage FileReadUsage
+					var err error
+					if tracked {
+						report, usage, err = s.inspectWithUsage(context.Background(), []state.LiveTarget{target}, tree, h)
+						requireInspectionUsage(t, usage, observed)
+					} else {
+						report, err = s.inspectCore(context.Background(), []state.LiveTarget{target}, tree, nil, h)
+					}
+					if err != nil || closed != 2 || report.Status != "blocked" || len(report.Targets) != 1 || report.Targets[0].Status != "blocked" || report.Targets[0].Code != "path_unavailable" || report.Targets[0].Inputs != nil || report.Targets[0].Tree != nil || observed.read != int64(len(inspectManifest)+len(inspectLock())) {
+						t.Fatal("close refusal changed existing blocked-target contract", report, observed, closed, err)
+					}
+					report.CheckedAt = time.Time{}
+					encoded, err := json.Marshal(report)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !tracked {
+						baseline = encoded
+					} else if !bytes.Equal(encoded, baseline) {
+						t.Fatal("close refusal changed legacy versus usage report JSON", string(baseline), string(encoded))
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestProjectInputCheckedClosePreservesRefusal(t *testing.T) {
+	for _, tree := range []bool{false, true} {
+		t.Run(map[bool]string{false: "inputs", true: "tree"}[tree], func(t *testing.T) {
+			for _, kind := range []string{"read_error", "validation_refusal"} {
+				t.Run(kind, func(t *testing.T) {
+					s, target := projectInputCloseFixture(t, tree)
+					closeFault := errors.New("generated close after refusal")
+					var observed inspectionReadObservation
+					closed := 0
+					h := inspectUsageHooks{afterRead: observed.observe, afterInputClose: func(file *os.File, closeErr error) error {
+						if kind == "read_error" {
+							if !errors.Is(closeErr, os.ErrClosed) {
+								t.Fatal("already closed handle did not retain actual close refusal", closeErr)
+							}
+						} else if closeErr != nil {
+							t.Fatal(closeErr)
+						}
+						requireProjectInputClosed(t, file)
+						closed++
+						return closeFault
+					}}
+					if kind == "read_error" {
+						h.beforeRead = func(file *os.File, _ int) {
+							if err := file.Close(); err != nil {
+								t.Fatal(err)
+							}
+						}
+					} else {
+						h.beforeRecheck = func() {
+							if err := os.WriteFile(filepath.Join(filepath.Dir(string(target.Finding.PathBytes)), ".npmrc"), []byte("generated unsupported hint"), 0600); err != nil {
+								t.Fatal(err)
+							}
+						}
+					}
+					var usage FileReadUsage
+					inputs, layout, err := s.inspectTargetWithTreeUsage(context.Background(), target, tree, h.beforeRecheck, &usage, h)
+					requireInspectionUsage(t, usage, observed)
+					if err == nil || !errors.Is(err, closeFault) || inputs.LockfileVersion != 0 || inputs.LockedPackages != 0 || len(inputs.Files) != 0 || layout != nil {
+						t.Fatal("earlier refusal or later close cause was lost", inputs, layout, usage, err)
+					}
+					if kind == "read_error" {
+						if !errors.Is(err, os.ErrClosed) || closed != 1 || observed.calls != 1 || usage.RequestedBytes <= 0 || usage.ReadBytes != 0 {
+							t.Fatal("failed genuine read accounting or cause changed", usage, observed, closed, err)
+						}
+					} else {
+						var failure liveError
+						if !errors.As(err, &failure) || failure.code != "input_unsupported" || closed != 2 || usage.ReadBytes != int64(len(inspectManifest)+len(inspectLock())) {
+							t.Fatal("typed validation refusal or completed usage changed", usage, closed, err)
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestProjectInputCheckedCloseCancellation(t *testing.T) {
+	for _, tree := range []bool{false, true} {
+		t.Run(map[bool]string{false: "inputs", true: "tree"}[tree], func(t *testing.T) {
+			for _, fault := range []bool{false, true} {
+				t.Run(map[bool]string{false: "cancel", true: "cancel_and_close_fault"}[fault], func(t *testing.T) {
+					s, target := projectInputCloseFixture(t, tree)
+					ctx, cancel := context.WithCancel(context.Background())
+					defer cancel()
+					var observed inspectionReadObservation
+					var closed []string
+					h := inspectUsageHooks{afterRead: observed.observe, afterInputClose: func(file *os.File, closeErr error) error {
+						if closeErr != nil {
+							t.Fatal(closeErr)
+						}
+						requireProjectInputClosed(t, file)
+						closed = append(closed, file.Name())
+						if len(closed) == 1 {
+							cancel()
+						} else if !errors.Is(ctx.Err(), context.Canceled) {
+							t.Fatal("second real close did not follow cancellation")
+						}
+						if fault {
+							return errors.New("generated canceled input close fault")
+						}
+						return nil
+					}}
+					report, usage, err := s.inspectWithUsage(ctx, []state.LiveTarget{target}, tree, h)
+					requireInspectionUsage(t, usage, observed)
+					if !errors.Is(err, context.Canceled) || !reflectInspectionZero(report) || strings.Join(closed, ",") != "package.json,package-lock.json" || usage.ReadBytes != int64(len(inspectManifest)+len(inspectLock())) {
+						t.Fatal("close cancellation published evidence, lost usage or skipped release", report, usage, closed, err)
+					}
+				})
+			}
+		})
 	}
 }

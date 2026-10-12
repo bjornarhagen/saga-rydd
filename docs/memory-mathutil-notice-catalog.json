@@ -1,0 +1,101 @@
+{
+  "contract": "memory_mathutil_source_notice_catalog_v1",
+  "assessment_date": "2026-10-12",
+  "scope": "Complete retained memory.go and mathutil.go bytes; lexical comments exclude string and rune literals. Spans are zero-based half-open source bytes; line numbers are one-based inclusive. Final line newlines are preserved.",
+  "sources": [
+    {
+      "module": "modernc.org/memory",
+      "version": "v1.12.1",
+      "source": "memory.go",
+      "source_bytes": 21664,
+      "source_sha256": "b216816fc2873899ac02522b1e69e4268e2af991d14f6bae7f3773c2945446d9",
+      "physical_comment_groups": 55,
+      "comment_tokens": 203,
+      "header": {
+        "byte_span": [
+          0,
+          163
+        ],
+        "line_span": [
+          1,
+          3
+        ],
+        "raw_utf8": "// Copyright 2017 The Memory Authors. All rights reserved.\n// Use of this source code is governed by a BSD-style\n// license that can be found in the LICENSE file.\n",
+        "raw_sha256": "04dbe216d23cf454bd428badad244901b5a40477088da52d91afbd2820b651c3"
+      },
+      "referenced_root_notice": {
+        "name": "LICENSE",
+        "bytes": 1484,
+        "sha256": "59895e669f48f168b6b858358f6005779cdf40a265f7828813061b56af67b496",
+        "association": "Separate dated root inventory; not reread by this source assessment"
+      }
+    },
+    {
+      "module": "modernc.org/mathutil",
+      "version": "v1.7.1",
+      "source": "mathutil.go",
+      "source_bytes": 30735,
+      "source_sha256": "854305b822fcc15df3141aa63cf2af69b4d6da74d7ebce61ed11b9cfc2c09562",
+      "physical_comment_groups": 118,
+      "comment_tokens": 242,
+      "header": {
+        "byte_span": [
+          0,
+          169
+        ],
+        "line_span": [
+          1,
+          3
+        ],
+        "raw_utf8": "// Copyright (c) 2014 The mathutil Authors. All rights reserved.\n// Use of this source code is governed by a BSD-style\n// license that can be found in the LICENSE file.\n",
+        "raw_sha256": "c11f58766906ba9b24a02dfed20d2895f020abfc7226f891f5384cf924bcd15c"
+      },
+      "referenced_root_notice": {
+        "name": "LICENSE",
+        "bytes": 1486,
+        "sha256": "bfa9bf72a72ca009fd62a8f84fca3dca67e51d93af96352723646599898b6cf5",
+        "association": "Separate dated root inventory; not reread by this source assessment"
+      }
+    }
+  ],
+  "explicit_credit": {
+    "module": "modernc.org/mathutil",
+    "source": "mathutil.go",
+    "byte_span": [
+      1724,
+      2242
+    ],
+    "line_span": [
+      64,
+      70
+    ],
+    "raw_utf8": "// This change breaks any existing code depending on the above removed\n// functions.  They should have not been published in the first place, that was\n// unfortunate. Instead, defining such architecture and/or implementation\n// specific integer limits and bit widths as untyped constants improves\n// performance and allows for static dead code elimination if it depends on\n// these values. Thanks to minux for pointing it out in the mail list\n// (https://groups.google.com/d/msg/golang-nuts/tlPpLW6aJw8/NT3mpToH-a4J).\n",
+    "raw_sha256": "f2759e17dab7f555cb2bfad52a49788f46397a41239f00cac566e0ea734fd2e9",
+    "classification": "Contribution acknowledgment; no independent license grant observed"
+  },
+  "coverage": {
+    "source_bytes": 52399,
+    "physical_comment_groups": 173,
+    "comment_tokens": 445,
+    "header_license_references": 2,
+    "embedded_license_grant_condition_or_disclaimer_groups_observed": 0,
+    "technical_url_occurrences": 9,
+    "technical_reference_contents_fetched": false,
+    "dated_omitted_marker_locations_assessed": 4,
+    "marker_locations_are_not_notice_or_obligation_counts": true
+  },
+  "qualifications": {
+    "upstream_authenticity": false,
+    "compiled_applicability": false,
+    "complete_attribution": false,
+    "complete_legal_obligations": false,
+    "legal_compatibility": false,
+    "release_accepted": false
+  },
+  "limitations": [
+    "Only these two retained sources are assessed; mathutil/tables.go and other sources remain outside this scope.",
+    "BSD-style header pointers refer to separate LICENSE texts. This catalog does not reproduce those texts or accept their applicability.",
+    "Technical URLs, TODO tags and benchmark identity text are not inferred license terms. The explicit minux acknowledgment is preserved separately.",
+    "The fixed twenty-row root-notice assembler and existing candidate archives are unchanged."
+  ]
+}

@@ -120,7 +120,21 @@ The Regents notices include source retention, reproduction in binary-distributio
 
 The LLVM fragment names Apache License v2.0 with LLVM Exceptions and carries `SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception`. Its full referenced license and exception terms remain unresolved. Copyright-only NeXT and Apple wording is also preserved; it adds no independent permission conditions in the observed statements.
 
-This catalog records embedded source wording and its associations with the two retained files. The other 91 historical source carriers, upstream authenticity, compiled-target applicability, full referenced licenses, legal compatibility, project-license choice, notice packaging and release acceptance remain open. The fixed twenty-row root-notice catalog and existing candidate archives keep their separate scope.
+This catalog records embedded source wording and its associations with the two retained files. At this assessment, 91 other historical source carriers remained. The separate two-file assessment below covers two of them. Upstream authenticity, compiled-target applicability, full referenced licenses, legal compatibility, project-license choice, notice packaging and release acceptance remain open. The fixed twenty-row root-notice catalog and existing candidate archives keep their separate scope.
+
+## Selected memory and mathutil complete-text assessment
+
+The 2026-10-12 assessment reads the complete retained `memory.go` from `modernc.org/memory v1.12.1` and `mathutil.go` from `modernc.org/mathutil v1.7.1`. The [static source-notice catalog](memory-mathutil-notice-catalog.json) preserves both exact copyright/license-reference headers and the explicit minux acknowledgment, with source digests and byte/line spans.
+
+| Source | Source bytes | Physical comment groups | Comment tokens |
+| --- | ---: | ---: | ---: |
+| `modernc.org/memory/memory.go` | 21,664 | 55 | 203 |
+| `modernc.org/mathutil/mathutil.go` | 30,735 | 118 | 242 |
+| Total | 52,399 | 173 | 445 |
+
+Both headers refer to a separate BSD-style `LICENSE` file. Neither source embeds a license grant, redistribution conditions or a disclaimer. The catalog associates those pointers with the exact length/digest records in the earlier root-notice inventory; it does not reread or reproduce the root texts. The mathutil changelog explicitly thanks minux. Nine technical URL occurrences were observed without fetching their contents. TODO and benchmark identity tags are not inferred contribution acknowledgments or license terms.
+
+The full-source comment census excludes string and rune literals. It covers four matching locations omitted by the earlier bounded marker report; those locations are not a count of notices or legal obligations. The dated residual is 89 other source carriers, with 24,789 omitted marker locations across 21,194,231 historical source bytes. This is arithmetic on the earlier inventory, not a fresh source census. Other source files, including `mathutil/tables.go`, remain outside this assessment. Upstream authenticity, compiled applicability, complete attribution, legal compatibility, project-license choice, notice packaging and release acceptance remain open. The fixed twenty-row root-notice assembler and candidate archive contents are unchanged.
 
 ## Selected asynchronous-state and plans-export project review
 

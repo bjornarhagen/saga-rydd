@@ -82,17 +82,19 @@ func (s *Scanner) InspectTreeWithUsage(ctx context.Context, targets []state.Live
 // Hooks are private per-call generated-fixture observers. They never supply
 // successful source payloads or survive a call; public entry points use nil hooks.
 type inspectUsageHooks struct {
-	beforeRead        func(*os.File, int)
-	afterRead         func(int, int)
-	beforeRecheck     func()
+	beforeRead    func(*os.File, int)
+	afterRead     func(int, int)
+	beforeRecheck func()
+	// The real input Close runs first; fixtures may then append a failure.
+	afterInputClose   func(*os.File, error) error
 	beforeFinalReturn func()
 }
 
 func (s *Scanner) inspectWithUsage(ctx context.Context, targets []state.LiveTarget, tree bool, hooks inspectUsageHooks) (report InspectionReport, usage FileReadUsage, err error) {
 	started := time.Now()
 	defer func() {
-		// Nested input/path/tree descriptor close attempts have already run.
-		// Their legacy ignored close errors remain unchanged.
+		// Held input-file closes have been checked. Ancestor and tree descriptor
+		// close behavior remains outside this input-file correction.
 		if hooks.beforeFinalReturn != nil {
 			hooks.beforeFinalReturn()
 		}
@@ -182,13 +184,16 @@ func (s *Scanner) inspectTargetWithTree(ctx context.Context, target state.LiveTa
 	return s.inspectTargetWithTreeUsage(ctx, target, tree, beforeRecheck, nil, inspectUsageHooks{})
 }
 
-func (s *Scanner) inspectTargetWithTreeUsage(ctx context.Context, target state.LiveTarget, tree bool, beforeRecheck func(), usage *FileReadUsage, hooks inspectUsageHooks) (InputEvidence, *TreeEvidence, error) {
+func (s *Scanner) inspectTargetWithTreeUsage(ctx context.Context, target state.LiveTarget, tree bool, beforeRecheck func(), usage *FileReadUsage, hooks inspectUsageHooks) (evidence InputEvidence, treeEvidence *TreeEvidence, err error) {
 	reader := inputReader{scanner: s, ctx: ctx, project: filepath.Dir(string(target.Finding.PathBytes)), usage: usage, hooks: hooks}
-	defer reader.close()
-	var evidence InputEvidence
-	var treeEvidence *TreeEvidence
+	defer func() {
+		err = errors.Join(err, reader.close(), ctx.Err())
+		if err != nil {
+			evidence, treeEvidence = InputEvidence{}, nil
+		}
+	}()
 	var treeCheck func() error
-	err := s.verifyTargetWithVisit(ctx, target, func(parent, targetFD int, mount string) error {
+	err = s.verifyTargetWithVisit(ctx, target, func(parent, targetFD int, mount string) error {
 		reader.parent, reader.mount = parent, mount
 		if err := reader.checkHints(); err != nil {
 			return err
@@ -245,10 +250,18 @@ func inputDigest(name string, contents []byte) InputFileEvidence {
 	return InputFileEvidence{Name: name, Bytes: len(contents), SHA256: hex.EncodeToString(digest[:])}
 }
 
-func (r *inputReader) close() {
-	for _, file := range r.files {
-		_ = file.file.Close()
+func (r *inputReader) close() error {
+	files := r.files
+	r.files = nil
+	var err error
+	for _, file := range files {
+		closed := file.file.Close()
+		if r.hooks.afterInputClose != nil {
+			closed = errors.Join(closed, r.hooks.afterInputClose(file.file, closed))
+		}
+		err = errors.Join(err, closed)
 	}
+	return err
 }
 
 func (r *inputReader) checkHints() error {
