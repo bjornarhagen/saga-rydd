@@ -80,10 +80,14 @@ func (f *adaptiveWorkerFixture) due(t *testing.T) time.Time {
 func (f *adaptiveWorkerFixture) awaitPass(t *testing.T, listings int64, weekly bool) Snapshot {
 	t.Helper()
 	var snapshot Snapshot
-	waitUntil(t, func() bool {
+	var lastStatus inventoryWaitStatus
+	waitUntilInventoryFixture(t, f.dir, func() bool {
 		snapshot = control(t, f.dir, "status")
+		lastStatus = inventoryWaitStatusFrom(snapshot)
 		p := snapshot.AdaptiveRevisits
 		return f.listings.Load() >= listings && snapshot.ActiveJob == 0 && p != nil && p.ActiveEpochs == 0 && snapshot.WaitReason == "inventory_revisit" && (p.WeeklyRoots == 1) == weekly
+	}, func() inventoryWaitEvidence {
+		return inventoryWaitEvidence{CachedStatus: lastStatus, Listings: f.listings.Load(), WantedListings: listings, WantedWeekly: weekly}
 	})
 	if snapshot.AdaptiveRevisits.CurrentContentVerified || snapshot.AdaptiveRevisits.CleanupApproved || !snapshot.AdaptiveRevisits.HistoricalMetadataOnly {
 		t.Fatal("adaptive summary invented current authority", snapshot)

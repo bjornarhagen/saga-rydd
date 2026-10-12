@@ -212,20 +212,26 @@ func TestHashFreshRecoverySharedBudgetFinalizationDiagnostic(t *testing.T) {
 	deadline, _ := ctx.Deadline()
 	confirmed := false
 	var settled SavedFreshJob
-	hooks := hashFreshRunHooks{pacing: p, execution: &limits, beforeStoreBudgetFinish: func() {
+	hooks := hashFreshRunHooks{pacing: p, execution: &limits, beforeStoreBudgetFinish: func(opCtx context.Context) {
+		if operationDeadline, ok := opCtx.Deadline(); !ok || !operationDeadline.Equal(deadline) {
+			t.Fatal("budget finisher did not retain the original operation deadline", operationDeadline, deadline)
+		}
 		var err error
-		settled, err = w.readFreshJob(ctx, w.db, f.fresh.job.ID)
+		settled, err = w.readFreshJob(opCtx, w.db, f.fresh.job.ID)
 		if err != nil || settled.FreshReservedBytes != 65 || settled.FreshRequestedBytes != 65 || settled.FreshReadBytes != 65 || settled.FreshBudget.TotalUnknownReservedBytes != 0 || settled.Progress[0].Status != "complete" || settled.Progress[0].LatestAttempt.Status != "settled" {
 			t.Fatal("fixture did not acknowledge the genuine settlement before finalization", settled, err)
 		}
 		confirmed = true
 		// Capture a genuinely newer operation-local clock observation, then
-		// exhaust the same outer deadline before its required budget latch.
+		// observe the same operation context's deadline before its budget latch.
 		c.advance(time.Nanosecond)
-		if _, _, err = p.observe(ctx); err != nil {
+		if _, _, err = p.observe(opCtx); err != nil {
 			t.Fatal(err)
 		}
-		<-ctx.Done()
+		<-opCtx.Done()
+		if err := opCtx.Err(); err != context.DeadlineExceeded {
+			t.Fatal("budget finisher context did not observe its deadline", err)
+		}
 	}}
 	r, err := w.runFreshConsented(ctx, f.consent.ID, f.fresh.m.f.scanner, hooks)
 	// The finisher's sentinel hides its internal cause. Report the separately

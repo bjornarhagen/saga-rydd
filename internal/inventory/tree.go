@@ -39,6 +39,15 @@ type treeRecord struct {
 	id    int
 }
 
+// Private per-reader fixture observers follow real owned-handle operations.
+// Opens cannot be replaced, and close observers run after the real close.
+// The borrowed live-path root is not passed to these observers.
+type treeHandleHooks struct {
+	afterOwnedOpen      func(int, string)
+	afterDirectoryClose func(*os.File, string, error) error
+	afterRawClose       func(int, string, error) error
+}
+
 type treeReader struct {
 	scanner          *Scanner
 	ctx              context.Context
@@ -52,6 +61,7 @@ type treeReader struct {
 	pathBytes        int
 	absoluteDepth    int
 	device           uint64
+	handleHooks      treeHandleHooks
 }
 
 func newTreeReader(s *Scanner, ctx context.Context, rootFD int, path, mount string, layout regeneration.Layout) *treeReader {
@@ -116,10 +126,12 @@ func (w *treeReader) walk() error {
 	if err != nil {
 		return err
 	}
+	if w.handleHooks.afterOwnedOpen != nil {
+		w.handleHooks.afterOwnedOpen(fd, ".")
+	}
 	var st unix.Stat_t
 	if err = unix.Fstat(fd, &st); err != nil {
-		_ = unix.Close(fd)
-		return err
+		return errors.Join(err, w.closeRaw(fd, "."), w.ctx.Err())
 	}
 	w.device = uint64(st.Dev)
 	return w.directory(fd, ".", "boundary", 0, st)
@@ -164,9 +176,27 @@ func (w *treeReader) add(path string, st unix.Stat_t, link string) error {
 	return nil
 }
 
-func (w *treeReader) directory(fd int, path, role string, depth int, before unix.Stat_t) error {
+func (w *treeReader) closeRaw(fd int, path string) error {
+	err := unix.Close(fd)
+	if w.handleHooks.afterRawClose != nil {
+		err = errors.Join(err, w.handleHooks.afterRawClose(fd, path, err))
+	}
+	return err
+}
+
+func (w *treeReader) closeDirectory(file *os.File, path string) error {
+	err := file.Close()
+	if w.handleHooks.afterDirectoryClose != nil {
+		err = errors.Join(err, w.handleHooks.afterDirectoryClose(file, path, err))
+	}
+	return err
+}
+
+func (w *treeReader) directory(fd int, path, role string, depth int, before unix.Stat_t) (err error) {
 	file := os.NewFile(uintptr(fd), "dependency directory")
-	defer file.Close()
+	defer func() {
+		err = errors.Join(err, w.closeDirectory(file, path), w.ctx.Err())
+	}()
 	if depth > TreeDepthLimit || w.absoluteDepth+depth > state.LivePathDepthLimit {
 		return blocked("tree_limit", "The dependency tree exceeds the bounded directory depth. Review it separately.")
 	}
@@ -222,10 +252,12 @@ func (w *treeReader) directory(fd int, path, role string, depth int, before unix
 				if err != nil {
 					return err
 				}
+				if w.handleHooks.afterOwnedOpen != nil {
+					w.handleHooks.afterOwnedOpen(child, rel)
+				}
 				var opened unix.Stat_t
 				if err = unix.Fstat(child, &opened); err != nil || !sameInputStamp(st, opened) {
-					_ = unix.Close(child)
-					return blocked("tree_changed_during_check", "A dependency directory changed while opening.")
+					return errors.Join(blocked("tree_changed_during_check", "A dependency directory changed while opening."), w.closeRaw(child, rel), w.ctx.Err())
 				}
 				if err = w.directory(child, rel, childRole, depth+1, opened); err != nil {
 					return err

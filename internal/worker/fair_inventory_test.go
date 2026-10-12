@@ -70,10 +70,14 @@ func TestWorkerFairRootsInterleaveSourceMaintenanceAndRevisit(t *testing.T) {
 		return b, err
 	}
 	_, done := start(t, dir, c, options)
-	waitUntil(t, func() bool {
+	waitUntilInventoryFixture(t, dir, func() bool {
 		mu.Lock()
 		defer mu.Unlock()
 		return failure != nil || smallDone >= 2 || wideDone
+	}, func() inventoryWaitEvidence {
+		mu.Lock()
+		defer mu.Unlock()
+		return inventoryWaitEvidence{Generation: generation, WideEntries: len(seen), SmallCompletions: smallDone, WideComplete: wideDone, SourceFailure: failure != nil}
 	})
 	control(t, dir, "pause")
 	waitUntil(t, func() bool { return control(t, dir, "status").ActiveJob == 0 })

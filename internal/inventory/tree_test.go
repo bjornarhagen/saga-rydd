@@ -1,6 +1,7 @@
 package inventory
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bjornarhagen/saga-rydd/internal/regeneration"
 	"github.com/bjornarhagen/saga-rydd/internal/state"
 	"golang.org/x/sys/unix"
 )
@@ -291,5 +293,278 @@ func TestTreeBoundsAndCancellation(t *testing.T) {
 	}
 	if _, err := s.InspectTree(context.Background(), make([]state.LiveTarget, 21)); err == nil {
 		t.Fatal("ignored target count")
+	}
+}
+
+func withFixtureTreeReader(t *testing.T, ctx context.Context, s *Scanner, target state.LiveTarget, run func(*treeReader) error) error {
+	t.Helper()
+	_, layout, err := regeneration.AnalyzeLayout([]byte(inspectManifest), []byte(inspectLock()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s.verifyTargetWithVisit(ctx, target, func(_, rootFD int, mount string) error {
+		w := newTreeReader(s, ctx, rootFD, string(target.Finding.PathBytes), mount, layout)
+		err := run(w)
+		var held unix.Stat_t
+		if statErr := unix.Fstat(rootFD, &held); statErr != nil {
+			t.Fatal("tree reader closed its borrowed live-path root", statErr)
+		}
+		return err
+	}, nil, nil)
+}
+
+func requireTreeDirectoryClosed(t *testing.T, file *os.File, closeErr error) {
+	t.Helper()
+	if closeErr != nil {
+		t.Fatal("real directory close failed before the fixture observer", closeErr)
+	}
+	if _, err := file.Stat(); !errors.Is(err, os.ErrClosed) {
+		t.Fatal("directory observer ran before real close", err)
+	}
+}
+
+func prepareTreeRecheck(t *testing.T, w *treeReader, recheck bool) {
+	t.Helper()
+	if recheck {
+		if _, err := w.observe(); err != nil {
+			t.Fatal("generated initial tree observation failed", err)
+		}
+	}
+}
+
+func runTreeClosePass(w *treeReader, recheck bool) (TreeEvidence, error) {
+	if recheck {
+		return TreeEvidence{}, w.recheck()
+	}
+	return w.observe()
+}
+
+func TestTreeCheckedCloseSuccessParity(t *testing.T) {
+	s, target := treeFixture(t, nil)
+	err := withFixtureTreeReader(t, context.Background(), s, target, func(w *treeReader) error {
+		baseline, err := w.observe()
+		if err != nil {
+			return err
+		}
+		observed := newTreeReader(s, w.ctx, w.rootFD, w.path, w.mount, regeneration.Layout{PackagePaths: []string{"node_modules/fixture-dep"}})
+		closed := map[string]int{}
+		observed.handleHooks.afterDirectoryClose = func(file *os.File, path string, closeErr error) error {
+			requireTreeDirectoryClosed(t, file, closeErr)
+			closed[path]++
+			return nil
+		}
+		current, err := observed.observe()
+		if err != nil {
+			return err
+		}
+		a, err := json.Marshal(baseline)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := json.Marshal(current)
+		if err != nil || !bytes.Equal(a, b) {
+			t.Fatal("checked closure changed successful tree evidence JSON", baseline, current, err)
+		}
+		if err := observed.recheck(); err != nil {
+			return err
+		}
+		if len(closed) != 3 || closed["."] != 2 || closed["fixture-dep"] != 2 || closed[".bin"] != 2 {
+			t.Fatal("success did not close every owned stream in both passes", closed)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTreeCheckedCloseVetoEvidence(t *testing.T) {
+	for _, recheck := range []bool{false, true} {
+		t.Run(map[bool]string{false: "observe", true: "recheck"}[recheck], func(t *testing.T) {
+			for _, kind := range []string{"child", "root", "both"} {
+				t.Run(kind, func(t *testing.T) {
+					s, target := treeFixture(t, nil)
+					childFault, rootFault := errors.New("generated child directory close fault"), errors.New("generated tree root close fault")
+					var closed []string
+					err := withFixtureTreeReader(t, context.Background(), s, target, func(w *treeReader) error {
+						prepareTreeRecheck(t, w, recheck)
+						w.handleHooks.afterDirectoryClose = func(file *os.File, path string, closeErr error) error {
+							requireTreeDirectoryClosed(t, file, closeErr)
+							closed = append(closed, path)
+							if path == "fixture-dep" && kind != "root" {
+								return childFault
+							}
+							if path == "." && kind != "child" {
+								return rootFault
+							}
+							return nil
+						}
+						observed, err := runTreeClosePass(w, recheck)
+						if err == nil || !recheck && observed != (TreeEvidence{}) {
+							t.Fatal("directory close fault published tree evidence", observed, err)
+						}
+						return err
+					})
+					if err == nil || errors.Is(err, childFault) != (kind != "root") || errors.Is(err, rootFault) != (kind != "child") || len(closed) < 2 || closed[len(closed)-1] != "." || !containsTreeClose(closed, "fixture-dep") {
+						t.Fatal("independent child/root closure or cause was lost", closed, err)
+					}
+				})
+			}
+		})
+	}
+}
+
+func containsTreeClose(closed []string, path string) bool {
+	for _, candidate := range closed {
+		if candidate == path {
+			return true
+		}
+	}
+	return false
+}
+
+func TestTreeCheckedCloseCancellation(t *testing.T) {
+	for _, recheck := range []bool{false, true} {
+		t.Run(map[bool]string{false: "observe", true: "recheck"}[recheck], func(t *testing.T) {
+			for _, fault := range []bool{false, true} {
+				t.Run(map[bool]string{false: "cancel", true: "cancel_and_close_fault"}[fault], func(t *testing.T) {
+					s, target := treeFixture(t, nil)
+					ctx, cancel := context.WithCancel(context.Background())
+					defer cancel()
+					closeFault := errors.New("generated canceled tree close fault")
+					var closed []string
+					err := withFixtureTreeReader(t, ctx, s, target, func(w *treeReader) error {
+						prepareTreeRecheck(t, w, recheck)
+						w.handleHooks.afterDirectoryClose = func(file *os.File, path string, closeErr error) error {
+							requireTreeDirectoryClosed(t, file, closeErr)
+							closed = append(closed, path)
+							if len(closed) == 1 {
+								if path == "." {
+									t.Fatal("root closed before its generated child")
+								}
+								cancel()
+								if fault {
+									return closeFault
+								}
+							}
+							return nil
+						}
+						observed, err := runTreeClosePass(w, recheck)
+						if !recheck && observed != (TreeEvidence{}) {
+							t.Fatal("canceled close published tree evidence", observed)
+						}
+						return err
+					})
+					if !errors.Is(err, context.Canceled) || errors.Is(err, closeFault) != fault || len(closed) < 2 || closed[len(closed)-1] != "." {
+						t.Fatal("cancellation lost parent cleanup or its close cause", closed, err)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestTreeCheckedClosePreservesRefusal(t *testing.T) {
+	for _, recheck := range []bool{false, true} {
+		t.Run(map[bool]string{false: "observe", true: "recheck"}[recheck], func(t *testing.T) {
+			s, target := treeFixture(t, nil)
+			closeFault := errors.New("generated close after tree refusal")
+			var closed []string
+			err := withFixtureTreeReader(t, context.Background(), s, target, func(w *treeReader) error {
+				prepareTreeRecheck(t, w, recheck)
+				if err := unix.Mkfifo(filepath.Join(w.path, "fixture-dep", "pipe"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				w.handleHooks.afterDirectoryClose = func(file *os.File, path string, closeErr error) error {
+					requireTreeDirectoryClosed(t, file, closeErr)
+					closed = append(closed, path)
+					// A sibling may be listed first. Its successful close must
+					// not mask the intended package refusal before we reach it.
+					if path == "fixture-dep" || path == "." {
+						return closeFault
+					}
+					return nil
+				}
+				observed, err := runTreeClosePass(w, recheck)
+				if !recheck && observed != (TreeEvidence{}) {
+					t.Fatal("refused tree published evidence", observed)
+				}
+				return err
+			})
+			var refusal liveError
+			code := "tree_unsupported"
+			if recheck {
+				// The added FIFO also changes its parent stamp, so the second
+				// pass correctly refuses that earlier baseline mismatch first.
+				code = "tree_changed_during_check"
+			}
+			if !errors.As(err, &refusal) || refusal.code != code || !errors.Is(err, closeFault) || len(closed) < 2 || closed[len(closed)-1] != "." || !containsTreeClose(closed, "fixture-dep") {
+				t.Fatal("typed refusal or independent cleanup was lost", refusal, closed, err)
+			}
+		})
+	}
+}
+
+func TestTreeCheckedRawClose(t *testing.T) {
+	for _, recheck := range []bool{false, true} {
+		t.Run(map[bool]string{false: "observe", true: "recheck"}[recheck], func(t *testing.T) {
+			for _, kind := range []string{"root_stat", "child_stamp"} {
+				t.Run(kind, func(t *testing.T) {
+					s, target := treeFixture(t, nil)
+					closeFault := errors.New("generated raw directory close fault")
+					var rawClosed, streams []string
+					err := withFixtureTreeReader(t, context.Background(), s, target, func(w *treeReader) error {
+						prepareTreeRecheck(t, w, recheck)
+						w.handleHooks.afterOwnedOpen = func(fd int, path string) {
+							if kind == "root_stat" && path == "." {
+								if err := unix.Close(fd); err != nil {
+									t.Fatal(err)
+								}
+							} else if kind == "child_stamp" && path == "fixture-dep" {
+								// Change held and named directory metadata after the
+								// genuine open, before the production stamp comparison.
+								if err := unix.Fchmod(fd, 0750); err != nil {
+									t.Fatal(err)
+								}
+							}
+						}
+						w.handleHooks.afterRawClose = func(fd int, path string, closeErr error) error {
+							var st unix.Stat_t
+							if err := unix.Fstat(fd, &st); !errors.Is(err, unix.EBADF) {
+								t.Fatal("raw observer ran before real close", path, err)
+							}
+							if kind == "root_stat" && !errors.Is(closeErr, unix.EBADF) || kind == "child_stamp" && closeErr != nil {
+								t.Fatal("raw actual close result changed", path, closeErr)
+							}
+							rawClosed = append(rawClosed, path)
+							return closeFault
+						}
+						w.handleHooks.afterDirectoryClose = func(file *os.File, path string, closeErr error) error {
+							requireTreeDirectoryClosed(t, file, closeErr)
+							streams = append(streams, path)
+							return nil
+						}
+						observed, err := runTreeClosePass(w, recheck)
+						if !recheck && observed != (TreeEvidence{}) {
+							t.Fatal("raw close refusal published tree evidence", observed)
+						}
+						return err
+					})
+					if !errors.Is(err, closeFault) || len(rawClosed) != 1 {
+						t.Fatal("raw close cause or attempt was lost", rawClosed, streams, err)
+					}
+					if kind == "root_stat" {
+						if rawClosed[0] != "." || len(streams) != 0 || !errors.Is(err, unix.EBADF) {
+							t.Fatal("failed root stat changed its raw cleanup", rawClosed, streams, err)
+						}
+					} else {
+						var refusal liveError
+						if rawClosed[0] != "fixture-dep" || len(streams) < 1 || streams[len(streams)-1] != "." || !errors.As(err, &refusal) || refusal.code != "tree_changed_during_check" {
+							t.Fatal("raw child refusal lost parent cleanup or typed cause", rawClosed, streams, err)
+						}
+					}
+				})
+			}
+		})
 	}
 }

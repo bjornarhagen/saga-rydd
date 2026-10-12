@@ -135,7 +135,7 @@ func (s *HashStore) runFreshConsented(ctx context.Context, id string, scanner *S
 		if shared != nil {
 			defer func() {
 				if hooks.beforeStoreBudgetFinish != nil {
-					hooks.beforeStoreBudgetFinish()
+					hooks.beforeStoreBudgetFinish(opCtx)
 				}
 				if e := s.finishHashStoreReadBudget(opCtx, hooks.pacing, &result.StoreReadBudget, true); e != nil {
 					s.poisoned = true

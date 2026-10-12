@@ -112,6 +112,173 @@ func waitUntil(t *testing.T, predicate func() bool) {
 	t.Fatal("condition timed out")
 }
 
+// These selected fixtures keep their original predicate and five-second wait.
+// Only a failed wait collects sequential diagnostic scalars, under one separate
+// two-second deadline. It reads no source and never receives a worker result.
+type inventoryWaitStatus struct {
+	Seen, Paused, Stopping                 bool
+	ActiveJob                              int64
+	WaitReason                             string
+	DispatchPresent                        bool
+	DispatchUsed                           int
+	DispatchReason                         string
+	StatePresent                           bool
+	StatePhase, StateDecision, StateReason string
+	SamplingState                          string
+	CallbackReturned, ProcessSlotOccupied  bool
+	AttemptStartedNS, AttemptFinishedNS    int64
+	RetryAfterNS                           int64
+	ObservationStatus, ObservationReason   string
+	MetricsPresent, Throttled              bool
+	EntryInspections, ThrottleWaitNS       uint64
+	AdaptivePresent                        bool
+	ActiveEpochs, StableRoots, WeeklyRoots int
+}
+
+type inventoryWaitSaved struct {
+	SummarySeen, DueSeen                      bool
+	Entries, CompleteDirectories              int64
+	PendingJobs, RunningJobs, DirectoryErrors int64
+	DueNS                                     int64
+}
+
+type inventoryWaitEvidence struct {
+	CachedStatus                  inventoryWaitStatus
+	CachedSaved                   inventoryWaitSaved
+	Listings, WantedListings      int64
+	WantedWeekly                  bool
+	Generation                    int64
+	WideEntries, SmallCompletions int
+	WideComplete, SourceFailure   bool
+}
+
+func inventoryWaitCode(code string) string {
+	switch code {
+	case "", "paused", "stopping", "idle", "running", "cadence", "clock_rollback", "daily_chunk_limit",
+		"job_retry", "inventory_revisit", "inventory_revisit_setup", "inventory_maintenance",
+		"inventory_state_source_backoff", "power_source_backoff", "wal_backpressure",
+		"cpu_backoff", "cpu_accounting_pending", "cpu_clock_rollback", "cpu_recovery_backoff",
+		"cpu_hour_charge_partial", "cpu_day_charge_partial", "cpu_hour_charge_backoff", "cpu_day_charge_backoff",
+		"daily_metadata_limit", "metadata_backoff", "api_pacing", "api_capacity_blocked", "api_profile_blocked",
+		"before_dispatch", "after_receipt", "not_evaluated", "source_deferred", "source_admitted",
+		"not_requested", "pending", "returned", "refused", "foreign_slot", "below_limit", "limit_reached",
+		"inventory_state_pending", "inventory_state_process_slot", "inventory_state_retry", "inventory_state_limit",
+		"inventory_state_clock", "inventory_state_timeout", "inventory_state_canceled", "inventory_state_unavailable",
+		"inventory_state_changed", "inventory_state_overflow", "inventory_state_invalid", "inventory_state_expired":
+		return code
+	default:
+		return "unrecognized"
+	}
+}
+
+func inventoryWaitStatusFrom(s Snapshot) inventoryWaitStatus {
+	d := inventoryWaitStatus{Seen: true, Paused: s.Paused, Stopping: s.Stopping, ActiveJob: s.ActiveJob, WaitReason: inventoryWaitCode(s.WaitReason)}
+	if b := s.Dispatch; b != nil {
+		d.DispatchPresent, d.DispatchUsed, d.DispatchReason = true, b.Used, inventoryWaitCode(b.Reason)
+	}
+	if p := s.InventoryState; p != nil {
+		d.StatePresent = true
+		d.StatePhase, d.StateDecision, d.StateReason = inventoryWaitCode(p.LastAttemptPhase), inventoryWaitCode(p.LastDecisionStatus), inventoryWaitCode(p.LastDecisionReason)
+		d.SamplingState, d.CallbackReturned, d.ProcessSlotOccupied = inventoryWaitCode(p.SamplingState), p.CallbackReturned, p.ProcessSlotOccupied
+		if p.LastAttemptStartedAt != nil {
+			d.AttemptStartedNS = p.LastAttemptStartedAt.UnixNano()
+		}
+		if p.LastAttemptFinishedAt != nil {
+			d.AttemptFinishedNS = p.LastAttemptFinishedAt.UnixNano()
+		}
+		if p.RetryAfterAt != nil {
+			d.RetryAfterNS = p.RetryAfterAt.UnixNano()
+		}
+		if o := p.Observation; o != nil {
+			d.ObservationStatus, d.ObservationReason = inventoryWaitCode(o.Status), inventoryWaitCode(o.Reason)
+		}
+	}
+	if m := s.InventoryMetrics; m != nil {
+		d.MetricsPresent, d.Throttled, d.EntryInspections, d.ThrottleWaitNS = true, m.Throttled, m.EntryInspections, m.ThrottleWaitNS
+	}
+	if a := s.AdaptiveRevisits; a != nil {
+		d.AdaptivePresent, d.ActiveEpochs, d.StableRoots, d.WeeklyRoots = true, a.ActiveEpochs, a.StableRoots, a.WeeklyRoots
+	}
+	return d
+}
+
+func inventoryWaitSavedFrom(s state.Summary, due time.Time) inventoryWaitSaved {
+	d := inventoryWaitSaved{SummarySeen: true, DueSeen: true, Entries: s.Entries, CompleteDirectories: s.CompleteDirectories, PendingJobs: s.PendingJobs, RunningJobs: s.RunningJobs, DirectoryErrors: s.DirectoryErrors}
+	if !due.IsZero() {
+		d.DueNS = due.UnixNano()
+	}
+	return d
+}
+
+func inventoryWaitErrorClass(err error) string {
+	switch {
+	case err == nil:
+		return "none"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	default:
+		return "error"
+	}
+}
+
+func waitUntilInventoryFixture(t *testing.T, dir string, predicate func() bool, evidence func() inventoryWaitEvidence) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if predicate() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	// Cached predicate evidence and these later reads are not one snapshot.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	d := struct {
+		Contract, WorkerResult                                       string
+		CachedPredicate                                              inventoryWaitEvidence
+		LaterStatus                                                  inventoryWaitStatus
+		LaterSaved                                                   inventoryWaitSaved
+		StatusError, ReaderError, SummaryError, DueError, CloseError string
+	}{Contract: "failure_only_sequential_observations_not_current", WorkerResult: "unknown_not_received", CachedPredicate: evidence(), StatusError: "not_attempted", ReaderError: "not_attempted", SummaryError: "not_attempted", DueError: "not_attempted", CloseError: "not_attempted"}
+	live, err := Send(ctx, dir, "status")
+	d.StatusError = inventoryWaitErrorClass(err)
+	if err == nil {
+		d.LaterStatus = inventoryWaitStatusFrom(live)
+	}
+	if ctx.Err() == nil {
+		r, openErr := state.OpenReader(ctx, dir)
+		d.ReaderError = inventoryWaitErrorClass(openErr)
+		if openErr == nil {
+			summary, summaryErr := r.Summary(ctx)
+			d.SummaryError = inventoryWaitErrorClass(summaryErr)
+			if summaryErr == nil {
+				d.LaterSaved = inventoryWaitSavedFrom(summary, time.Time{})
+				d.LaterSaved.DueSeen = false
+			}
+			if ctx.Err() == nil {
+				due, dueErr := r.NextJobDue(ctx, []string{state.ScanKind})
+				d.DueError = inventoryWaitErrorClass(dueErr)
+				if dueErr == nil {
+					d.LaterSaved.DueSeen = true
+					if !due.IsZero() {
+						d.LaterSaved.DueNS = due.UnixNano()
+					}
+				}
+			}
+			d.CloseError = inventoryWaitErrorClass(r.Close())
+		}
+	}
+	encoded, encodeErr := json.Marshal(d)
+	if encodeErr != nil || len(encoded) > 8<<10 {
+		t.Log("bounded failure-only inventory diagnostics unavailable")
+	} else {
+		t.Log("failure-only inventory diagnostics:", string(encoded))
+	}
+	t.Fatal("condition timed out")
+}
+
 func TestLifecyclePersistentPauseAndWriterExclusion(t *testing.T) {
 	dir, c := fixture(t)
 	initial, done := start(t, dir, c, Options{})
@@ -406,7 +573,8 @@ func TestPacedInventoryControlsAndCompletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	waitUntil(t, func() bool {
+	var lastSaved inventoryWaitSaved
+	waitUntilInventoryFixture(t, dir, func() bool {
 		summary, err := r.Summary(context.Background())
 		if err != nil {
 			t.Fatal(err)
@@ -415,8 +583,9 @@ func TestPacedInventoryControlsAndCompletion(t *testing.T) {
 		if dueErr != nil {
 			t.Fatal(dueErr)
 		}
+		lastSaved = inventoryWaitSavedFrom(summary, due)
 		return summary.Entries == 6 && summary.CompleteDirectories == 1 && summary.PendingJobs == 1 && summary.RunningJobs == 0 && due.After(time.Now().Add(23*time.Hour))
-	})
+	}, func() inventoryWaitEvidence { return inventoryWaitEvidence{CachedSaved: lastSaved} })
 	m := control(t, dir, "status").InventoryMetrics
 	if m == nil || m.EntryRatePerSecond != 5 || m.EntryInspections < 5 || m.ThrottleWaitNS == 0 {
 		t.Fatal(m)

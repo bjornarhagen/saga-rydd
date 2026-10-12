@@ -69,7 +69,7 @@ type hashFreshRunHooks struct {
 	pacing                    *hashReadPacer
 	execution                 *HashReadExecutionLimits
 	storeBudgetHooks          *hashStoreReadBudgetHooks
-	beforeStoreBudgetFinish   func()
+	beforeStoreBudgetFinish   func(context.Context)
 	beforeReserveCommit       func()
 	afterReserve              func()
 	beforeSettleCommit        func()

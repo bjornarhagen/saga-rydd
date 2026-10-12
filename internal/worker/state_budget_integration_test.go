@@ -452,6 +452,180 @@ func TestWorkerInventoryStateReturnedCancellationRetainsChargedReceipt(t *testin
 	}
 }
 
+// Keep only the current phase pair. Unused or refused attempts may be replaced;
+// every source entry must consume its own completed usable pair exactly once.
+type inventoryStateSourcePairForFixture struct {
+	mu             sync.Mutex
+	pre, post      inventoryStateSourcePhaseForFixture
+	lastConsumedID uint64
+	consumed       int64
+	failure        error
+}
+
+type inventoryStateSourcePhaseForFixture struct {
+	returned   bool
+	id         uint64
+	request    inventoryStateRequest
+	launch     inventoryStateClockPair
+	completion inventoryStateCompletion
+}
+
+func (p *inventoryStateSourcePairForFixture) record(phase string, ticket *inventoryStateTicket) {
+	result, returned := ticket.completed()
+	evidence := inventoryStateSourcePhaseForFixture{returned: returned, completion: result}
+	if returned {
+		// These ticket values are immutable. Completion publication is joined
+		// before reading them; no mutable intent or coordinator state is read.
+		evidence.id, evidence.request, evidence.launch = ticket.ID, ticket.request, ticket.launch
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if phase == "before_dispatch" {
+		p.pre, p.post = evidence, inventoryStateSourcePhaseForFixture{}
+	} else {
+		p.post = evidence
+	}
+}
+
+func (p inventoryStateSourcePhaseForFixture) usable(phase string) bool {
+	r := p.completion
+	return p.returned && p.id != 0 && p.request.scope != nil && p.request.intent != nil && p.request.phase == phase &&
+		r.ID == p.id && r.Phase == phase && r.Usable && r.Reason == "" && r.Observation != nil &&
+		r.Observation.Available && r.Observation.Status == "below_limit" &&
+		r.LaunchWall.Equal(p.launch.wall) && r.LaunchElapsed.Equal(p.launch.elapsed) &&
+		!r.CompletedWall.Before(r.LaunchWall) && !r.CompletedElapsed.Before(r.LaunchElapsed)
+}
+
+func (p *inventoryStateSourcePairForFixture) consume() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	pre, post := p.pre, p.post
+	p.pre, p.post = inventoryStateSourcePhaseForFixture{}, inventoryStateSourcePhaseForFixture{}
+	var err error
+	switch {
+	case !pre.usable("before_dispatch") || !post.usable("after_receipt"):
+		err = errors.New("source entry lacks a completed usable pre/post state pair")
+	case pre.request.scope != post.request.scope || pre.request.intent != post.request.intent || pre.request.receipt != nil || post.request.receipt == nil || post.request.receipt.intent != post.request.intent:
+		err = errors.New("source entry has mismatched pre/post state requests")
+	case post.launch.wall.Before(pre.completion.CompletedWall) || post.launch.elapsed.Before(pre.completion.CompletedElapsed):
+		err = errors.New("source entry has a post phase before its pre completion")
+	case pre.id <= p.lastConsumedID || post.id <= pre.id:
+		err = errors.New("source entry reused a state completion ticket")
+	default:
+		p.lastConsumedID = post.id
+		p.consumed++
+	}
+	if err != nil && p.failure == nil {
+		p.failure = err
+	}
+	return err
+}
+
+func (p *inventoryStateSourcePairForFixture) result() (int64, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.consumed, p.failure
+}
+
+func newInventoryStateSourceTicketForFixture(phase string, id uint64, scope *inventoryStateRunScope, intent *inventoryStateIntent, now time.Time) *inventoryStateTicket {
+	ticket := &inventoryStateTicket{
+		ID: id, request: inventoryStateRequest{scope: scope, intent: intent, phase: phase},
+		launch: inventoryStateClockPair{wall: now, elapsed: now}, done: make(chan struct{}),
+		completion: inventoryStateCompletion{ID: id, Phase: phase, LaunchWall: now, LaunchElapsed: now, CompletedWall: now, CompletedElapsed: now, Usable: true,
+			Observation: &state.InventoryStateBudget{Available: true, Status: "below_limit"}},
+	}
+	if phase == "after_receipt" {
+		ticket.request.receipt = &inventoryStateReceipt{intent: intent}
+	}
+	return ticket
+}
+
+func TestInventoryStateSourcePairForFixtureRejectsInvalidEvidence(t *testing.T) {
+	for _, mode := range []string{"missing_post", "refused_pre", "refused_post", "mismatched_intent", "mismatched_receipt", "mismatched_completion", "post_before_pre_completion", "duplicate_ids", "reused_pair"} {
+		t.Run(mode, func(t *testing.T) {
+			scope, intent := &inventoryStateRunScope{}, &inventoryStateIntent{}
+			now := time.Now()
+			pre := newInventoryStateSourceTicketForFixture("before_dispatch", 1, scope, intent, now)
+			post := newInventoryStateSourceTicketForFixture("after_receipt", 2, scope, intent, now)
+			switch mode {
+			case "refused_pre":
+				pre.completion.Usable, pre.completion.Reason = false, "inventory_state_limit"
+			case "refused_post":
+				post.completion.Usable, post.completion.Reason = false, "inventory_state_canceled"
+			case "mismatched_intent":
+				post.request.intent = &inventoryStateIntent{}
+			case "mismatched_receipt":
+				post.request.receipt.intent = &inventoryStateIntent{}
+			case "mismatched_completion":
+				post.completion.ID++
+			case "post_before_pre_completion":
+				pre.completion.CompletedWall = now.Add(time.Millisecond)
+				pre.completion.CompletedElapsed = now.Add(time.Millisecond)
+			case "duplicate_ids":
+				post.ID, post.completion.ID = pre.ID, pre.ID
+			}
+			close(pre.done)
+			close(post.done)
+			var pair inventoryStateSourcePairForFixture
+			pair.record("before_dispatch", pre)
+			if mode != "missing_post" {
+				pair.record("after_receipt", post)
+			}
+			var wantConsumed int64
+			if mode == "reused_pair" {
+				if err := pair.consume(); err != nil {
+					t.Fatal("valid pair refused", err)
+				}
+				wantConsumed = 1
+				pair.record("before_dispatch", pre)
+				pair.record("after_receipt", post)
+			}
+			if err := pair.consume(); err == nil {
+				t.Fatal("invalid source evidence accepted")
+			}
+			if consumed, failure := pair.result(); consumed != wantConsumed || failure == nil {
+				t.Fatal("invalid evidence was counted or lost", consumed, failure)
+			}
+		})
+	}
+}
+
+func TestInventoryStateSourcePairForFixtureAllowsReplacedAttempt(t *testing.T) {
+	scope, refusedIntent := &inventoryStateRunScope{}, &inventoryStateIntent{}
+	now := time.Now()
+	refused := newInventoryStateSourceTicketForFixture("before_dispatch", 1, scope, refusedIntent, now)
+	refused.completion.Usable, refused.completion.Reason = false, "inventory_state_limit"
+	close(refused.done)
+	var pair inventoryStateSourcePairForFixture
+	pair.record("before_dispatch", refused)
+	if consumed, failure := pair.result(); consumed != 0 || failure != nil {
+		t.Fatal("refused attempt poisoned the source witness", consumed, failure)
+	}
+	unusedIntent := &inventoryStateIntent{}
+	unusedPre := newInventoryStateSourceTicketForFixture("before_dispatch", 2, scope, unusedIntent, now.Add(time.Millisecond))
+	unusedPost := newInventoryStateSourceTicketForFixture("after_receipt", 3, scope, unusedIntent, now.Add(2*time.Millisecond))
+	close(unusedPre.done)
+	close(unusedPost.done)
+	pair.record("before_dispatch", unusedPre)
+	pair.record("after_receipt", unusedPost)
+	if consumed, failure := pair.result(); consumed != 0 || failure != nil {
+		t.Fatal("unused pair poisoned the source witness", consumed, failure)
+	}
+	intent := &inventoryStateIntent{}
+	pre := newInventoryStateSourceTicketForFixture("before_dispatch", 4, scope, intent, now.Add(3*time.Millisecond))
+	post := newInventoryStateSourceTicketForFixture("after_receipt", 5, scope, intent, now.Add(4*time.Millisecond))
+	close(pre.done)
+	close(post.done)
+	pair.record("before_dispatch", pre)
+	pair.record("after_receipt", post)
+	if err := pair.consume(); err != nil {
+		t.Fatal("replacement usable pair refused", err)
+	}
+	if consumed, failure := pair.result(); consumed != 1 || failure != nil {
+		t.Fatal("replacement source witness was lost", consumed, failure)
+	}
+}
+
 func TestWorkerInventoryStateRetryRequiresBothClocks(t *testing.T) {
 	for _, first := range []string{"wall", "elapsed"} {
 		t.Run(first, func(t *testing.T) {
@@ -470,8 +644,19 @@ func TestWorkerInventoryStateRetryRequiresBothClocks(t *testing.T) {
 					}
 					return fixtureInventoryStateReport(limit, 1, wall()), nil
 				}})
+			var sourcePair inventoryStateSourcePairForFixture
+			o.inventoryStatePhaseStarted = func(phase string, ticket *inventoryStateTicket) error {
+				if err := returnedInventoryStateFinitePhaseForFixture(phase, ticket); err != nil {
+					return err
+				}
+				sourcePair.record(phase, ticket)
+				return nil
+			}
 			o.scannerNext = func(ctx context.Context, scanner *inventory.Scanner, job state.Job, permit inventory.APIPermit) (state.ScanBatch, error) {
 				sourceSteps.Add(1)
+				// Retain a failed witness for the owning test, but always exercise
+				// the real scanner rather than failing from its handler goroutine.
+				_ = sourcePair.consume()
 				return scanner.NextPermitted(ctx, job, permit)
 			}
 			_, done := start(t, dir, c, o)
@@ -499,8 +684,9 @@ func TestWorkerInventoryStateRetryRequiresBothClocks(t *testing.T) {
 			waitUntil(t, func() bool { s := control(t, dir, "status"); return s.InventoryMetrics != nil && s.ActiveJob == 0 })
 			control(t, dir, "pause")
 			waitUntil(t, func() bool { return control(t, dir, "status").ActiveJob == 0 })
-			if sourceSteps.Load() < 1 || samples.Load() != 1+2*sourceSteps.Load() {
-				t.Fatal("retry skipped fresh pre/post admission samples", samples.Load(), sourceSteps.Load())
+			consumed, witnessErr := sourcePair.result()
+			if sourceSteps.Load() < 1 || consumed != sourceSteps.Load() || witnessErr != nil {
+				t.Fatal("retry skipped fresh completed pre/post admission samples", samples.Load(), sourceSteps.Load(), consumed, witnessErr)
 			}
 			control(t, dir, "stop")
 			waitExit(t, done)
