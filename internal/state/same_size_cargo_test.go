@@ -7,12 +7,16 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"math"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -1677,7 +1681,78 @@ func TestSameSizeCargoAncestorAndMemoryBounds(t *testing.T) {
 	}
 }
 
+// Each intrusive heap oracle owns a fresh process, including when this parent
+// runs in the whole state suite. The same test executable retains its normal
+// or race instrumentation, environment and current CPU setting. No explicit
+// garbage-collection setting is changed by this wrapper.
 func TestSameSizeCargoFullLayoutRetainedHeap(t *testing.T) {
+	const childEnv = "RYDD_CARGO_FULL_LAYOUT_HEAP_PROFILE"
+	const testName = "TestSameSizeCargoFullLayoutRetainedHeap"
+	if profile, child := os.LookupEnv(childEnv); child {
+		if profile != "debug" && profile != "release" {
+			t.Fatal("invalid isolated Cargo resource profile")
+		}
+		selector := flag.Lookup("test.run")
+		if selector == nil || selector.Value.String() != "^"+testName+"$/^"+profile+"$" {
+			t.Fatal("isolated Cargo resource selector differs from its profile")
+		}
+		// The fixed Go test selector admits exactly one original subtest.
+		sameSizeCargoFullLayoutRetainedHeap(t)
+		return
+	}
+	for _, profile := range []string{"debug", "release"} {
+		t.Run(profile, func(t *testing.T) {
+			executable, err := os.Executable()
+			if err != nil {
+				t.Fatal("locate isolated Cargo resource executable", err)
+			}
+			// These outer process bounds include generated-fixture setup. The
+			// original report context remains five seconds inside the child.
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, executable,
+				"-test.run=^"+testName+"$/^"+profile+"$", "-test.count=1", "-test.v", "-test.timeout=25s",
+				fmt.Sprintf("-test.cpu=%d", runtime.GOMAXPROCS(0)))
+			cmd.Env = append(os.Environ(), childEnv+"="+profile)
+			cmd.WaitDelay = 2 * time.Second
+			var output sameSizeCargoHeapOutput
+			cmd.Stdout, cmd.Stderr = &output, &output
+			err = cmd.Run()
+			if output.body.Len() != 0 {
+				t.Logf("isolated Cargo resource profile=%s:\n%s", profile, output.body.String())
+			}
+			if err = errors.Join(err, ctx.Err()); err != nil {
+				t.Fatal("isolated Cargo resource child failed", err)
+			}
+			if output.truncated {
+				t.Fatal("isolated Cargo resource output exceeded 64 KiB")
+			}
+		})
+	}
+}
+
+// Drain both streams while retaining only their first bounded combined bytes.
+// An overflow is a failed observation even if the child exits successfully.
+type sameSizeCargoHeapOutput struct {
+	mu        sync.Mutex
+	body      bytes.Buffer
+	truncated bool
+}
+
+func (output *sameSizeCargoHeapOutput) Write(body []byte) (int, error) {
+	output.mu.Lock()
+	defer output.mu.Unlock()
+	count := len(body)
+	remaining := (64 << 10) - output.body.Len()
+	if len(body) > remaining {
+		body = body[:remaining]
+		output.truncated = true
+	}
+	_, _ = output.body.Write(body)
+	return count, nil
+}
+
+func sameSizeCargoFullLayoutRetainedHeap(t *testing.T) {
 	for _, profile := range []string{"debug", "release"} {
 		t.Run(profile, func(t *testing.T) {
 			s := newBuildOutputFixture(t)

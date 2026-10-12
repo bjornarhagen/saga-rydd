@@ -182,6 +182,16 @@ func TestDuplicateGateCLIKnownGroupsExactRolesAndFreshAccounting(t *testing.T) {
 	}
 	for i, id := range wantIDs {
 		code, raw, diagnostic = f.run(ctx, "hash", "--run-job", c.ID, "--json")
+		if code != 0 || diagnostic != "" {
+			t.Logf("fresh step failed at expected ordinal %d", i+1)
+			snapshotCode, snapshotRaw, snapshotDiagnostic := f.run(context.Background(), "hash", "--show-job", job.ID, "--json")
+			snapshot := fmt.Sprintf("exit=%d stdout=%s stderr=%s", snapshotCode, snapshotRaw, snapshotDiagnostic)
+			const snapshotByteLimit = 16 << 10
+			if len(snapshot) > snapshotByteLimit {
+				snapshot = snapshot[:snapshotByteLimit] + "\n[saved-job snapshot truncated at 16384 bytes]"
+			}
+			t.Logf("failure-only read-only saved-job snapshot: %s", snapshot)
+		}
 		r := hashFreshRunCLIReport(t, code, raw, diagnostic).Result
 		if r.JobID != job.ID || r.Ordinal != i+1 || r.HistoricalWorkID != id || r.Role != job.Work[i].Role || r.Status != "hash_observed" || r.Progress.SHA256 != g.SHA256 || !bytes.Equal(r.Progress.PathBytes, job.Record.Request.Targets[i].Target.File.PathBytes) || r.DurableOffset != int64(len(equal)) || r.ReservedBytes != int64(len(equal)) || r.Usage.ReadBytes != int64(len(equal)) || r.Usage.RequestedBytes != int64(len(equal)) || r.FreshBudget == nil || r.FreshBudget.TotalReadBytes != int64((i+1)*len(equal)) || r.FreshBudget.TotalUnknownReservedBytes != 0 {
 			t.Fatal("fresh observation reused original progress or lost explicit roles/new accounting", raw)

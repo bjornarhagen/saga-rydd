@@ -83,8 +83,10 @@ func hashRunFreshJob(ctx context.Context, paths config.Paths, id string) (HashFr
 	if err != nil {
 		return HashFreshStepReport{}, fmt.Errorf("fresh job %s run writer could not open; inspect hash --show-job %s before another explicit run: %w", job.ID, job.ID, hashFreshJobMissing(err, "existing fresh-job storage became unavailable; no replacement was initialized"))
 	}
+	stepPhase := "running selected step"
 	run, err := writer.RunFreshConsentedBudgeted(ctx, id, scanner, inventory.HashReadExecutionLimits{RequestedBytesPerSecond: cfg.Scan.ReadBytesPerSecond, DailyReservedByteLimit: cfg.Scan.ReadBytesPerDay})
 	if err == nil {
+		stepPhase = "reading saved consent after step"
 		c, err = writer.FreshReadApproval(ctx, id)
 	}
 	closeErr = writer.Close()
@@ -96,7 +98,7 @@ func hashRunFreshJob(ctx context.Context, paths config.Paths, id string) (HashFr
 				err = hashRunDeferredError{code: run.Code, error: err}
 			}
 		}
-		return report, fmt.Errorf("fresh job %s step failed; inspect hash --show-job %s before another explicit run: %w", job.ID, job.ID, err)
+		return report, fmt.Errorf("fresh job %s step failed while %s; inspect hash --show-job %s before another explicit run: %w", job.ID, stepPhase, job.ID, err)
 	}
 	if closeErr != nil {
 		return report, fmt.Errorf("fresh job %s writer close failed; inspect hash --show-job %s: %w", job.ID, job.ID, closeErr)
