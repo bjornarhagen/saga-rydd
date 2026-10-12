@@ -230,17 +230,18 @@ func TestWorkerPowerReceiptRecheckNeverStartsProbe(t *testing.T) {
 	c := config.Default()
 	c.Roots = []string{root}
 	wall, elapsed := time.Now().UTC(), time.Now()
-	var clockCalls, wallJump, abortAt, probeAt atomic.Int64
+	var clockCalls, wallJump atomic.Int64
+	var reservedElapsed, probeAt atomic.Pointer[time.Time]
 	entered, release := make(chan struct{}), make(chan struct{})
 	p := newPowerCoordinator(func(ctx context.Context) (powerinfo.Observation, error) {
-		probeAt.Store(time.Now().UnixNano())
+		started := time.Now()
+		probeAt.Store(&started)
 		close(entered)
 		<-release
 		return powerinfo.Observation{}, ctx.Err()
 	}, func() time.Time {
 		n := clockCalls.Add(1)
 		if n == 2 {
-			abortAt.Store(time.Now().UnixNano())
 			wallJump.Store(int64(time.Hour))
 		}
 		if n >= 2 {
@@ -265,14 +266,38 @@ func TestWorkerPowerReceiptRecheckNeverStartsProbe(t *testing.T) {
 	var runDone <-chan error
 	_ = cleanupWorkerPowerFixture(t, p, release, &runCancel, &runDone)
 
-	_, done, cancel := startCancelable(t, dir, c, fixtureInventoryStateOptions(t, Options{ExperimentalScan: true, powerCoordinator: p, Interval: 80 * time.Millisecond, WorkDuration: time.Second, wallNow: func() time.Time { return time.Now().Add(time.Duration(wallJump.Load())) }}), func(cancel context.CancelFunc, done <-chan error) { runCancel, runDone = cancel, done })
+	options := Options{ExperimentalScan: true, powerCoordinator: p, Interval: 80 * time.Millisecond, WorkDuration: time.Second, wallNow: func() time.Time { return time.Now().Add(time.Duration(wallJump.Load())) }}
+	options.inventoryStatePhaseStarted = func(phase string, ticket *inventoryStateTicket) error {
+		if ticket == nil || ticket.request.phase != phase || ticket.request.intent == nil || ticket.request.scope == nil || ticket.request.intent.scope != ticket.request.scope {
+			return errors.New("invalid power fixture state phase")
+		}
+		if phase == "before_dispatch" && ticket.request.receipt == nil {
+			return nil
+		}
+		receipt := ticket.request.receipt
+		if phase != "after_receipt" || receipt == nil || receipt.intent != ticket.request.intent || ticket.request.intent.receipt != receipt || receipt.day != wall.Format(time.DateOnly) || receipt.used != 1 || receipt.reserved.elapsed.IsZero() {
+			return errors.New("invalid power fixture charged receipt")
+		}
+		// Cadence starts before reservation and post work, not at the later
+		// power recheck. Copy the exact receipt anchor without resampling it.
+		reserved := receipt.reserved.elapsed
+		if !reservedElapsed.CompareAndSwap(nil, &reserved) {
+			return errors.New("power fixture charged receipt repeated")
+		}
+		return nil
+	}
+	_, done, cancel := startCancelable(t, dir, c, fixtureInventoryStateOptions(t, options), func(cancel context.CancelFunc, done <-chan error) { runCancel, runDone = cancel, done })
 	runCancel, runDone = cancel, done
 	select {
 	case <-entered:
 	case <-time.After(5 * time.Second):
 		t.Fatal("uncharged replan did not start required sample")
 	}
-	if elapsed := time.Duration(probeAt.Load() - abortAt.Load()); elapsed < 70*time.Millisecond {
+	reserved, probe := reservedElapsed.Load(), probeAt.Load()
+	if reserved == nil || probe == nil {
+		t.Fatal("missing power fixture charged receipt elapsed anchor")
+	}
+	if elapsed := probe.Sub(*reserved); elapsed < 70*time.Millisecond {
 		t.Fatal("forward wall jump bypassed charged receipt elapsed cadence", elapsed)
 	}
 	status := control(t, dir, "status")
