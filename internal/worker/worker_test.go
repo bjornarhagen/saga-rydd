@@ -112,7 +112,8 @@ func waitUntil(t *testing.T, predicate func() bool) {
 	t.Fatal("condition timed out")
 }
 
-// These selected fixtures keep their original predicate and five-second wait.
+// These selected fixtures keep their original predicates. The default wait is
+// five seconds; the multi-turn fairness fixture selects its own finite wait.
 // Only a failed wait collects sequential diagnostic scalars, under one separate
 // two-second deadline. It reads no source and never receives a worker result.
 type inventoryWaitStatus struct {
@@ -225,7 +226,14 @@ func inventoryWaitErrorClass(err error) string {
 
 func waitUntilInventoryFixture(t *testing.T, dir string, predicate func() bool, evidence func() inventoryWaitEvidence) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	waitUntilInventoryFixtureWithin(t, dir, 5*time.Second, predicate, evidence)
+}
+
+// Completion ordering across real source and maintenance turns is separate
+// from the unchanged start/control waits and production resource deadlines.
+func waitUntilInventoryFixtureWithin(t *testing.T, dir string, timeout time.Duration, predicate func() bool, evidence func() inventoryWaitEvidence) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if predicate() {
 			return

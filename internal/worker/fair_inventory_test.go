@@ -70,7 +70,9 @@ func TestWorkerFairRootsInterleaveSourceMaintenanceAndRevisit(t *testing.T) {
 		return b, err
 	}
 	_, done := start(t, dir, c, options)
-	waitUntilInventoryFixture(t, dir, func() bool {
+	// This asserts ordering across source, reconciliation and revisit turns,
+	// not a five-second product latency. Keep the real workload and assertions.
+	waitUntilInventoryFixtureWithin(t, dir, 10*time.Second, func() bool {
 		mu.Lock()
 		defer mu.Unlock()
 		return failure != nil || smallDone >= 2 || wideDone
