@@ -94,6 +94,28 @@ Required future coverage includes APFS/ext4 behavior, symlink/path changes, perm
 - `./scripts/dev cache-clear` removes the Compose project's Go cache and control-socket runtime volumes. Stop development workers first. Application state in the checkout is preserved.
 - Containers stop after each command; `daemon` is a foreground command that stays running until stopped. No `docker compose up` is needed. A small runtime volume shares control sockets between development commands; all use the same UID and canonical state path.
 
+## Housekeeping and retention
+
+Developer artifacts have a lifecycle. Agents should finish it within the task that created the files. This policy covers owned generated development outputs; it does not authorize Rydd to move personal files or change its cleanup boundary.
+
+1. Create one private task output directory under ignored `.local/`, or record an exact generated temporary path. Use directory/private executable mode 0700 and private record mode 0600. Separate disposable fixtures/builds from retained records and owner-selected application state.
+2. Before removing an artifact, reap its owned processes and check that no active task, walkthrough or planned validation still needs it. Recheck the selected path, ownership/type and unexpected changes. A filename, timestamp or ignored status does not prove that a file is disposable.
+3. Retain a compact evidence set: complete results and error logs, failed/partial outcomes, command receipts, source commit or verified source reconstruction, artifact hashes, native scope and limitations. Preserve unique dirty edits and untracked helper source; hashes alone cannot reconstruct them. Compression and deduplication may reduce complete records without replacing them with truncated summaries.
+4. Automatically remove the task's unused generated executables, synthetic fixtures/state and temporary source copies once those conditions hold. Preserve a generated failing fixture until its cause is understood or the exact input is reconstructable. If raw fixture state is needed to substantiate an outcome, retain that state with the evidence. Keep one current artifact set for active validation; superseded binaries need not remain forever.
+5. Record the exact removals and retained evidence privately, then put a sanitized result and any deferred large artifact in `PROGRESS.md`. Inspect local storage before another large trial and at the end of a substantial work session. Do not create repeated full checkout copies when a committed source reference plus a verified patch and required helper files suffices.
+
+| Artifact | Retention rule |
+| --- | --- |
+| Task-owned generated binary or synthetic fixture/state | Remove after its result is recorded and no consumer or required evidence needs it. |
+| Scratch source copy | Remove only when committed references and verified retained edits/helpers reconstruct its unique contents. |
+| Complete validation, failed/partial and notice evidence | Keep privately; compress or deduplicate complete records. |
+| Owner-selected application/trial configuration, inventories, plans, consent, charges, hashes and journals | Keep, including when stored under `.local/`. Synthetic task state follows the fixture rule above. |
+| Joint walkthrough and its referenced executable | Keep until the walkthrough is explicitly retired or rebound. |
+| Candidate/export staging with uncertain publication | Keep until the publication outcome is resolved. |
+| Downloaded Go modules and original/retained notice material | Keep for offline work and open provenance/release review. |
+
+Shared compiler-cache maintenance requires a separate selected scope and no active cache consumer. `go clean -cache` clears the selected Go compilation cache; it keeps downloaded modules. Use the existing development container and an explicit cache path. Do not use `./scripts/dev cache-clear` as routine compiler-cache housekeeping: it also removes downloaded modules and the runtime volume. Old unclassified folders, managed worktrees and other Docker images, volumes or build caches need their own ownership and retention review. Archive a managed worktree through its recoverable worktree lifecycle when its owning task no longer needs it. Do not use broad deletion or Docker prune as a shortcut.
+
 ## Changes and progress
 
 Keep feature work linked to the stable task IDs in `PROGRESS.md`. Update the checklist and handoff with implementation, validation and remaining work in the same commit. CI passing is necessary but is not proof that a phase's unimplemented acceptance gates are complete.

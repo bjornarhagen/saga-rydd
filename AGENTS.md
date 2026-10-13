@@ -16,6 +16,16 @@
 - Keep dependencies minimal. Explain new dependencies and verify their platform/build impact. Select the SQLite driver through the planned portability/resource experiment.
 - Prefer small coherent changes and run checks appropriate to them. Do not claim that a scaffold's successful test command validates features that do not exist.
 
+## Development housekeeping
+
+- Follow the [housekeeping and retention procedure](CONTRIBUTING.md#housekeeping-and-retention). This applies to developer artifacts, not product cleanup or personal source folders.
+- Use one private, task-owned output directory and record the exact generated paths. Keep disposable binaries/fixtures separate from retained evidence and application state.
+- At task completion, reap owned processes, retain complete outcomes and reconstruction information, then automatically remove that task's unused generated binaries, synthetic fixtures/state and temporary copies. Do not wait for a separate housekeeping request for these task-owned artifacts.
+- Keep the current walkthrough and artifacts needed by active or planned validation. Remove superseded copies only after their unique edits/helpers are committed or reconstructable from verified retained material; names, age and hashes alone are insufficient.
+- Preserve owner-selected application/trial state, original/retained notice material, complete failed/partial evidence and unexplained publication staging. Complete records may be compressed or deduplicated; do not truncate them to make a summary.
+- Treat shared caches, old unclassified folders, worktrees and Docker storage as separate scoped maintenance. Keep downloaded modules for offline work. Never use blanket deletion of `.local`, `dist`, temporary folders or Docker volumes, or a broad Docker prune.
+- Record removals, retained evidence and any deferred large artifacts in the handoff. Recheck exact paths, ownership/type and unexpected changes before removal; leave uncertain files for review.
+
 ## Product invariants
 
 - No autonomous deletion without an explicitly approved, narrowly scoped policy. Findings alone are not authorization.
