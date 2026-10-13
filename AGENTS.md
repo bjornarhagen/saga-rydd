@@ -4,7 +4,7 @@
 
 1. Read `README.md`, `PROGRESS.md`, then the relevant sections of `PLAN.md`.
 2. Inspect the working tree before editing. Preserve other contributors' changes.
-3. Follow the execution-priority section and handoff in `PROGRESS.md`, not numeric phase order. The approved next milestone is saved reports plus one `node_modules` recommendation category, followed by a controlled read-only trial. Do not resume resource hardening or service work by default.
+3. Follow the current state, execution-priority section and latest handoff in `PROGRESS.md`, not numeric phase order. The read-only MVP and bounded resource/service development are delivered. The next milestone needs the cleanup scope choice, then owner-selected native acceptance trials. Do not repeat completed work or treat continuation approval as selection of a private source, service/context or source operation.
 4. Pick a bounded unchecked task from that priority; record it as in progress before substantial implementation. Supporting work may be pulled forward only for a demonstrated MVP correctness/safety dependency, recorded in the handoff.
 
 ## Development
